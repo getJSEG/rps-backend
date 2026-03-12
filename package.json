@@ -1,0 +1,44 @@
+{
+  "name": "elmer-backend",
+  "version": "1.0.0",
+  "description": "Backend API for Elmer E-commerce Platform",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "npx nodemon src/server.js",
+    "migrate": "node src/migrations/runMigrations.js",
+    "migrate:pricing": "node src/migrations/runAddPricingColumns.js",
+    "migrate:employees": "node src/migrations/runEmployeeColumns.js",
+    "seed": "node src/migrations/seed.js",
+    "seed-subcategory-products": "node src/migrations/seedSubcategoryProducts.js",
+    "create-admin": "node src/migrations/createAdminUser.js"
+  },
+  "keywords": [
+    "express",
+    "postgresql",
+    "api",
+    "ecommerce"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cloudinary": "^2.5.1",
+    "cors": "^2.8.6",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-validator": "^7.0.1",
+    "jsonwebtoken": "^9.0.2",
+    "morgan": "^1.10.0",
+    "multer": "^1.4.5-lts.1",
+    "nodemailer": "^6.10.1",
+    "pg": "^8.11.3",
+    "stripe": "^17.5.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}
