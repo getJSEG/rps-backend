@@ -129,10 +129,72 @@ const requireAdminOrEmployee = (req, res, next) => {
   next();
 };
 
-module.exports = { 
-  authenticateToken, 
-  optionalAuth, 
-  requireAdmin, 
-  requireAdminOrEmployee 
+/**
+ * Cart / pre-checkout: valid JWT (active user) OR X-Guest-Session-Id header (8–128 chars, e.g. UUID).
+ * Prefer user when both are sent.
+ */
+const authenticateTokenOrGuestSession = async (req, res, next) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (token) {
+      const secret = process.env.JWT_SECRET;
+      if (secret && String(secret).trim()) {
+        try {
+          const decoded = jwt.verify(token, secret);
+          let result;
+          try {
+            result = await pool.query(
+              'SELECT id, email, full_name, company_name, role, is_active FROM users WHERE id = $1',
+              [decoded.userId]
+            );
+          } catch (err) {
+            if (err.message && err.message.includes('does not exist')) {
+              result = await pool.query(
+                'SELECT id, email, full_name, role, is_active FROM users WHERE id = $1',
+                [decoded.userId]
+              );
+            } else {
+              throw err;
+            }
+          }
+          if (result.rows.length > 0 && result.rows[0].is_active) {
+            req.user = result.rows[0];
+            return next();
+          }
+        } catch (e) {
+          if (e.name !== 'JsonWebTokenError' && e.name !== 'TokenExpiredError') {
+            throw e;
+          }
+        }
+      }
+    }
+
+    const raw =
+      req.headers['x-guest-session-id'] ||
+      req.headers['X-Guest-Session-Id'] ||
+      '';
+    const sid = String(raw).trim();
+    if (sid.length >= 8 && sid.length <= 128) {
+      req.guestSessionId = sid;
+      return next();
+    }
+
+    return res.status(401).json({
+      message:
+        'Login or send header X-Guest-Session-Id (e.g. a UUID) for guest cart and checkout.',
+    });
+  } catch (error) {
+    return res.status(500).json({ message: 'Authentication error', error: error.message });
+  }
+};
+
+module.exports = {
+  authenticateToken,
+  optionalAuth,
+  requireAdmin,
+  requireAdminOrEmployee,
+  authenticateTokenOrGuestSession,
 };
 

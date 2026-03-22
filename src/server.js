@@ -54,6 +54,10 @@ async function ensureEmployeeColumns() {
       const sql7 = fs.readFileSync(path.join(migrationsDir, 'addPasswordResetCodes.sql'), 'utf8');
       await pool.query(sql7);
     }
+    if (fs.existsSync(path.join(migrationsDir, 'addGuestCheckout.sql'))) {
+      const sql8 = fs.readFileSync(path.join(migrationsDir, 'addGuestCheckout.sql'), 'utf8');
+      await pool.query(sql8);
+    }
   } catch (err) {
     console.warn('Migrations (optional):', err.message);
   }
@@ -87,7 +91,7 @@ app.use((req, res, next) => {
   }
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Guest-Session-Id');
   if (req.method === 'OPTIONS') {
     return res.status(204).end();
   }
@@ -97,7 +101,7 @@ app.use(cors({
   origin: true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Guest-Session-Id'],
 }));
 app.use(morgan('dev'));
 // Stripe webhook needs raw body (must be before express.json())

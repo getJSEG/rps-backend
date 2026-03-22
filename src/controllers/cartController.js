@@ -1,6 +1,5 @@
-const pool = require('../config/database');
+const cartRepository = require('../repositories/cartRepository');
 
-/** True if current user should see all carts (admin) */
 function isAdminUser(req) {
   const role = (req.user?.role || '').toString().toLowerCase();
   if (role === 'admin') return true;
@@ -9,81 +8,49 @@ function isAdminUser(req) {
   return adminEmails.length > 0 && email && adminEmails.includes(email);
 }
 
-/** Add item to cart (user/employee - own cart) */
+function cartContext(req) {
+  const userId = req.user?.id ?? null;
+  const guestSessionId = userId ? null : (req.guestSessionId ?? null);
+  return { userId, guestSessionId };
+}
+
+/** Add item to cart (logged-in user or guest with X-Guest-Session-Id) */
 const addToCart = async (req, res) => {
   try {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ message: 'Authentication required' });
+    const { userId, guestSessionId } = cartContext(req);
+    if (!userId && !guestSessionId) {
+      return res.status(401).json({ message: 'Authentication or guest session required' });
+    }
 
     const itemData = req.body;
     if (!itemData || typeof itemData !== 'object') {
       return res.status(400).json({ message: 'Cart item data is required' });
     }
 
-    const result = await pool.query(
-      `INSERT INTO cart_items (user_id, item_data) VALUES ($1, $2::jsonb) RETURNING *`,
-      [userId, JSON.stringify(itemData)]
-    );
-    res.status(201).json({ cartItem: result.rows[0] });
+    const cartItem = await cartRepository.insertCartItem(userId, guestSessionId, itemData);
+    res.status(201).json({ cartItem });
   } catch (error) {
     console.error('Add to cart error:', error);
     res.status(500).json({ message: 'Failed to add to cart', error: error.message });
   }
 };
 
-/** Get cart: user/employee = own cart, admin = all carts */
+/** Get cart: user/employee = own cart, guest = session cart, admin = all carts */
 const getCart = async (req, res) => {
   try {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ message: 'Authentication required' });
+    const { userId, guestSessionId } = cartContext(req);
+    if (!userId && !guestSessionId) {
+      return res.status(401).json({ message: 'Authentication or guest session required' });
+    }
 
-    let result;
     if (isAdminUser(req)) {
-      const [cartResult, orderPairsResult] = await Promise.all([
-        pool.query(
-          `SELECT ci.*, u.email as user_email, u.full_name as user_name
-           FROM cart_items ci
-           LEFT JOIN users u ON ci.user_id = u.id
-           ORDER BY ci.created_at DESC`
-        ),
-        pool.query(
-          `SELECT DISTINCT o.user_id, oi.product_id
-           FROM order_items oi
-           JOIN orders o ON o.id = oi.order_id
-           WHERE o.user_id IS NOT NULL AND oi.product_id IS NOT NULL`
-        ),
-      ]);
-      const orderPairSet = new Set(
-        orderPairsResult.rows.map((row) => `${row.user_id}_${row.product_id}`)
-      );
-      const items = cartResult.rows
-        .map((r) => ({
-          id: String(r.id),
-          userId: r.user_id,
-          userEmail: r.user_email,
-          userName: r.user_name,
-          ...r.item_data,
-          createdAt: r.created_at,
-        }))
-        .filter((item) => {
-          const productId = item.productId ?? item.product_id;
-          const pid = productId != null ? String(productId) : null;
-          if (!pid) return true;
-          const key = `${item.userId}_${pid}`;
-          return !orderPairSet.has(key);
-        });
+      const items = await cartRepository.findAdminCartItems();
       return res.json({ cartItems: items, isAdminView: true });
     }
 
-    result = await pool.query(
-      `SELECT * FROM cart_items WHERE user_id = $1 ORDER BY created_at DESC`,
-      [userId]
-    );
-    const items = result.rows.map((r) => ({
-      id: String(r.id),
-      ...r.item_data,
-      createdAt: r.created_at,
-    }));
+    const items = userId
+      ? await cartRepository.findCartItemsByUserId(userId)
+      : await cartRepository.findCartItemsByGuestSession(guestSessionId);
     res.json({ cartItems: items, isAdminView: false });
   } catch (error) {
     console.error('Get cart error:', error);
@@ -94,15 +61,20 @@ const getCart = async (req, res) => {
 /** Remove item from cart */
 const removeFromCart = async (req, res) => {
   try {
-    const userId = req.user?.id;
+    const { userId, guestSessionId } = cartContext(req);
     const { id } = req.params;
-    if (!userId) return res.status(401).json({ message: 'Authentication required' });
+    if (!userId && !guestSessionId) {
+      return res.status(401).json({ message: 'Authentication or guest session required' });
+    }
 
     if (isAdminUser(req)) {
-      await pool.query('DELETE FROM cart_items WHERE id = $1', [id]);
+      await cartRepository.deleteCartItemById(id);
+    } else if (userId) {
+      const rowCount = await cartRepository.deleteCartItemByUser(id, userId);
+      if (rowCount === 0) return res.status(404).json({ message: 'Cart item not found' });
     } else {
-      const r = await pool.query('DELETE FROM cart_items WHERE id = $1 AND user_id = $2 RETURNING id', [id, userId]);
-      if (r.rowCount === 0) return res.status(404).json({ message: 'Cart item not found' });
+      const rowCount = await cartRepository.deleteCartItemByGuest(id, guestSessionId);
+      if (rowCount === 0) return res.status(404).json({ message: 'Cart item not found' });
     }
     res.json({ message: 'Removed from cart' });
   } catch (error) {
@@ -114,40 +86,44 @@ const removeFromCart = async (req, res) => {
 /** Update cart item (quantity etc.) */
 const updateCartItem = async (req, res) => {
   try {
-    const userId = req.user?.id;
+    const { userId, guestSessionId } = cartContext(req);
     const { id } = req.params;
     const itemData = req.body;
-    if (!userId) return res.status(401).json({ message: 'Authentication required' });
+    if (!userId && !guestSessionId) {
+      return res.status(401).json({ message: 'Authentication or guest session required' });
+    }
 
     let result;
     if (isAdminUser(req)) {
-      result = await pool.query(
-        `UPDATE cart_items SET item_data = $1::jsonb WHERE id = $2 RETURNING *`,
-        [JSON.stringify(itemData), id]
-      );
+      result = await cartRepository.updateCartItemDataAdmin(id, itemData);
+    } else if (userId) {
+      result = await cartRepository.updateCartItemDataByUser(id, userId, itemData);
     } else {
-      result = await pool.query(
-        `UPDATE cart_items SET item_data = $1::jsonb WHERE id = $2 AND user_id = $3 RETURNING *`,
-        [JSON.stringify(itemData), id, userId]
-      );
+      result = await cartRepository.updateCartItemDataByGuest(id, guestSessionId, itemData);
     }
     if (result.rowCount === 0) return res.status(404).json({ message: 'Cart item not found' });
-    res.json({ cartItem: result.rows[0] });
+    res.json({ cartItem: result.row });
   } catch (error) {
     console.error('Update cart error:', error);
     res.status(500).json({ message: 'Failed to update cart', error: error.message });
   }
 };
 
-/** Clear user's cart (user/employee only) */
+/** Clear cart (logged-in user or guest session) */
 const clearCart = async (req, res) => {
   try {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ message: 'Authentication required' });
+    const { userId, guestSessionId } = cartContext(req);
+    if (!userId && !guestSessionId) {
+      return res.status(401).json({ message: 'Authentication or guest session required' });
+    }
     if (isAdminUser(req)) {
       return res.status(400).json({ message: 'Admin cannot clear all carts. Use remove for individual items.' });
     }
-    await pool.query('DELETE FROM cart_items WHERE user_id = $1', [userId]);
+    if (userId) {
+      await cartRepository.clearCartByUserId(userId);
+    } else {
+      await cartRepository.clearCartByGuestSession(guestSessionId);
+    }
     res.json({ message: 'Cart cleared' });
   } catch (error) {
     console.error('Clear cart error:', error);

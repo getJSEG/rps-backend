@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const { createOrder, getOrders, getOrderById, getAllOrders, getOrderByIdAdmin, updateOrderStatus, deleteOrderAdmin, createOrderFromCartItem, createOrderWithPaymentIntent } = require('../controllers/orderController');
-const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { authenticateToken, optionalAuth, requireAdmin } = require('../middleware/auth');
 
-router.post('/', authenticateToken, createOrder);
-router.post('/create-payment-intent', authenticateToken, createOrderWithPaymentIntent);
+router.post('/', optionalAuth, createOrder);
+router.post('/create-payment-intent', optionalAuth, createOrderWithPaymentIntent);
 router.get('/', authenticateToken, getOrders);
 // Admin routes - require admin role
 router.get('/admin/all', authenticateToken, requireAdmin, getAllOrders);

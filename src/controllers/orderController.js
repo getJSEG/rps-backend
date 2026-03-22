@@ -1,86 +1,104 @@
-const pool = require('../config/database');
+const orderRepository = require('../repositories/orderRepository');
 const Stripe = require('stripe');
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
+
+const VALID_ORDER_STATUSES = [
+  'pending',
+  'processing',
+  'shipped',
+  'delivered',
+  'cancelled',
+  'complete',
+  'refund',
+  'approval_needed',
+];
+
+function generateOrderNumber() {
+  return `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+}
+
+/** @returns {{ snapshot: object } | { error: string }} */
+function parseGuestCheckout(body) {
+  const gc = body.guestCheckout;
+  if (!gc || typeof gc !== 'object') {
+    return { error: 'Guest orders require guestCheckout (email, shippingAddress).' };
+  }
+  const email = String(gc.email || '').trim();
+  if (!email) return { error: 'guestCheckout.email is required.' };
+  const sa = gc.shippingAddress || gc.shipping_address;
+  if (!sa || typeof sa !== 'object') {
+    return { error: 'guestCheckout.shippingAddress is required.' };
+  }
+  const street = sa.street_address ?? sa.streetAddress;
+  const city = sa.city;
+  const state = sa.state;
+  const postcode = sa.postcode ?? sa.zip ?? sa.postalCode;
+  if (!street || !city || !state || !postcode) {
+    return {
+      error: 'shippingAddress must include street (street_address), city, state, and postcode.',
+    };
+  }
+  const ba = gc.billingAddress || gc.billing_address || sa;
+  const line = (x) => ({
+    street_address: String(x.street_address ?? x.streetAddress ?? ''),
+    address_line2: x.address_line2 ?? x.addressLine2 ?? null,
+    city: String(x.city ?? ''),
+    state: String(x.state ?? ''),
+    postcode: String(x.postcode ?? x.zip ?? x.postalCode ?? ''),
+    country: x.country || 'United States',
+  });
+  const snapshot = {
+    email,
+    fullName: String(gc.fullName || gc.full_name || '').trim() || null,
+    phone: String(gc.phone || gc.telephone || '').trim() || null,
+    shippingAddress: line({ ...sa, street_address: street }),
+    billingAddress: line(ba),
+  };
+  return { snapshot };
+}
 
 const createOrder = async (req, res) => {
   try {
     const { items, shippingAddressId, billingAddressId, paymentMethod, notes } = req.body;
-    const userId = req.user.id;
+    const userId = req.user?.id ?? null;
 
     if (!items || items.length === 0) {
       return res.status(400).json({ message: 'Order items are required' });
     }
 
-    // Calculate total
+    let guestCheckout = null;
+    let shipId = shippingAddressId ?? null;
+    let billId = billingAddressId ?? shipId;
+    if (!userId) {
+      const parsed = parseGuestCheckout(req.body);
+      if (parsed.error) {
+        return res.status(400).json({ message: parsed.error });
+      }
+      guestCheckout = parsed.snapshot;
+      shipId = null;
+      billId = null;
+    }
+
     let totalAmount = 0;
     for (const item of items) {
       totalAmount += parseFloat(item.unit_price) * parseInt(item.quantity);
     }
 
-    // Generate order number
-    const orderNumber = `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+    const orderNumber = generateOrderNumber();
 
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
+    const completeOrder = await orderRepository.createOrderWithItems({
+      userId,
+      orderNumber,
+      totalAmount,
+      shippingAddressId: shipId,
+      billingAddressId: billId,
+      paymentMethod,
+      notes,
+      guestCheckout,
+      items,
+    });
 
-      // Create order
-      const orderResult = await client.query(
-        `INSERT INTO orders (user_id, order_number, total_amount, shipping_address_id, 
-         billing_address_id, payment_method, notes)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING *`,
-        [userId, orderNumber, totalAmount, shippingAddressId, billingAddressId || shippingAddressId, paymentMethod, notes]
-      );
-
-      const order = orderResult.rows[0];
-
-      // Create order items (image_url = product image at time of order, from cart)
-      const itemImageUrl = (item) => item.image_url || item.product_image || item.productImage || null;
-      for (const item of items) {
-        await client.query(
-          `INSERT INTO order_items (order_id, product_id, product_name, job_name, quantity, unit_price, total_price, image_url)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [
-            order.id,
-            item.product_id,
-            item.product_name,
-            item.job_name || item.jobName || null,
-            item.quantity,
-            item.unit_price,
-            parseFloat(item.unit_price) * parseInt(item.quantity),
-            itemImageUrl(item)
-          ]
-        );
-      }
-
-      await client.query('COMMIT');
-
-      // Fetch complete order with items
-      const completeOrder = await pool.query(
-        `SELECT o.*, 
-         json_agg(json_build_object(
-           'id', oi.id,
-           'product_id', oi.product_id,
-           'product_name', oi.product_name,
-           'quantity', oi.quantity,
-           'unit_price', oi.unit_price,
-           'total_price', oi.total_price
-         )) as items
-         FROM orders o
-         LEFT JOIN order_items oi ON o.id = oi.order_id
-         WHERE o.id = $1
-         GROUP BY o.id`,
-        [order.id]
-      );
-
-      res.status(201).json({ order: completeOrder.rows[0] });
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+    res.status(201).json({ order: completeOrder });
   } catch (error) {
     console.error('Create order error:', error);
     res.status(500).json({ message: 'Failed to create order', error: error.message });
@@ -91,37 +109,8 @@ const getOrders = async (req, res) => {
   try {
     const userId = req.user.id;
     const { status, page = 1, limit = 20 } = req.query;
-    const offset = (page - 1) * limit;
-
-    let query = `
-      SELECT o.*, 
-      json_agg(json_build_object(
-        'id', oi.id,
-        'product_id', oi.product_id,
-        'product_name', oi.product_name,
-        'quantity', oi.quantity,
-        'unit_price', oi.unit_price,
-        'total_price', oi.total_price
-      )) as items
-      FROM orders o
-      LEFT JOIN order_items oi ON o.id = oi.order_id
-      WHERE o.user_id = $1
-    `;
-    const params = [userId];
-
-    if (status) {
-      query += ' AND o.status = $2';
-      params.push(status);
-      query += ` GROUP BY o.id ORDER BY o.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
-      params.push(limit, offset);
-    } else {
-      query += ` GROUP BY o.id ORDER BY o.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
-      params.push(limit, offset);
-    }
-
-    const result = await pool.query(query, params);
-
-    res.json({ orders: result.rows });
+    const orders = await orderRepository.findOrdersForUser(userId, { status, page, limit });
+    res.json({ orders });
   } catch (error) {
     console.error('Get orders error:', error);
     res.status(500).json({ message: 'Failed to fetch orders', error: error.message });
@@ -132,31 +121,11 @@ const getOrderById = async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
-
-    const result = await pool.query(
-      `SELECT o.*, 
-       json_agg(json_build_object(
-         'id', oi.id,
-         'product_id', oi.product_id,
-         'product_name', oi.product_name,
-         'quantity', oi.quantity,
-         'unit_price', oi.unit_price,
-         'total_price', oi.total_price,
-         'product_image', COALESCE(oi.image_url, p.image_url)
-       )) as items
-       FROM orders o
-       LEFT JOIN order_items oi ON o.id = oi.order_id
-       LEFT JOIN products p ON oi.product_id = p.id
-       WHERE o.id = $1 AND o.user_id = $2
-       GROUP BY o.id`,
-      [id, userId]
-    );
-
-    if (result.rows.length === 0) {
+    const order = await orderRepository.findOrderByIdAndUserId(id, userId);
+    if (!order) {
       return res.status(404).json({ message: 'Order not found' });
     }
-
-    res.json({ order: result.rows[0] });
+    res.json({ order });
   } catch (error) {
     console.error('Get order error:', error);
     res.status(500).json({ message: 'Failed to fetch order', error: error.message });
@@ -165,56 +134,8 @@ const getOrderById = async (req, res) => {
 
 const getAllOrders = async (req, res) => {
   try {
-    const { status, page = 1, limit = 1000 } = req.query; // Increased limit to show all orders
-    const offset = (page - 1) * limit;
-
-    let query = `
-      SELECT o.*, 
-      u.email as user_email,
-      u.full_name as user_name,
-      COALESCE(
-        json_agg(
-          json_build_object(
-            'id', oi.id,
-            'product_id', oi.product_id,
-            'product_name', oi.product_name,
-            'quantity', oi.quantity,
-            'unit_price', oi.unit_price,
-            'total_price', oi.total_price,
-            'product_image', COALESCE(oi.image_url, p.image_url)
-          )
-        ) FILTER (WHERE oi.id IS NOT NULL),
-        '[]'::json
-      ) as items
-      FROM orders o
-      LEFT JOIN users u ON o.user_id = u.id
-      LEFT JOIN order_items oi ON o.id = oi.order_id
-      LEFT JOIN products p ON oi.product_id = p.id
-      WHERE 1=1
-    `;
-    const params = [];
-
-    if (status) {
-      query += ' AND o.status = $1';
-      params.push(status);
-      query += ` GROUP BY o.id, u.email, u.full_name ORDER BY o.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
-      params.push(limit, offset);
-    } else {
-      query += ` GROUP BY o.id, u.email, u.full_name ORDER BY o.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
-      params.push(limit, offset);
-    }
-
-    const result = await pool.query(query, params);
-
-    // Ensure items is always an array
-    const orders = result.rows.map(order => {
-      if (!order.items || !Array.isArray(order.items)) {
-        order.items = [];
-      }
-      // Filter out null items
-      order.items = order.items.filter(item => item && item.id !== null);
-      return order;
-    });
+    const { status, page = 1, limit = 1000 } = req.query;
+    const orders = await orderRepository.findAllOrdersAdmin({ status, page, limit });
     res.json({ orders });
   } catch (error) {
     console.error('Get all orders error:', error);
@@ -225,102 +146,10 @@ const getAllOrders = async (req, res) => {
 const getOrderByIdAdmin = async (req, res) => {
   try {
     const { id } = req.params;
-    const queryWithJobName = `SELECT o.*, 
-       u.email as user_email,
-       u.full_name as user_name,
-       COALESCE(
-         json_agg(
-           json_build_object(
-             'id', oi.id,
-             'product_id', oi.product_id,
-             'product_name', oi.product_name,
-             'job_name', oi.job_name,
-             'quantity', oi.quantity,
-             'unit_price', oi.unit_price,
-             'total_price', oi.total_price,
-             'product_image', COALESCE(oi.image_url, p.image_url),
-             'product_material', p.material,
-             'product_description', p.description,
-             'product_price_per_sqft', p.price_per_sqft,
-             'product_min_charge', p.min_charge,
-             'product_category', c.name,
-             'product_subcategory', p.subcategory,
-             'product_sku', p.sku
-           )
-         ) FILTER (WHERE oi.id IS NOT NULL),
-         '[]'::json
-       ) as items
-       FROM orders o
-       LEFT JOIN users u ON o.user_id = u.id
-       LEFT JOIN order_items oi ON o.id = oi.order_id
-       LEFT JOIN products p ON oi.product_id = p.id
-       LEFT JOIN categories c ON p.category_id = c.id
-       WHERE o.id = $1
-       GROUP BY o.id, u.email, u.full_name`;
-
-    const queryWithoutJobName = `SELECT o.*, 
-       u.email as user_email,
-       u.full_name as user_name,
-       COALESCE(
-         json_agg(
-           json_build_object(
-             'id', oi.id,
-             'product_id', oi.product_id,
-             'product_name', oi.product_name,
-             'quantity', oi.quantity,
-             'unit_price', oi.unit_price,
-             'total_price', oi.total_price,
-             'product_image', COALESCE(oi.image_url, p.image_url),
-             'product_material', p.material,
-             'product_description', p.description,
-             'product_price_per_sqft', p.price_per_sqft,
-             'product_min_charge', p.min_charge,
-             'product_category', c.name,
-             'product_subcategory', p.subcategory,
-             'product_sku', p.sku
-           )
-         ) FILTER (WHERE oi.id IS NOT NULL),
-         '[]'::json
-       ) as items
-       FROM orders o
-       LEFT JOIN users u ON o.user_id = u.id
-       LEFT JOIN order_items oi ON o.id = oi.order_id
-       LEFT JOIN products p ON oi.product_id = p.id
-       LEFT JOIN categories c ON p.category_id = c.id
-       WHERE o.id = $1
-       GROUP BY o.id, u.email, u.full_name`;
-
-    let result;
-    try {
-      result = await pool.query(queryWithJobName, [id]);
-    } catch (err) {
-      if (err.message && err.message.includes('job_name')) {
-        result = await pool.query(queryWithoutJobName, [id]);
-      } else {
-        throw err;
-      }
-    }
-
-    if (result.rows.length === 0) {
+    const order = await orderRepository.findOrderByIdAdmin(id);
+    if (!order) {
       return res.status(404).json({ message: 'Order not found' });
     }
-
-    const order = result.rows[0];
-    
-    // Ensure items is always an array
-    if (!order.items || !Array.isArray(order.items)) {
-      order.items = [];
-    }
-    
-    // Filter out null items and ensure all product details are included
-    order.items = order.items.filter(item => item && item.id !== null);
-    // If we used query without job_name, set job_name from product_name for each item
-    order.items.forEach(item => {
-      if (item && item.job_name === undefined) item.job_name = item.product_name || null;
-    });
-    
-    // Ensure order.id is a number (PostgreSQL returns it as integer)
-    order.id = parseInt(order.id);
     res.json({ order });
   } catch (error) {
     console.error('Get order by id admin error:', error);
@@ -337,46 +166,36 @@ const updateOrderStatus = async (req, res) => {
       return res.status(400).json({ message: 'Status is required' });
     }
 
-    const validStatuses = ['pending', 'processing', 'shipped', 'delivered', 'cancelled', 'complete', 'refund', 'approval_needed'];
-    if (!validStatuses.includes(status.toLowerCase())) {
+    if (!VALID_ORDER_STATUSES.includes(status.toLowerCase())) {
       return res.status(400).json({ message: 'Invalid status' });
     }
 
-    const result = await pool.query(
-      `UPDATE orders 
-       SET status = $1, updated_at = CURRENT_TIMESTAMP 
-       WHERE id = $2 
-       RETURNING *`,
-      [status.toLowerCase(), id]
-    );
-
-    if (result.rows.length === 0) {
+    const updated = await orderRepository.updateOrderStatusById(id, status.toLowerCase());
+    if (!updated) {
       return res.status(404).json({ message: 'Order not found' });
     }
 
-    res.json({ order: result.rows[0] });
+    res.json({ order: updated });
   } catch (error) {
     console.error('Update order status error:', error);
     res.status(500).json({ message: 'Failed to update order status', error: error.message });
   }
 };
 
-/** Admin: delete one order (and its items via cascade) */
 const deleteOrderAdmin = async (req, res) => {
   try {
     const { id } = req.params;
-    const result = await pool.query('DELETE FROM orders WHERE id = $1 RETURNING id', [id]);
-    if (result.rows.length === 0) {
+    const deletedId = await orderRepository.deleteOrderById(id);
+    if (deletedId == null) {
       return res.status(404).json({ message: 'Order not found' });
     }
-    res.json({ message: 'Order deleted', id: result.rows[0].id });
+    res.json({ message: 'Order deleted', id: deletedId });
   } catch (error) {
     console.error('Delete order error:', error);
     res.status(500).json({ message: 'Failed to delete order', error: error.message });
   }
 };
 
-/** Admin: create one order from a cart item with chosen status; order appears in admin list */
 const createOrderFromCartItem = async (req, res) => {
   try {
     const { cartItem, status } = req.body;
@@ -386,10 +205,10 @@ const createOrderFromCartItem = async (req, res) => {
       return res.status(400).json({ message: 'Cart item is required' });
     }
 
-    const validStatuses = ['pending', 'processing', 'shipped', 'delivered', 'cancelled', 'complete', 'refund', 'approval_needed'];
-    const orderStatus = (status && validStatuses.includes(String(status).toLowerCase()))
-      ? String(status).toLowerCase()
-      : 'pending';
+    const orderStatus =
+      status && VALID_ORDER_STATUSES.includes(String(status).toLowerCase())
+        ? String(status).toLowerCase()
+        : 'pending';
 
     const quantity = Math.max(1, parseInt(cartItem.quantity, 10) || 1);
     const totalFromCart = parseFloat(cartItem.total || cartItem.subtotal || cartItem.totalPrice) || 0;
@@ -397,76 +216,32 @@ const createOrderFromCartItem = async (req, res) => {
     const totalPrice = totalFromCart || quantity * unitPrice;
     const totalAmount = Number(totalPrice) || 0;
 
-    const orderNumber = `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
     let productIdRaw = cartItem.productId ?? cartItem.product_id;
     let productId = productIdRaw != null && productIdRaw !== '' ? parseInt(String(productIdRaw), 10) : null;
     if (productId != null && !isNaN(productId)) {
-      const productExists = await pool.query('SELECT id FROM products WHERE id = $1', [productId]);
-      if (productExists.rows.length === 0) productId = null;
+      const exists = await orderRepository.productExists(productId);
+      if (!exists) productId = null;
     } else {
       productId = null;
     }
     const productName = String(cartItem.productName || cartItem.product_name || cartItem.jobName || 'Cart Item').slice(0, 255);
     const jobName = String(cartItem.jobName || cartItem.job_name || productName).slice(0, 255);
-    const itemImageUrl = (cartItem.productImage || cartItem.product_image || cartItem.image_url || null);
+    const itemImageUrl = cartItem.productImage || cartItem.product_image || cartItem.image_url || null;
 
-    const client = await pool.connect();
+    const order = await orderRepository.createOrderFromCartItemAdmin({
+      userId,
+      totalAmount,
+      orderStatus,
+      productId,
+      productName,
+      jobName,
+      quantity,
+      unitPrice,
+      totalPrice,
+      itemImageUrl,
+    });
 
-    const insertOrderAndItem = async (useJobName) => {
-      const ordNum = `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
-      await client.query('BEGIN');
-      const orderResult = await client.query(
-        `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, notes)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING *`,
-        [userId, ordNum, totalAmount, orderStatus, 'admin_cart', 'Created from cart by admin']
-      );
-      const order = orderResult.rows[0];
-      if (useJobName) {
-        await client.query(
-          `INSERT INTO order_items (order_id, product_id, product_name, job_name, quantity, unit_price, total_price, image_url)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [order.id, productId, productName, jobName, quantity, unitPrice, totalPrice, itemImageUrl]
-        );
-      } else {
-        await client.query(
-          `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price, image_url)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [order.id, productId, productName, quantity, unitPrice, totalPrice, itemImageUrl]
-        );
-      }
-      await client.query('COMMIT');
-      return order;
-    };
-
-    try {
-      let order;
-      try {
-        order = await insertOrderAndItem(true);
-      } catch (firstErr) {
-        const isJobNameError = firstErr.message && (
-          firstErr.message.includes('job_name') ||
-          firstErr.message.includes('current transaction is aborted')
-        );
-        if (isJobNameError) {
-          await client.query('ROLLBACK').catch(() => {});
-          order = await insertOrderAndItem(false);
-        } else {
-          throw firstErr;
-        }
-      }
-
-      const fullOrder = await pool.query(
-        `SELECT o.* FROM orders o WHERE o.id = $1`,
-        [order.id]
-      );
-      res.status(201).json({ order: fullOrder.rows[0] });
-    } catch (err) {
-      await client.query('ROLLBACK').catch(() => {});
-      throw err;
-    } finally {
-      client.release();
-    }
+    res.status(201).json({ order });
   } catch (error) {
     console.error('Create order from cart error:', error);
     res.status(500).json({
@@ -476,14 +251,20 @@ const createOrderFromCartItem = async (req, res) => {
   }
 };
 
-/** Create order from cart and Stripe PaymentIntent; returns { orderId, orderNumber, clientSecret } for Stripe Elements */
 const createOrderWithPaymentIntent = async (req, res) => {
   try {
     if (!stripe) {
       return res.status(503).json({ message: 'Stripe is not configured. Set STRIPE_SECRET_KEY in .env' });
     }
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ message: 'Authentication required' });
+    const userId = req.user?.id ?? null;
+    let guestCheckout = null;
+    if (!userId) {
+      const parsed = parseGuestCheckout(req.body);
+      if (parsed.error) {
+        return res.status(400).json({ message: parsed.error });
+      }
+      guestCheckout = parsed.snapshot;
+    }
 
     const { cartItems } = req.body;
     if (!cartItems || !Array.isArray(cartItems) || cartItems.length === 0) {
@@ -512,44 +293,25 @@ const createOrderWithPaymentIntent = async (req, res) => {
     const amountCents = Math.round(totalAmount * 100);
     if (amountCents < 50) return res.status(400).json({ message: 'Order total must be at least $0.50' });
 
-    const orderNumber = `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
-    const client = await pool.connect();
-    let orderId;
-    try {
-      await client.query('BEGIN');
-      const orderResult = await client.query(
-        `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, payment_status, notes)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING id, order_number`,
-        [userId, orderNumber, totalAmount, 'pending_payment', 'stripe', 'pending', 'Checkout via Stripe']
-      );
-      const order = orderResult.rows[0];
-      orderId = order.id;
-      for (const oi of orderItems) {
-        await client.query(
-          `INSERT INTO order_items (order_id, product_id, product_name, job_name, quantity, unit_price, total_price, image_url)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [orderId, oi.product_id, oi.product_name, oi.job_name, oi.quantity, oi.unit_price, oi.total_price, oi.image_url]
-        );
-      }
-      await client.query('COMMIT');
-    } catch (e) {
-      await client.query('ROLLBACK').catch(() => {});
-      throw e;
-    } finally {
-      client.release();
-    }
+    const orderNumber = generateOrderNumber();
+    const { orderId, orderNumber: savedOrderNumber } = await orderRepository.createPendingStripeOrderWithItems({
+      userId,
+      orderNumber,
+      totalAmount,
+      guestCheckout,
+      orderItems,
+    });
 
     const paymentIntent = await stripe.paymentIntents.create({
       amount: amountCents,
       currency: 'usd',
       automatic_payment_methods: { enabled: true },
-      metadata: { orderId: String(orderId), orderNumber },
+      metadata: { orderId: String(orderId), orderNumber: savedOrderNumber },
     });
 
     res.status(201).json({
       orderId,
-      orderNumber,
+      orderNumber: savedOrderNumber,
       clientSecret: paymentIntent.client_secret,
     });
   } catch (error) {
@@ -561,7 +323,6 @@ const createOrderWithPaymentIntent = async (req, res) => {
   }
 };
 
-/** Stripe webhook: on payment_intent.succeeded, mark order paid */
 const handleStripeWebhook = async (req, res) => {
   if (!stripe) return res.status(503).send('Stripe not configured');
   const sig = req.headers['stripe-signature'];
@@ -582,10 +343,7 @@ const handleStripeWebhook = async (req, res) => {
     const orderId = pi.metadata?.orderId;
     if (orderId) {
       try {
-        await pool.query(
-          `UPDATE orders SET payment_status = $1, status = $2, notes = COALESCE(notes, '') || ' | Paid via Stripe ' || $3 WHERE id = $4`,
-          ['paid', 'processing', new Date().toISOString(), orderId]
-        );
+        await orderRepository.markOrderPaidFromStripe(orderId, new Date().toISOString());
       } catch (e) {
         console.error('Failed to update order after payment:', e);
       }
@@ -594,5 +352,15 @@ const handleStripeWebhook = async (req, res) => {
   res.status(200).send('ok');
 };
 
-module.exports = { createOrder, getOrders, getOrderById, getAllOrders, getOrderByIdAdmin, updateOrderStatus, deleteOrderAdmin, createOrderFromCartItem, createOrderWithPaymentIntent, handleStripeWebhook };
-
+module.exports = {
+  createOrder,
+  getOrders,
+  getOrderById,
+  getAllOrders,
+  getOrderByIdAdmin,
+  updateOrderStatus,
+  deleteOrderAdmin,
+  createOrderFromCartItem,
+  createOrderWithPaymentIntent,
+  handleStripeWebhook,
+};
