@@ -58,6 +58,10 @@ async function ensureEmployeeColumns() {
       const sql8 = fs.readFileSync(path.join(migrationsDir, 'addGuestCheckout.sql'), 'utf8');
       await pool.query(sql8);
     }
+    if (fs.existsSync(path.join(migrationsDir, 'fixAddressSingleDefaultPerUser.sql'))) {
+      const sql9 = fs.readFileSync(path.join(migrationsDir, 'fixAddressSingleDefaultPerUser.sql'), 'utf8');
+      await pool.query(sql9);
+    }
   } catch (err) {
     console.warn('Migrations (optional):', err.message);
   }

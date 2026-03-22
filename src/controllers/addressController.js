@@ -1,13 +1,38 @@
 const pool = require('../config/database');
 
+function coerceBooleanDefault(v) {
+  if (v === true || v === 1) return true;
+  if (v === false || v === 0) return false;
+  if (typeof v === 'string') return v.toLowerCase() === 'true' || v === '1';
+  return false;
+}
+
+function pickCanonicalDefaultRow(rows) {
+  const defaults = rows.filter((r) => r.is_default);
+  if (defaults.length <= 1) return null;
+  return defaults.reduce((best, row) => {
+    const bt = best.updated_at ? new Date(best.updated_at).getTime() : 0;
+    const rt = row.updated_at ? new Date(row.updated_at).getTime() : 0;
+    if (rt > bt) return row;
+    if (rt < bt) return best;
+    return row.id > best.id ? row : best;
+  });
+}
+
 const getAddresses = async (req, res) => {
   try {
     const userId = req.user.id;
-    const result = await pool.query(
-      'SELECT * FROM addresses WHERE user_id = $1 ORDER BY is_default DESC, created_at DESC',
-      [userId]
-    );
-    res.json({ addresses: result.rows });
+    const orderSql =
+      'SELECT * FROM addresses WHERE user_id = $1 ORDER BY is_default DESC, updated_at DESC NULLS LAST, created_at DESC';
+    let result = await pool.query(orderSql, [userId]);
+    let rows = result.rows;
+    const winner = pickCanonicalDefaultRow(rows);
+    if (winner) {
+      await pool.query('UPDATE addresses SET is_default = (id = $1) WHERE user_id = $2', [winner.id, userId]);
+      result = await pool.query(orderSql, [userId]);
+      rows = result.rows;
+    }
+    res.json({ addresses: rows });
   } catch (error) {
     console.error('Get addresses error:', error);
     res.status(500).json({ message: 'Failed to fetch addresses', error: error.message });
@@ -17,25 +42,22 @@ const getAddresses = async (req, res) => {
 const createAddress = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { streetAddress, addressLine2, city, state, postcode, country, isDefault, addressType } = req.body;
+    const { streetAddress, addressLine2, city, state, postcode, country, addressType } = req.body;
+    const wantsDefault = coerceBooleanDefault(req.body.isDefault ?? req.body.is_default);
 
     if (!streetAddress || !city || !state || !postcode) {
       return res.status(400).json({ message: 'Missing required fields' });
     }
 
-    // If this is set as default, unset other defaults
-    if (isDefault) {
-      await pool.query(
-        'UPDATE addresses SET is_default = false WHERE user_id = $1 AND address_type = $2',
-        [userId, addressType || 'billing']
-      );
+    if (wantsDefault) {
+      await pool.query('UPDATE addresses SET is_default = false WHERE user_id = $1', [userId]);
     }
 
     const result = await pool.query(
       `INSERT INTO addresses (user_id, street_address, address_line2, city, state, postcode, country, is_default, address_type)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
-      [userId, streetAddress, addressLine2 || null, city, state, postcode, country || 'United States', isDefault || false, addressType || 'billing']
+      [userId, streetAddress, addressLine2 || null, city, state, postcode, country || 'United States', wantsDefault, addressType || 'billing']
     );
 
     res.status(201).json({ address: result.rows[0] });
@@ -45,28 +67,52 @@ const createAddress = async (req, res) => {
   }
 };
 
+const setAddressDefault = async (req, res) => {
+  try {
+    const addressId = parseInt(req.params.id, 10);
+    if (Number.isNaN(addressId)) {
+      return res.status(400).json({ message: 'Invalid address id' });
+    }
+    const userId = req.user.id;
+
+    const checkResult = await pool.query('SELECT id FROM addresses WHERE id = $1 AND user_id = $2', [addressId, userId]);
+    if (checkResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Address not found' });
+    }
+
+    await pool.query('UPDATE addresses SET is_default = false WHERE user_id = $1', [userId]);
+    const result = await pool.query(
+      `UPDATE addresses SET is_default = true, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND user_id = $2
+       RETURNING *`,
+      [addressId, userId]
+    );
+
+    res.json({ address: result.rows[0] });
+  } catch (error) {
+    console.error('Set default address error:', error);
+    res.status(500).json({ message: 'Failed to set default address', error: error.message });
+  }
+};
+
 const updateAddress = async (req, res) => {
   try {
-    const { id } = req.params;
+    const addressId = parseInt(req.params.id, 10);
+    if (Number.isNaN(addressId)) {
+      return res.status(400).json({ message: 'Invalid address id' });
+    }
     const userId = req.user.id;
-    const { streetAddress, addressLine2, city, state, postcode, country, isDefault, addressType } = req.body;
+    const { streetAddress, addressLine2, city, state, postcode, country, addressType } = req.body;
+    const wantsDefault = coerceBooleanDefault(req.body.isDefault ?? req.body.is_default);
 
-    // Verify ownership
-    const checkResult = await pool.query(
-      'SELECT id FROM addresses WHERE id = $1 AND user_id = $2',
-      [id, userId]
-    );
+    const checkResult = await pool.query('SELECT id FROM addresses WHERE id = $1 AND user_id = $2', [addressId, userId]);
 
     if (checkResult.rows.length === 0) {
       return res.status(404).json({ message: 'Address not found' });
     }
 
-    // If setting as default, unset other defaults
-    if (isDefault) {
-      await pool.query(
-        'UPDATE addresses SET is_default = false WHERE user_id = $1 AND id != $2 AND address_type = $3',
-        [userId, id, addressType || 'billing']
-      );
+    if (wantsDefault) {
+      await pool.query('UPDATE addresses SET is_default = false WHERE user_id = $1 AND id != $2', [userId, addressId]);
     }
 
     const result = await pool.query(
@@ -75,7 +121,18 @@ const updateAddress = async (req, res) => {
            country = $6, is_default = $7, address_type = $8, updated_at = CURRENT_TIMESTAMP
        WHERE id = $9 AND user_id = $10
        RETURNING *`,
-      [streetAddress, addressLine2 || null, city, state, postcode, country || 'United States', isDefault || false, addressType || 'billing', id, userId]
+      [
+        streetAddress,
+        addressLine2 || null,
+        city,
+        state,
+        postcode,
+        country || 'United States',
+        wantsDefault,
+        addressType || 'billing',
+        addressId,
+        userId,
+      ]
     );
 
     res.json({ address: result.rows[0] });
@@ -90,10 +147,7 @@ const deleteAddress = async (req, res) => {
     const { id } = req.params;
     const userId = req.user.id;
 
-    const result = await pool.query(
-      'DELETE FROM addresses WHERE id = $1 AND user_id = $2 RETURNING id',
-      [id, userId]
-    );
+    const result = await pool.query('DELETE FROM addresses WHERE id = $1 AND user_id = $2 RETURNING id', [id, userId]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ message: 'Address not found' });
@@ -106,5 +160,4 @@ const deleteAddress = async (req, res) => {
   }
 };
 
-module.exports = { getAddresses, createAddress, updateAddress, deleteAddress };
-
+module.exports = { getAddresses, createAddress, updateAddress, deleteAddress, setAddressDefault };
