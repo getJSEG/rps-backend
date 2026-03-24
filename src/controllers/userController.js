@@ -24,6 +24,22 @@ const updateProfile = async (req, res) => {
   }
 };
 
+const getAllRegisteredUsers = async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, email, full_name, telephone, newsletter, role, is_active, is_approved, created_at, updated_at
+       FROM users
+       WHERE LOWER(COALESCE(role, '')) NOT IN ('admin', 'employee')
+       ORDER BY created_at DESC`
+    );
+
+    res.json({ users: result.rows });
+  } catch (error) {
+    console.error('Get registered users error:', error);
+    res.status(500).json({ message: 'Failed to get registered users', error: error.message });
+  }
+};
+
 const changePassword = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -69,5 +85,5 @@ const changePassword = async (req, res) => {
   }
 };
 
-module.exports = { updateProfile, changePassword };
+module.exports = { updateProfile, changePassword, getAllRegisteredUsers };
 
