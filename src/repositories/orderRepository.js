@@ -21,44 +21,108 @@ const SQL = {
          WHERE o.id = $1
          GROUP BY o.id`,
   ORDERS_FOR_USER_WITH_STATUS: `SELECT o.*, 
-      json_agg(json_build_object(
-        'id', oi.id,
-        'product_id', oi.product_id,
-        'product_name', oi.product_name,
-        'quantity', oi.quantity,
-        'unit_price', oi.unit_price,
-        'total_price', oi.total_price
-      )) as items
+      MAX(sa.street_address) as shipping_street_address,
+      MAX(sa.address_line2) as shipping_address_line2,
+      MAX(sa.city) as shipping_city,
+      MAX(sa.state) as shipping_state,
+      MAX(sa.postcode) as shipping_postcode,
+      MAX(sa.country) as shipping_country,
+      MAX(ba.street_address) as billing_street_address,
+      MAX(ba.address_line2) as billing_address_line2,
+      MAX(ba.city) as billing_city,
+      MAX(ba.state) as billing_state,
+      MAX(ba.postcode) as billing_postcode,
+      MAX(ba.country) as billing_country,
+      COALESCE(
+        json_agg(
+          json_build_object(
+            'id', oi.id,
+            'product_id', oi.product_id,
+            'product_name', oi.product_name,
+            'job_name', oi.job_name,
+            'quantity', oi.quantity,
+            'unit_price', oi.unit_price,
+            'total_price', oi.total_price,
+            'image_url', COALESCE(oi.image_url, p.image_url)
+          )
+        ) FILTER (WHERE oi.id IS NOT NULL),
+        '[]'::json
+      ) as items
       FROM orders o
       LEFT JOIN order_items oi ON o.id = oi.order_id
+      LEFT JOIN products p ON oi.product_id = p.id
+      LEFT JOIN addresses sa ON o.shipping_address_id = sa.id
+      LEFT JOIN addresses ba ON o.billing_address_id = ba.id
       WHERE o.user_id = $1 AND o.status = $2
       GROUP BY o.id ORDER BY o.created_at DESC LIMIT $3 OFFSET $4`,
   ORDERS_FOR_USER: `SELECT o.*, 
-      json_agg(json_build_object(
-        'id', oi.id,
-        'product_id', oi.product_id,
-        'product_name', oi.product_name,
-        'quantity', oi.quantity,
-        'unit_price', oi.unit_price,
-        'total_price', oi.total_price
-      )) as items
+      MAX(sa.street_address) as shipping_street_address,
+      MAX(sa.address_line2) as shipping_address_line2,
+      MAX(sa.city) as shipping_city,
+      MAX(sa.state) as shipping_state,
+      MAX(sa.postcode) as shipping_postcode,
+      MAX(sa.country) as shipping_country,
+      MAX(ba.street_address) as billing_street_address,
+      MAX(ba.address_line2) as billing_address_line2,
+      MAX(ba.city) as billing_city,
+      MAX(ba.state) as billing_state,
+      MAX(ba.postcode) as billing_postcode,
+      MAX(ba.country) as billing_country,
+      COALESCE(
+        json_agg(
+          json_build_object(
+            'id', oi.id,
+            'product_id', oi.product_id,
+            'product_name', oi.product_name,
+            'job_name', oi.job_name,
+            'quantity', oi.quantity,
+            'unit_price', oi.unit_price,
+            'total_price', oi.total_price,
+            'image_url', COALESCE(oi.image_url, p.image_url)
+          )
+        ) FILTER (WHERE oi.id IS NOT NULL),
+        '[]'::json
+      ) as items
       FROM orders o
       LEFT JOIN order_items oi ON o.id = oi.order_id
+      LEFT JOIN products p ON oi.product_id = p.id
+      LEFT JOIN addresses sa ON o.shipping_address_id = sa.id
+      LEFT JOIN addresses ba ON o.billing_address_id = ba.id
       WHERE o.user_id = $1
       GROUP BY o.id ORDER BY o.created_at DESC LIMIT $2 OFFSET $3`,
   ORDER_BY_ID_AND_USER: `SELECT o.*, 
-       json_agg(json_build_object(
-         'id', oi.id,
-         'product_id', oi.product_id,
-         'product_name', oi.product_name,
-         'quantity', oi.quantity,
-         'unit_price', oi.unit_price,
-         'total_price', oi.total_price,
-         'product_image', COALESCE(oi.image_url, p.image_url)
-       )) as items
+       MAX(sa.street_address) as shipping_street_address,
+       MAX(sa.address_line2) as shipping_address_line2,
+       MAX(sa.city) as shipping_city,
+       MAX(sa.state) as shipping_state,
+       MAX(sa.postcode) as shipping_postcode,
+       MAX(sa.country) as shipping_country,
+       MAX(ba.street_address) as billing_street_address,
+       MAX(ba.address_line2) as billing_address_line2,
+       MAX(ba.city) as billing_city,
+       MAX(ba.state) as billing_state,
+       MAX(ba.postcode) as billing_postcode,
+       MAX(ba.country) as billing_country,
+       COALESCE(
+         json_agg(
+           json_build_object(
+             'id', oi.id,
+             'product_id', oi.product_id,
+             'product_name', oi.product_name,
+             'job_name', oi.job_name,
+             'quantity', oi.quantity,
+             'unit_price', oi.unit_price,
+             'total_price', oi.total_price,
+             'image_url', COALESCE(oi.image_url, p.image_url)
+           )
+         ) FILTER (WHERE oi.id IS NOT NULL),
+         '[]'::json
+       ) as items
        FROM orders o
        LEFT JOIN order_items oi ON o.id = oi.order_id
        LEFT JOIN products p ON oi.product_id = p.id
+       LEFT JOIN addresses sa ON o.shipping_address_id = sa.id
+       LEFT JOIN addresses ba ON o.billing_address_id = ba.id
        WHERE o.id = $1 AND o.user_id = $2
        GROUP BY o.id`,
   ALL_ORDERS_ADMIN_WITH_STATUS: `SELECT o.*, 
@@ -110,6 +174,18 @@ const SQL = {
   ORDER_ADMIN_DETAIL_WITH_JOB: `SELECT o.*, 
        u.email as user_email,
        u.full_name as user_name,
+       MAX(sa.street_address) as shipping_street_address,
+       MAX(sa.address_line2) as shipping_address_line2,
+       MAX(sa.city) as shipping_city,
+       MAX(sa.state) as shipping_state,
+       MAX(sa.postcode) as shipping_postcode,
+       MAX(sa.country) as shipping_country,
+       MAX(ba.street_address) as billing_street_address,
+       MAX(ba.address_line2) as billing_address_line2,
+       MAX(ba.city) as billing_city,
+       MAX(ba.state) as billing_state,
+       MAX(ba.postcode) as billing_postcode,
+       MAX(ba.country) as billing_country,
        COALESCE(
          json_agg(
            json_build_object(
@@ -137,11 +213,25 @@ const SQL = {
        LEFT JOIN order_items oi ON o.id = oi.order_id
        LEFT JOIN products p ON oi.product_id = p.id
        LEFT JOIN categories c ON p.category_id = c.id
+       LEFT JOIN addresses sa ON o.shipping_address_id = sa.id
+       LEFT JOIN addresses ba ON o.billing_address_id = ba.id
        WHERE o.id = $1
        GROUP BY o.id, u.email, u.full_name`,
   ORDER_ADMIN_DETAIL_NO_JOB: `SELECT o.*, 
        u.email as user_email,
        u.full_name as user_name,
+       MAX(sa.street_address) as shipping_street_address,
+       MAX(sa.address_line2) as shipping_address_line2,
+       MAX(sa.city) as shipping_city,
+       MAX(sa.state) as shipping_state,
+       MAX(sa.postcode) as shipping_postcode,
+       MAX(sa.country) as shipping_country,
+       MAX(ba.street_address) as billing_street_address,
+       MAX(ba.address_line2) as billing_address_line2,
+       MAX(ba.city) as billing_city,
+       MAX(ba.state) as billing_state,
+       MAX(ba.postcode) as billing_postcode,
+       MAX(ba.country) as billing_country,
        COALESCE(
          json_agg(
            json_build_object(
@@ -168,6 +258,8 @@ const SQL = {
        LEFT JOIN order_items oi ON o.id = oi.order_id
        LEFT JOIN products p ON oi.product_id = p.id
        LEFT JOIN categories c ON p.category_id = c.id
+       LEFT JOIN addresses sa ON o.shipping_address_id = sa.id
+       LEFT JOIN addresses ba ON o.billing_address_id = ba.id
        WHERE o.id = $1
        GROUP BY o.id, u.email, u.full_name`,
   UPDATE_ORDER_STATUS: `UPDATE orders 
@@ -184,10 +276,11 @@ const SQL = {
   INSERT_ORDER_ITEM_ADMIN_NO_JOB: `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price, image_url)
            VALUES ($1, $2, $3, $4, $5, $6, $7)`,
   SELECT_ORDER_BY_ID: `SELECT o.* FROM orders o WHERE o.id = $1`,
-  INSERT_ORDER_STRIPE_PENDING: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, payment_status, notes, guest_checkout)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+  INSERT_ORDER_STRIPE_PENDING: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, payment_status, notes, guest_checkout, shipping_address_id, billing_address_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING id, order_number`,
   UPDATE_ORDER_STRIPE_PAID: `UPDATE orders SET payment_status = $1, status = $2, notes = COALESCE(notes, '') || ' | Paid via Stripe ' || $3 WHERE id = $4`,
+  UPDATE_ORDER_PAID_WITHOUT_STRIPE: `UPDATE orders SET payment_status = $1, status = $2, payment_method = $3, notes = COALESCE(notes, '') || $4 WHERE id = $5`,
 };
 
 function itemImageUrlFromBody(item) {
@@ -258,6 +351,18 @@ async function createOrderWithItems({
  * @param {number} userId
  * @param {{ status?: string, page?: number, limit?: number }} opts
  */
+function normalizeUserOrderRows(rows) {
+  return rows.map((order) => {
+    const o = { ...order };
+    if (!o.items || !Array.isArray(o.items)) {
+      o.items = [];
+    } else {
+      o.items = o.items.filter((item) => item && item.id !== null);
+    }
+    return o;
+  });
+}
+
 async function findOrdersForUser(userId, opts = {}) {
   const page = Number(opts.page) || 1;
   const limit = Number(opts.limit) || 20;
@@ -269,10 +374,10 @@ async function findOrdersForUser(userId, opts = {}) {
       limit,
       offset,
     ]);
-    return result.rows;
+    return normalizeUserOrderRows(result.rows);
   }
   const result = await pool.query(SQL.ORDERS_FOR_USER, [userId, limit, offset]);
-  return result.rows;
+  return normalizeUserOrderRows(result.rows);
 }
 
 /**
@@ -280,7 +385,10 @@ async function findOrdersForUser(userId, opts = {}) {
  */
 async function findOrderByIdAndUserId(orderId, userId) {
   const result = await pool.query(SQL.ORDER_BY_ID_AND_USER, [orderId, userId]);
-  return result.rows[0] ?? null;
+  const row = result.rows[0];
+  if (!row) return null;
+  const [normalized] = normalizeUserOrderRows([row]);
+  return normalized;
 }
 
 function normalizeAdminListOrders(rows) {
@@ -460,12 +568,28 @@ async function createOrderFromCartItemAdmin(params) {
  * @param {Array<{product_id, product_name, job_name, quantity, unit_price, total_price, image_url}>} params.orderItems
  * @returns {Promise<{ orderId: number, orderNumber: string }>}
  */
+async function verifyAddressBelongsToUser(userId, addressId) {
+  if (userId == null || addressId == null) return false;
+  const r = await pool.query('SELECT id FROM addresses WHERE id = $1 AND user_id = $2', [
+    addressId,
+    userId,
+  ]);
+  return r.rows.length > 0;
+}
+
+async function getOrderUserId(orderId) {
+  const r = await pool.query('SELECT user_id FROM orders WHERE id = $1', [orderId]);
+  return r.rows[0]?.user_id ?? null;
+}
+
 async function createPendingStripeOrderWithItems({
   userId,
   orderNumber,
   totalAmount,
   guestCheckout,
   orderItems,
+  shippingAddressId = null,
+  billingAddressId = null,
 }) {
   const client = await pool.connect();
   try {
@@ -479,6 +603,8 @@ async function createPendingStripeOrderWithItems({
       'pending',
       'Checkout via Stripe',
       guestCheckout,
+      shippingAddressId,
+      billingAddressId,
     ]);
     const order = orderResult.rows[0];
     const orderId = order.id;
@@ -508,6 +634,11 @@ async function markOrderPaidFromStripe(orderId, paidAtIso) {
   await pool.query(SQL.UPDATE_ORDER_STRIPE_PAID, ['paid', 'processing', paidAtIso, orderId]);
 }
 
+async function markOrderPaidWithoutStripe(orderId) {
+  const suffix = ` | Completed without Stripe (STRIPE_PAYMENT_ENABLED=false) ${new Date().toISOString()}`;
+  await pool.query(SQL.UPDATE_ORDER_PAID_WITHOUT_STRIPE, ['paid', 'processing', 'manual', suffix, orderId]);
+}
+
 module.exports = {
   createOrderWithItems,
   findOrdersForUser,
@@ -520,4 +651,7 @@ module.exports = {
   createOrderFromCartItemAdmin,
   createPendingStripeOrderWithItems,
   markOrderPaidFromStripe,
+  markOrderPaidWithoutStripe,
+  verifyAddressBelongsToUser,
+  getOrderUserId,
 };

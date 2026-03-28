@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS orders (
     user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     order_number VARCHAR(50) UNIQUE NOT NULL,
     status VARCHAR(50) DEFAULT 'pending', -- pending, processing, shipped, delivered, cancelled
-    total_amount DECIMAL(10, 2) NOT NULL,
+    total_amount DECIMAL(14, 2) NOT NULL,
     shipping_address_id INTEGER REFERENCES addresses(id),
     billing_address_id INTEGER REFERENCES addresses(id),
     payment_method VARCHAR(50),
@@ -99,8 +99,8 @@ CREATE TABLE IF NOT EXISTS order_items (
     product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
     product_name VARCHAR(255) NOT NULL,
     quantity INTEGER NOT NULL,
-    unit_price DECIMAL(10, 2) NOT NULL,
-    total_price DECIMAL(10, 2) NOT NULL,
+    unit_price DECIMAL(14, 2) NOT NULL,
+    total_price DECIMAL(14, 2) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

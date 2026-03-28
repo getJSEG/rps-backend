@@ -1,6 +1,29 @@
 const orderRepository = require('../repositories/orderRepository');
+const cartRepository = require('../repositories/cartRepository');
 const Stripe = require('stripe');
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
+
+/**
+ * Parsed STRIPE_PAYMENT_ENABLED: true | false | null (null = unset / unknown).
+ * Values are trimmed so Windows CRLF after `false` still disables Stripe.
+ */
+function readStripePaymentEnabledEnv() {
+  const v = process.env.STRIPE_PAYMENT_ENABLED;
+  if (v === undefined || v === '') return null;
+  const s = String(v).trim().toLowerCase();
+  if (s === 'true' || s === '1' || s === 'yes' || s === 'on') return true;
+  if (s === 'false' || s === '0' || s === 'no' || s === 'off') return false;
+  return null;
+}
+
+/** Whether to create a PaymentIntent. False = complete order without charging (same as webhook would). */
+function shouldUseStripePaymentIntent() {
+  const flag = readStripePaymentEnabledEnv();
+  if (flag === false) return false;
+  if (flag === true) return !!stripe;
+  // Unset: use Stripe only if a secret key exists (otherwise skip so checkout still works locally).
+  return !!stripe;
+}
 
 const VALID_ORDER_STATUSES = [
   'pending',
@@ -15,6 +38,37 @@ const VALID_ORDER_STATUSES = [
 
 function generateOrderNumber() {
   return `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+}
+
+/** Money for DECIMAL(14,2): finite, 2 decimal places (avoids float dust and overflow). */
+function roundMoney2(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return 0;
+  return Math.round(x * 100) / 100;
+}
+
+const MAX_ORDER_MONEY = 999_999_999_999.99;
+const MAX_LINE_QTY = 1_000_000;
+
+function readGuestSessionIdFromReq(req) {
+  const raw = req.headers['x-guest-session-id'] || req.headers['X-Guest-Session-Id'] || '';
+  const sid = String(raw).trim();
+  if (sid.length >= 8 && sid.length <= 128) return sid;
+  return null;
+}
+
+/** Clear server cart for whoever placed the order (logged-in user or guest session header). */
+async function clearBuyerCartAfterCheckout(req, userId) {
+  try {
+    if (userId) {
+      await cartRepository.clearCartByUserId(userId);
+      return;
+    }
+    const sid = readGuestSessionIdFromReq(req);
+    if (sid) await cartRepository.clearCartByGuestSession(sid);
+  } catch (e) {
+    console.warn('clearBuyerCartAfterCheckout:', e.message);
+  }
 }
 
 /** @returns {{ snapshot: object } | { error: string }} */
@@ -75,6 +129,10 @@ const createOrder = async (req, res) => {
         return res.status(400).json({ message: parsed.error });
       }
       guestCheckout = parsed.snapshot;
+      const guestSid = readGuestSessionIdFromReq(req);
+      if (guestSid) {
+        guestCheckout = { ...guestCheckout, guestSessionId: guestSid };
+      }
       shipId = null;
       billId = null;
     }
@@ -253,9 +311,6 @@ const createOrderFromCartItem = async (req, res) => {
 
 const createOrderWithPaymentIntent = async (req, res) => {
   try {
-    if (!stripe) {
-      return res.status(503).json({ message: 'Stripe is not configured. Set STRIPE_SECRET_KEY in .env' });
-    }
     const userId = req.user?.id ?? null;
     let guestCheckout = null;
     if (!userId) {
@@ -264,6 +319,10 @@ const createOrderWithPaymentIntent = async (req, res) => {
         return res.status(400).json({ message: parsed.error });
       }
       guestCheckout = parsed.snapshot;
+      const guestSid = readGuestSessionIdFromReq(req);
+      if (guestSid) {
+        guestCheckout = { ...guestCheckout, guestSessionId: guestSid };
+      }
     }
 
     const { cartItems } = req.body;
@@ -273,25 +332,54 @@ const createOrderWithPaymentIntent = async (req, res) => {
 
     const itemImageUrl = (item) => item.image_url || item.product_image || item.productImage || null;
     const orderItems = cartItems.map((item) => {
-      const qty = Math.max(1, parseInt(item.quantity, 10) || 1);
-      const unitPrice = parseFloat(item.unitPrice || item.unit_price) || 0;
-      const subtotal = item.subtotal != null ? parseFloat(item.subtotal) : unitPrice * qty;
+      let qty = Math.max(1, parseInt(item.quantity, 10) || 1);
+      if (qty > MAX_LINE_QTY) qty = MAX_LINE_QTY;
+      const unitPrice = roundMoney2(item.unitPrice || item.unit_price || 0);
+      let lineTotal =
+        item.subtotal != null ? roundMoney2(item.subtotal) : roundMoney2(unitPrice * qty);
+      if (lineTotal > MAX_ORDER_MONEY) lineTotal = MAX_ORDER_MONEY;
       return {
         product_id: item.productId || item.product_id || null,
         product_name: String(item.productName || item.product_name || 'Cart Item').slice(0, 255),
         job_name: String(item.jobName || item.job_name || item.productName || '').slice(0, 255),
         quantity: qty,
         unit_price: unitPrice,
-        total_price: subtotal,
+        total_price: lineTotal,
         image_url: itemImageUrl(item),
       };
     });
-    const subtotalSum = orderItems.reduce((s, o) => s + o.total_price, 0);
-    const shippingSum = cartItems.reduce((s, i) => s + (parseFloat(i.shippingCost || i.shipping_cost) || 0), 0);
-    const taxSum = cartItems.reduce((s, i) => s + (parseFloat(i.tax) || 0), 0);
-    const totalAmount = Math.round((subtotalSum + shippingSum + taxSum) * 100) / 100;
+    const subtotalSum = roundMoney2(orderItems.reduce((s, o) => s + o.total_price, 0));
+    const shippingSum = roundMoney2(
+      cartItems.reduce((s, i) => s + roundMoney2(i.shippingCost || i.shipping_cost || 0), 0)
+    );
+    const taxSum = roundMoney2(cartItems.reduce((s, i) => s + roundMoney2(i.tax || 0), 0));
+    let totalAmount = roundMoney2(subtotalSum + shippingSum + taxSum);
+    if (totalAmount > MAX_ORDER_MONEY) {
+      return res.status(400).json({ message: 'Order total exceeds the maximum allowed amount.' });
+    }
     const amountCents = Math.round(totalAmount * 100);
     if (amountCents < 50) return res.status(400).json({ message: 'Order total must be at least $0.50' });
+
+    let shippingAddressId = null;
+    let billingAddressId = null;
+    if (userId) {
+      const rawShip = req.body.shippingAddressId ?? req.body.shipping_address_id;
+      const rawBill = req.body.billingAddressId ?? req.body.billing_address_id;
+      const shipParsed = rawShip != null && rawShip !== '' ? parseInt(String(rawShip), 10) : NaN;
+      const billParsed = rawBill != null && rawBill !== '' ? parseInt(String(rawBill), 10) : NaN;
+      let ship = Number.isNaN(shipParsed) ? null : shipParsed;
+      let bill = Number.isNaN(billParsed) ? null : billParsed;
+      if (ship != null && !(await orderRepository.verifyAddressBelongsToUser(userId, ship))) {
+        ship = null;
+      }
+      if (bill != null && !(await orderRepository.verifyAddressBelongsToUser(userId, bill))) {
+        bill = null;
+      }
+      if (ship != null && bill == null) bill = ship;
+      if (bill != null && ship == null) ship = bill;
+      shippingAddressId = ship;
+      billingAddressId = bill;
+    }
 
     const orderNumber = generateOrderNumber();
     const { orderId, orderNumber: savedOrderNumber } = await orderRepository.createPendingStripeOrderWithItems({
@@ -300,19 +388,44 @@ const createOrderWithPaymentIntent = async (req, res) => {
       totalAmount,
       guestCheckout,
       orderItems,
+      shippingAddressId,
+      billingAddressId,
     });
 
+    if (!shouldUseStripePaymentIntent()) {
+      if (readStripePaymentEnabledEnv() === true && !stripe) {
+        return res.status(503).json({ message: 'Stripe is not configured. Set STRIPE_SECRET_KEY in .env' });
+      }
+      await orderRepository.markOrderPaidWithoutStripe(orderId);
+      await clearBuyerCartAfterCheckout(req, userId);
+      return res.status(201).json({
+        orderId,
+        orderNumber: savedOrderNumber,
+        clientSecret: null,
+        stripePaymentSkipped: true,
+      });
+    }
+
+    const metadata = {
+      orderId: String(orderId),
+      orderNumber: savedOrderNumber,
+    };
+    const guestSidForStripe = userId ? null : readGuestSessionIdFromReq(req);
+    if (guestSidForStripe) {
+      metadata.guestSessionId = guestSidForStripe;
+    }
     const paymentIntent = await stripe.paymentIntents.create({
       amount: amountCents,
       currency: 'usd',
       automatic_payment_methods: { enabled: true },
-      metadata: { orderId: String(orderId), orderNumber: savedOrderNumber },
+      metadata,
     });
 
     res.status(201).json({
       orderId,
       orderNumber: savedOrderNumber,
       clientSecret: paymentIntent.client_secret,
+      stripePaymentSkipped: false,
     });
   } catch (error) {
     console.error('Create order with payment intent error:', error);
@@ -344,6 +457,16 @@ const handleStripeWebhook = async (req, res) => {
     if (orderId) {
       try {
         await orderRepository.markOrderPaidFromStripe(orderId, new Date().toISOString());
+        const buyerId = await orderRepository.getOrderUserId(orderId);
+        if (buyerId) {
+          await cartRepository.clearCartByUserId(buyerId);
+        } else {
+          const gs = pi.metadata?.guestSessionId;
+          const sid = gs != null ? String(gs).trim() : '';
+          if (sid.length >= 8 && sid.length <= 128) {
+            await cartRepository.clearCartByGuestSession(sid);
+          }
+        }
       } catch (e) {
         console.error('Failed to update order after payment:', e);
       }

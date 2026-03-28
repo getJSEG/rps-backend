@@ -116,9 +116,6 @@ const clearCart = async (req, res) => {
     if (!userId && !guestSessionId) {
       return res.status(401).json({ message: 'Authentication or guest session required' });
     }
-    if (isAdminUser(req)) {
-      return res.status(400).json({ message: 'Admin cannot clear all carts. Use remove for individual items.' });
-    }
     if (userId) {
       await cartRepository.clearCartByUserId(userId);
     } else {
