@@ -66,6 +66,10 @@ async function ensureEmployeeColumns() {
       const sql10 = fs.readFileSync(path.join(migrationsDir, 'widenOrderDecimalColumns.sql'), 'utf8');
       await pool.query(sql10);
     }
+    if (fs.existsSync(path.join(migrationsDir, 'addShippingRatesAndOrderShipping.sql'))) {
+      const sql11 = fs.readFileSync(path.join(migrationsDir, 'addShippingRatesAndOrderShipping.sql'), 'utf8');
+      await pool.query(sql11);
+    }
   } catch (err) {
     console.warn('Migrations (optional):', err.message);
   }
@@ -85,6 +89,7 @@ const messageRoutes = require('./routes/messages');
 const materialRoutes = require('./routes/materials');
 const employeeRoutes = require('./routes/employees');
 const cartRoutes = require('./routes/cart');
+const shippingRatesRoutes = require('./routes/shippingRates');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -160,6 +165,7 @@ app.use('/api/messages', messageRoutes);
 app.use('/api/materials', materialRoutes);
 app.use('/api/admin/employees', employeeRoutes);
 app.use('/api/cart', cartRoutes);
+app.use('/api/shipping-rates', shippingRatesRoutes);
 
 // 404 handler
 app.use((req, res) => {

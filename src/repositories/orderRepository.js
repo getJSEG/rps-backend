@@ -276,8 +276,8 @@ const SQL = {
   INSERT_ORDER_ITEM_ADMIN_NO_JOB: `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price, image_url)
            VALUES ($1, $2, $3, $4, $5, $6, $7)`,
   SELECT_ORDER_BY_ID: `SELECT o.* FROM orders o WHERE o.id = $1`,
-  INSERT_ORDER_STRIPE_PENDING: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, payment_status, notes, guest_checkout, shipping_address_id, billing_address_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+  INSERT_ORDER_STRIPE_PENDING: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, payment_status, notes, guest_checkout, shipping_address_id, billing_address_id, shipping_method, shipping_charge)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          RETURNING id, order_number`,
   UPDATE_ORDER_STRIPE_PAID: `UPDATE orders SET payment_status = $1, status = $2, notes = COALESCE(notes, '') || ' | Paid via Stripe ' || $3 WHERE id = $4`,
   UPDATE_ORDER_PAID_WITHOUT_STRIPE: `UPDATE orders SET payment_status = $1, status = $2, payment_method = $3, notes = COALESCE(notes, '') || $4 WHERE id = $5`,
@@ -590,6 +590,8 @@ async function createPendingStripeOrderWithItems({
   orderItems,
   shippingAddressId = null,
   billingAddressId = null,
+  shippingMethod = null,
+  shippingCharge = 0,
 }) {
   const client = await pool.connect();
   try {
@@ -605,6 +607,8 @@ async function createPendingStripeOrderWithItems({
       guestCheckout,
       shippingAddressId,
       billingAddressId,
+      shippingMethod,
+      shippingCharge,
     ]);
     const order = orderResult.rows[0];
     const orderId = order.id;

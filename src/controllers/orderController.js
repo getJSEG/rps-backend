@@ -1,5 +1,6 @@
 const orderRepository = require('../repositories/orderRepository');
 const cartRepository = require('../repositories/cartRepository');
+const shippingRatesRepository = require('../repositories/shippingRatesRepository');
 const Stripe = require('stripe');
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 
@@ -45,6 +46,36 @@ function roundMoney2(n) {
   const x = Number(n);
   if (!Number.isFinite(x)) return 0;
   return Math.round(x * 100) / 100;
+}
+
+function shippingRateForServiceLabel(rates, label) {
+  const s = String(label || '').trim().toLowerCase();
+  if (s === 'ground') return roundMoney2(rates.ground);
+  if (s === 'express') return roundMoney2(rates.express);
+  if (s === 'overnight') return roundMoney2(rates.overnight);
+  return 0;
+}
+
+/** Sum admin-configured shipping per cart line from each line's shippingService; tax is not used. */
+function aggregateShippingFromCartItems(cartItems, rates) {
+  let sum = 0;
+  for (const i of cartItems) {
+    const svc = i.shippingService ?? i.shipping_service ?? '';
+    sum += shippingRateForServiceLabel(rates, svc);
+  }
+  const labels = [
+    ...new Set(
+      cartItems
+        .map((i) => String(i.shippingService ?? i.shipping_service ?? '').trim())
+        .filter(Boolean)
+    ),
+  ];
+  const shippingMethod = labels.length === 0 ? null : labels.join(', ');
+  return {
+    shippingSum: roundMoney2(sum),
+    shippingMethod,
+    shippingCharge: roundMoney2(sum),
+  };
 }
 
 const MAX_ORDER_MONEY = 999_999_999_999.99;
@@ -349,11 +380,9 @@ const createOrderWithPaymentIntent = async (req, res) => {
       };
     });
     const subtotalSum = roundMoney2(orderItems.reduce((s, o) => s + o.total_price, 0));
-    const shippingSum = roundMoney2(
-      cartItems.reduce((s, i) => s + roundMoney2(i.shippingCost || i.shipping_cost || 0), 0)
-    );
-    const taxSum = roundMoney2(cartItems.reduce((s, i) => s + roundMoney2(i.tax || 0), 0));
-    let totalAmount = roundMoney2(subtotalSum + shippingSum + taxSum);
+    const rateRow = await shippingRatesRepository.getRates();
+    const { shippingSum, shippingMethod, shippingCharge } = aggregateShippingFromCartItems(cartItems, rateRow);
+    let totalAmount = roundMoney2(subtotalSum + shippingSum);
     if (totalAmount > MAX_ORDER_MONEY) {
       return res.status(400).json({ message: 'Order total exceeds the maximum allowed amount.' });
     }
@@ -390,6 +419,8 @@ const createOrderWithPaymentIntent = async (req, res) => {
       orderItems,
       shippingAddressId,
       billingAddressId,
+      shippingMethod,
+      shippingCharge,
     });
 
     if (!shouldUseStripePaymentIntent()) {
