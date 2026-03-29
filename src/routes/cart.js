@@ -5,8 +5,9 @@ const { authenticateTokenOrGuestSession } = require('../middleware/auth');
 
 router.post('/', authenticateTokenOrGuestSession, addToCart);
 router.get('/', authenticateTokenOrGuestSession, getCart);
+// Static paths must be registered before /:id or "clear" is parsed as an integer id
+router.delete('/clear', authenticateTokenOrGuestSession, clearCart);
 router.put('/:id', authenticateTokenOrGuestSession, updateCartItem);
 router.delete('/:id', authenticateTokenOrGuestSession, removeFromCart);
-router.delete('/clear', authenticateTokenOrGuestSession, clearCart);
 
 module.exports = router;
