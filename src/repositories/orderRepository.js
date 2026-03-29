@@ -5,8 +5,8 @@ const SQL = {
          billing_address_id, payment_method, notes, guest_checkout)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING *`,
-  INSERT_ORDER_ITEM_WITH_JOB: `INSERT INTO order_items (order_id, product_id, product_name, job_name, quantity, unit_price, total_price, image_url)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+  INSERT_ORDER_ITEM_WITH_JOB: `INSERT INTO order_items (order_id, product_id, product_name, job_name, quantity, unit_price, total_price, image_url, width_inches, height_inches)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
   SELECT_ORDER_WITH_ITEMS_AGG: `SELECT o.*, 
          json_agg(json_build_object(
            'id', oi.id,
@@ -14,7 +14,9 @@ const SQL = {
            'product_name', oi.product_name,
            'quantity', oi.quantity,
            'unit_price', oi.unit_price,
-           'total_price', oi.total_price
+           'total_price', oi.total_price,
+           'width_inches', oi.width_inches,
+           'height_inches', oi.height_inches
          )) as items
          FROM orders o
          LEFT JOIN order_items oi ON o.id = oi.order_id
@@ -43,7 +45,9 @@ const SQL = {
             'quantity', oi.quantity,
             'unit_price', oi.unit_price,
             'total_price', oi.total_price,
-            'image_url', COALESCE(oi.image_url, p.image_url)
+            'image_url', COALESCE(oi.image_url, p.image_url),
+            'width_inches', oi.width_inches,
+            'height_inches', oi.height_inches
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
         '[]'::json
@@ -78,7 +82,9 @@ const SQL = {
             'quantity', oi.quantity,
             'unit_price', oi.unit_price,
             'total_price', oi.total_price,
-            'image_url', COALESCE(oi.image_url, p.image_url)
+            'image_url', COALESCE(oi.image_url, p.image_url),
+            'width_inches', oi.width_inches,
+            'height_inches', oi.height_inches
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
         '[]'::json
@@ -113,7 +119,9 @@ const SQL = {
              'quantity', oi.quantity,
              'unit_price', oi.unit_price,
              'total_price', oi.total_price,
-             'image_url', COALESCE(oi.image_url, p.image_url)
+             'image_url', COALESCE(oi.image_url, p.image_url),
+             'width_inches', oi.width_inches,
+             'height_inches', oi.height_inches
            )
          ) FILTER (WHERE oi.id IS NOT NULL),
          '[]'::json
@@ -137,7 +145,9 @@ const SQL = {
             'quantity', oi.quantity,
             'unit_price', oi.unit_price,
             'total_price', oi.total_price,
-            'product_image', COALESCE(oi.image_url, p.image_url)
+            'product_image', COALESCE(oi.image_url, p.image_url),
+            'width_inches', oi.width_inches,
+            'height_inches', oi.height_inches
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
         '[]'::json
@@ -160,7 +170,9 @@ const SQL = {
             'quantity', oi.quantity,
             'unit_price', oi.unit_price,
             'total_price', oi.total_price,
-            'product_image', COALESCE(oi.image_url, p.image_url)
+            'product_image', COALESCE(oi.image_url, p.image_url),
+            'width_inches', oi.width_inches,
+            'height_inches', oi.height_inches
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
         '[]'::json
@@ -203,7 +215,9 @@ const SQL = {
              'product_min_charge', p.min_charge,
              'product_category', c.name,
              'product_subcategory', p.subcategory,
-             'product_sku', p.sku
+             'product_sku', p.sku,
+             'width_inches', oi.width_inches,
+             'height_inches', oi.height_inches
            )
          ) FILTER (WHERE oi.id IS NOT NULL),
          '[]'::json
@@ -248,7 +262,9 @@ const SQL = {
              'product_min_charge', p.min_charge,
              'product_category', c.name,
              'product_subcategory', p.subcategory,
-             'product_sku', p.sku
+             'product_sku', p.sku,
+             'width_inches', oi.width_inches,
+             'height_inches', oi.height_inches
            )
          ) FILTER (WHERE oi.id IS NOT NULL),
          '[]'::json
@@ -271,10 +287,10 @@ const SQL = {
   INSERT_ORDER_ADMIN_CART: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, notes)
          VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING *`,
-  INSERT_ORDER_ITEM_ADMIN_WITH_JOB: `INSERT INTO order_items (order_id, product_id, product_name, job_name, quantity, unit_price, total_price, image_url)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-  INSERT_ORDER_ITEM_ADMIN_NO_JOB: `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price, image_url)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+  INSERT_ORDER_ITEM_ADMIN_WITH_JOB: `INSERT INTO order_items (order_id, product_id, product_name, job_name, quantity, unit_price, total_price, image_url, width_inches, height_inches)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+  INSERT_ORDER_ITEM_ADMIN_NO_JOB: `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price, image_url, width_inches, height_inches)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
   SELECT_ORDER_BY_ID: `SELECT o.* FROM orders o WHERE o.id = $1`,
   INSERT_ORDER_STRIPE_PENDING: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, payment_status, notes, guest_checkout, shipping_address_id, billing_address_id, shipping_method, shipping_charge)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
@@ -325,15 +341,23 @@ async function createOrderWithItems({
     ]);
     const order = orderResult.rows[0];
     for (const item of items) {
+      const qty = parseInt(item.quantity, 10) || 1;
+      const unit = parseFloat(item.unit_price) || 0;
+      const lineTotal =
+        item.total_price != null && item.total_price !== ''
+          ? parseFloat(item.total_price)
+          : unit * qty;
       await client.query(SQL.INSERT_ORDER_ITEM_WITH_JOB, [
         order.id,
         item.product_id,
         item.product_name,
         item.job_name || item.jobName || null,
-        item.quantity,
+        qty,
         item.unit_price,
-        parseFloat(item.unit_price) * parseInt(item.quantity),
+        lineTotal,
         itemImageUrlFromBody(item),
+        item.width_inches ?? null,
+        item.height_inches ?? null,
       ]);
     }
     await client.query('COMMIT');
@@ -475,6 +499,62 @@ function generateOrderNumber() {
   return `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
 }
 
+/**
+ * @param {object} client - pg pool client
+ * @param {boolean} useJobName
+ * @param {{ userId: any, totalAmount: number, orderStatus: string, productId: any, productName: string, itemImageUrl: any }} baseParams
+ * @param {Array<{ jobName: string, quantity: number, unitPrice: number, totalPrice: number }>} lines
+ */
+async function insertAdminCartOrderAndItems(client, useJobName, baseParams, lines) {
+  const { userId, totalAmount, orderStatus, productId, productName, itemImageUrl } = baseParams;
+  const ordNum = generateOrderNumber();
+  try {
+    await client.query('BEGIN');
+    const orderResult = await client.query(SQL.INSERT_ORDER_ADMIN_CART, [
+      userId,
+      ordNum,
+      totalAmount,
+      orderStatus,
+      'admin_cart',
+      'Created from cart by admin',
+    ]);
+    const order = orderResult.rows[0];
+    for (const line of lines) {
+      if (useJobName) {
+        await client.query(SQL.INSERT_ORDER_ITEM_ADMIN_WITH_JOB, [
+          order.id,
+          productId,
+          productName,
+          line.jobName,
+          line.quantity,
+          line.unitPrice,
+          line.totalPrice,
+          itemImageUrl,
+          line.width_inches ?? null,
+          line.height_inches ?? null,
+        ]);
+      } else {
+        await client.query(SQL.INSERT_ORDER_ITEM_ADMIN_NO_JOB, [
+          order.id,
+          productId,
+          productName,
+          line.quantity,
+          line.unitPrice,
+          line.totalPrice,
+          itemImageUrl,
+          line.width_inches ?? null,
+          line.height_inches ?? null,
+        ]);
+      }
+    }
+    await client.query('COMMIT');
+    return order;
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  }
+}
+
 async function insertAdminCartOrderAndItem(client, useJobName, params) {
   const {
     userId,
@@ -488,46 +568,28 @@ async function insertAdminCartOrderAndItem(client, useJobName, params) {
     totalPrice,
     itemImageUrl,
   } = params;
-  const ordNum = generateOrderNumber();
-  try {
-    await client.query('BEGIN');
-    const orderResult = await client.query(SQL.INSERT_ORDER_ADMIN_CART, [
+  return insertAdminCartOrderAndItems(
+    client,
+    useJobName,
+    {
       userId,
-      ordNum,
       totalAmount,
       orderStatus,
-      'admin_cart',
-      'Created from cart by admin',
-    ]);
-    const order = orderResult.rows[0];
-    if (useJobName) {
-      await client.query(SQL.INSERT_ORDER_ITEM_ADMIN_WITH_JOB, [
-        order.id,
-        productId,
-        productName,
+      productId,
+      productName,
+      itemImageUrl,
+    },
+    [
+      {
         jobName,
         quantity,
         unitPrice,
         totalPrice,
-        itemImageUrl,
-      ]);
-    } else {
-      await client.query(SQL.INSERT_ORDER_ITEM_ADMIN_NO_JOB, [
-        order.id,
-        productId,
-        productName,
-        quantity,
-        unitPrice,
-        totalPrice,
-        itemImageUrl,
-      ]);
-    }
-    await client.query('COMMIT');
-    return order;
-  } catch (e) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw e;
-  }
+        width_inches: params.width_inches ?? null,
+        height_inches: params.height_inches ?? null,
+      },
+    ]
+  );
 }
 
 /**
@@ -554,6 +616,43 @@ async function createOrderFromCartItemAdmin(params) {
     return fullOrder.rows[0];
   } catch (err) {
     throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Admin order from one cart row that contains multiple print jobs (same size, different artwork/qty).
+ * @param {{ userId: any, totalAmount: number, orderStatus: string, productId: any, productName: string, itemImageUrl: any, lines: Array<{ jobName: string, quantity: number, unitPrice: number, totalPrice: number }> }} params
+ */
+async function createOrderFromCartItemAdminMultiJob(params) {
+  const { lines, ...baseSingle } = params;
+  const baseParams = {
+    userId: baseSingle.userId,
+    totalAmount: baseSingle.totalAmount,
+    orderStatus: baseSingle.orderStatus,
+    productId: baseSingle.productId,
+    productName: baseSingle.productName,
+    itemImageUrl: baseSingle.itemImageUrl,
+  };
+  const client = await pool.connect();
+  try {
+    let order;
+    try {
+      order = await insertAdminCartOrderAndItems(client, true, baseParams, lines);
+    } catch (firstErr) {
+      const isJobNameError =
+        firstErr.message &&
+        (firstErr.message.includes('job_name') ||
+          firstErr.message.includes('current transaction is aborted'));
+      if (isJobNameError) {
+        order = await insertAdminCartOrderAndItems(client, false, baseParams, lines);
+      } else {
+        throw firstErr;
+      }
+    }
+    const fullOrder = await pool.query(SQL.SELECT_ORDER_BY_ID, [order.id]);
+    return fullOrder.rows[0];
   } finally {
     client.release();
   }
@@ -622,6 +721,8 @@ async function createPendingStripeOrderWithItems({
         oi.unit_price,
         oi.total_price,
         oi.image_url,
+        oi.width_inches ?? null,
+        oi.height_inches ?? null,
       ]);
     }
     await client.query('COMMIT');
@@ -653,6 +754,7 @@ module.exports = {
   deleteOrderById,
   productExists,
   createOrderFromCartItemAdmin,
+  createOrderFromCartItemAdminMultiJob,
   createPendingStripeOrderWithItems,
   markOrderPaidFromStripe,
   markOrderPaidWithoutStripe,

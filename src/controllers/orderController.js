@@ -81,6 +81,78 @@ function aggregateShippingFromCartItems(cartItems, rates) {
 const MAX_ORDER_MONEY = 999_999_999_999.99;
 const MAX_LINE_QTY = 1_000_000;
 
+function itemImageUrlFromCartItem(item) {
+  return item.image_url || item.product_image || item.productImage || null;
+}
+
+/** W×H in inches from cart JSON (shared across jobs on one configuration). */
+function dimensionsFromCartItem(item) {
+  const rawW = item.width ?? item.width_inches ?? item.widthInches;
+  const rawH = item.height ?? item.height_inches ?? item.heightInches;
+  const w = rawW != null && rawW !== '' ? Number(rawW) : NaN;
+  const h = rawH != null && rawH !== '' ? Number(rawH) : NaN;
+  return {
+    width_inches: Number.isFinite(w) && w > 0 ? w : null,
+    height_inches: Number.isFinite(h) && h > 0 ? h : null,
+  };
+}
+
+/** One cart row → one or more order lines when `jobs[]` is present (web-to-print). */
+function expandCartItemToOrderLines(item) {
+  const product_id = item.productId || item.product_id || null;
+  const product_name = String(item.productName || item.product_name || 'Cart Item').slice(0, 255);
+  const image_url = itemImageUrlFromCartItem(item);
+  const baseUnit = roundMoney2(item.unitPrice || item.unit_price || 0);
+  const { width_inches, height_inches } = dimensionsFromCartItem(item);
+
+  const jobs = item.jobs;
+  if (Array.isArray(jobs) && jobs.length > 0) {
+    return jobs.map((j) => {
+      let qty = Math.max(1, parseInt(j.quantity, 10) || 1);
+      if (qty > MAX_LINE_QTY) qty = MAX_LINE_QTY;
+      const unit = roundMoney2(j.unitPrice ?? j.unit_price ?? baseUnit);
+      let lineTotal =
+        j.lineSubtotal != null
+          ? roundMoney2(j.lineSubtotal)
+          : j.line_subtotal != null
+            ? roundMoney2(j.line_subtotal)
+            : roundMoney2(unit * qty);
+      if (lineTotal > MAX_ORDER_MONEY) lineTotal = MAX_ORDER_MONEY;
+      return {
+        product_id,
+        product_name,
+        job_name: String(j.jobName || j.job_name || '').slice(0, 255),
+        quantity: qty,
+        unit_price: unit,
+        total_price: lineTotal,
+        image_url,
+        width_inches,
+        height_inches,
+      };
+    });
+  }
+
+  let qty = Math.max(1, parseInt(item.quantity, 10) || 1);
+  if (qty > MAX_LINE_QTY) qty = MAX_LINE_QTY;
+  const unitPrice = roundMoney2(item.unitPrice || item.unit_price || 0);
+  let lineTotal =
+    item.subtotal != null ? roundMoney2(item.subtotal) : roundMoney2(unitPrice * qty);
+  if (lineTotal > MAX_ORDER_MONEY) lineTotal = MAX_ORDER_MONEY;
+  return [
+    {
+      product_id,
+      product_name,
+      job_name: String(item.jobName || item.job_name || item.productName || '').slice(0, 255),
+      quantity: qty,
+      unit_price: unitPrice,
+      total_price: lineTotal,
+      image_url,
+      width_inches,
+      height_inches,
+    },
+  ];
+}
+
 function readGuestSessionIdFromReq(req) {
   const raw = req.headers['x-guest-session-id'] || req.headers['X-Guest-Session-Id'] || '';
   const sid = String(raw).trim();
@@ -317,18 +389,58 @@ const createOrderFromCartItem = async (req, res) => {
     const jobName = String(cartItem.jobName || cartItem.job_name || productName).slice(0, 255);
     const itemImageUrl = cartItem.productImage || cartItem.product_image || cartItem.image_url || null;
 
-    const order = await orderRepository.createOrderFromCartItemAdmin({
-      userId,
-      totalAmount,
-      orderStatus,
-      productId,
-      productName,
-      jobName,
-      quantity,
-      unitPrice,
-      totalPrice,
-      itemImageUrl,
-    });
+    const jobsRaw = Array.isArray(cartItem.jobs) ? cartItem.jobs : [];
+    const { width_inches: cartW, height_inches: cartH } = dimensionsFromCartItem(cartItem);
+    let order;
+    if (jobsRaw.length > 0) {
+      const lines = jobsRaw.map((j) => {
+        const q = Math.max(1, parseInt(j.quantity, 10) || 1);
+        const unitPriceLine = roundMoney2(
+          j.unitPrice ?? j.unit_price ?? cartItem.unitPrice ?? cartItem.unit_price ?? 0
+        );
+        let totalPriceLine =
+          j.lineSubtotal != null
+            ? roundMoney2(j.lineSubtotal)
+            : j.line_subtotal != null
+              ? roundMoney2(j.line_subtotal)
+              : roundMoney2(unitPriceLine * q);
+        return {
+          jobName: String(j.jobName || j.job_name || productName).slice(0, 255),
+          quantity: q,
+          unitPrice: unitPriceLine,
+          totalPrice: totalPriceLine,
+          width_inches: cartW,
+          height_inches: cartH,
+        };
+      });
+      const totalAmountMulti =
+        parseFloat(cartItem.total || cartItem.subtotal || cartItem.totalPrice) ||
+        lines.reduce((s, l) => s + l.totalPrice, 0);
+      order = await orderRepository.createOrderFromCartItemAdminMultiJob({
+        userId,
+        totalAmount: Number(totalAmountMulti) || 0,
+        orderStatus,
+        productId,
+        productName,
+        itemImageUrl,
+        lines,
+      });
+    } else {
+      order = await orderRepository.createOrderFromCartItemAdmin({
+        userId,
+        totalAmount,
+        orderStatus,
+        productId,
+        productName,
+        jobName,
+        quantity,
+        unitPrice,
+        totalPrice,
+        itemImageUrl,
+        width_inches: cartW,
+        height_inches: cartH,
+      });
+    }
 
     res.status(201).json({ order });
   } catch (error) {
@@ -361,24 +473,7 @@ const createOrderWithPaymentIntent = async (req, res) => {
       return res.status(400).json({ message: 'Cart items are required' });
     }
 
-    const itemImageUrl = (item) => item.image_url || item.product_image || item.productImage || null;
-    const orderItems = cartItems.map((item) => {
-      let qty = Math.max(1, parseInt(item.quantity, 10) || 1);
-      if (qty > MAX_LINE_QTY) qty = MAX_LINE_QTY;
-      const unitPrice = roundMoney2(item.unitPrice || item.unit_price || 0);
-      let lineTotal =
-        item.subtotal != null ? roundMoney2(item.subtotal) : roundMoney2(unitPrice * qty);
-      if (lineTotal > MAX_ORDER_MONEY) lineTotal = MAX_ORDER_MONEY;
-      return {
-        product_id: item.productId || item.product_id || null,
-        product_name: String(item.productName || item.product_name || 'Cart Item').slice(0, 255),
-        job_name: String(item.jobName || item.job_name || item.productName || '').slice(0, 255),
-        quantity: qty,
-        unit_price: unitPrice,
-        total_price: lineTotal,
-        image_url: itemImageUrl(item),
-      };
-    });
+    const orderItems = cartItems.flatMap((item) => expandCartItemToOrderLines(item));
     const subtotalSum = roundMoney2(orderItems.reduce((s, o) => s + o.total_price, 0));
     const rateRow = await shippingRatesRepository.getRates();
     const { shippingSum, shippingMethod, shippingCharge } = aggregateShippingFromCartItems(cartItems, rateRow);
