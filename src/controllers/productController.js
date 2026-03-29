@@ -106,17 +106,41 @@ const getProductById = async (req, res) => {
 
 const getCategories = async (req, res) => {
   try {
+    /**
+     * Parent rows (parent_id IS NULL): count active products in that category OR any descendant subcategory.
+     * Subcategory rows: count active products with category_id = that row only.
+     * Recomputed on every request — updates when products move between categories.
+     */
     const result = await pool.query(
-      `SELECT c.*, 
-       (SELECT COUNT(*) FROM products WHERE category_id = c.id AND is_active = true) as product_count
+      `SELECT c.*,
+        CASE
+          WHEN c.parent_id IS NULL THEN (
+            SELECT COUNT(*)::int
+            FROM products p
+            WHERE p.is_active = true
+              AND p.category_id IN (
+                WITH RECURSIVE subtree AS (
+                  SELECT id FROM categories WHERE id = c.id
+                  UNION ALL
+                  SELECT ch.id FROM categories ch
+                  INNER JOIN subtree s ON ch.parent_id = s.id
+                )
+                SELECT id FROM subtree
+              )
+          )
+          ELSE (
+            SELECT COUNT(*)::int
+            FROM products p
+            WHERE p.is_active = true AND p.category_id = c.id
+          )
+        END AS product_count
        FROM categories c
        ORDER BY c.display_order, c.name`
     );
 
-    // Organize into parent-child structure
-    const categories = result.rows.map(cat => ({
+    const categories = result.rows.map((cat) => ({
       ...cat,
-      product_count: parseInt(cat.product_count)
+      product_count: parseInt(cat.product_count, 10) || 0,
     }));
 
     res.json({ categories });
