@@ -12,6 +12,7 @@
     "migrate": "node src/migrations/runMigrations.js",
     "migrate:pricing": "node src/migrations/runAddPricingColumns.js",
     "migrate:employees": "node src/migrations/runEmployeeColumns.js",
+    "migrate:retail-customers": "node src/migrations/runRetailCustomers.js",
     "seed": "node src/migrations/seed.js",
     "seed-subcategory-products": "node src/migrations/seedSubcategoryProducts.js",
     "create-admin": "node src/migrations/createAdminUser.js"

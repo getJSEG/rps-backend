@@ -6,9 +6,9 @@ CREATE TABLE IF NOT EXISTS users (
     hear_about_us VARCHAR(100),
     telephone VARCHAR(50),
     newsletter BOOLEAN DEFAULT false,
-    role VARCHAR(50) DEFAULT 'reseller',
+    role VARCHAR(50) DEFAULT 'customer',
     is_active BOOLEAN DEFAULT true,
-    is_approved BOOLEAN DEFAULT false,
+    is_approved BOOLEAN DEFAULT true,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

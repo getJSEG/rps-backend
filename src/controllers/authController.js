@@ -64,8 +64,8 @@ const register = async (req, res) => {
 
       // Create user
       const userResult = await client.query(
-        `INSERT INTO users (email, password_hash, full_name, hear_about_us, telephone, newsletter)
-         VALUES ($1, $2, $3, $4, $5, $6)
+        `INSERT INTO users (email, password_hash, full_name, hear_about_us, telephone, newsletter, role, is_approved)
+         VALUES ($1, $2, $3, $4, $5, $6, 'customer', true)
          RETURNING id, email, full_name, role, is_active, is_approved`,
         [email, passwordHash, fullName, hearAboutUs, telephone, newsletter || false]
       );
@@ -104,7 +104,7 @@ const register = async (req, res) => {
       const token = generateToken(user.id);
 
       res.status(201).json({
-        message: 'Registration successful. Account pending approval.',
+        message: 'Registration successful.',
         user: {
           id: user.id,
           email: user.email,
