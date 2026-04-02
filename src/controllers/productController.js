@@ -3,6 +3,21 @@ const path = require('path');
 const fs = require('fs');
 const { uploadFromBuffer, isConfigured: cloudinaryConfigured } = require('../utils/cloudinary');
 
+/** @param {unknown} value */
+function normalizeGalleryArrayInput(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((u) => String(u || '').trim()).filter(Boolean);
+}
+
+/** @param {{ gallery_images?: unknown; image_url?: string | null }} row */
+function galleryFromRow(row) {
+  if (!row) return [];
+  const g = row.gallery_images;
+  if (Array.isArray(g) && g.length) return g.map((u) => String(u || '').trim()).filter(Boolean);
+  if (row.image_url) return [String(row.image_url).trim()];
+  return [];
+}
+
 const getAllProducts = async (req, res) => {
   try {
     const { category, subcategory, search, page = 1, limit = 20 } = req.query;
@@ -271,14 +286,18 @@ const deleteCategory = async (req, res) => {
 
 const createProduct = async (req, res) => {
   try {
-    const { name, slug, description, category_id, subcategory, price, price_per_sqft, min_charge, material, image_url, is_new, is_active, sku, properties } = req.body;
+    const { name, slug, description, category_id, subcategory, price, price_per_sqft, min_charge, material, image_url, is_new, is_active, sku, properties, gallery_images } = req.body;
     if (!name) return res.status(400).json({ message: 'Product name is required' });
     const slugVal = slug || name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') + '-' + Date.now();
     const isActiveVal = (is_active === undefined || is_active === null) ? true : (is_active !== false && is_active !== 'false');
     const propsVal = Array.isArray(properties) ? JSON.stringify(properties) : (typeof properties === 'string' ? properties : '[]');
+    const galleryFromBody = normalizeGalleryArrayInput(gallery_images);
+    const galleryFinal = galleryFromBody.length ? galleryFromBody : (image_url ? [String(image_url).trim()] : []);
+    const imageUrlFinal = galleryFinal[0] || null;
+    const galleryJson = JSON.stringify(galleryFinal);
     const result = await pool.query(
-      `INSERT INTO products (name, slug, description, category_id, subcategory, price, price_per_sqft, min_charge, material, image_url, is_new, is_active, sku, properties)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb)
+      `INSERT INTO products (name, slug, description, category_id, subcategory, price, price_per_sqft, min_charge, material, image_url, is_new, is_active, sku, properties, gallery_images)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb)
        RETURNING *`,
       [
         name,
@@ -290,11 +309,12 @@ const createProduct = async (req, res) => {
         price_per_sqft != null ? parseFloat(price_per_sqft) : null,
         min_charge != null ? parseFloat(min_charge) : null,
         material || null,
-        image_url || null,
+        imageUrlFinal,
         is_new === true || is_new === 'true',
         isActiveVal,
         sku || null,
-        propsVal
+        propsVal,
+        galleryJson
       ]
     );
     res.status(201).json({ product: result.rows[0] });
@@ -320,7 +340,16 @@ const updateProduct = async (req, res) => {
     const pricePerSqftVal = req.body.price_per_sqft !== undefined ? (req.body.price_per_sqft != null ? parseFloat(req.body.price_per_sqft) : null) : row.price_per_sqft;
     const minChargeVal = req.body.min_charge !== undefined ? (req.body.min_charge != null ? parseFloat(req.body.min_charge) : null) : row.min_charge;
     const materialVal = req.body.material !== undefined ? req.body.material : row.material;
-    const imageUrlVal = req.body.image_url !== undefined ? req.body.image_url : row.image_url;
+    let galleryFinal;
+    if (req.body.gallery_images !== undefined) {
+      galleryFinal = normalizeGalleryArrayInput(req.body.gallery_images);
+    } else if (req.body.image_url !== undefined) {
+      galleryFinal = req.body.image_url ? [String(req.body.image_url).trim()] : [];
+    } else {
+      galleryFinal = galleryFromRow(row);
+    }
+    const imageUrlVal = galleryFinal[0] || null;
+    const galleryJson = JSON.stringify(galleryFinal);
     const isNewVal = req.body.is_new !== undefined ? (req.body.is_new === true || req.body.is_new === 'true') : row.is_new;
     const isActiveVal = req.body.is_active !== undefined ? (req.body.is_active !== false && req.body.is_active !== 'false') : row.is_active;
     const skuVal = req.body.sku !== undefined ? req.body.sku : row.sku;
@@ -328,8 +357,8 @@ const updateProduct = async (req, res) => {
       ? (Array.isArray(req.body.properties) ? JSON.stringify(req.body.properties) : (typeof req.body.properties === 'string' ? req.body.properties : (row.properties ? JSON.stringify(row.properties) : '[]')))
       : (row.properties ? JSON.stringify(row.properties) : '[]');
     const result = await pool.query(
-      `UPDATE products SET name = $1, slug = $2, description = $3, category_id = $4, subcategory = $5, price = $6, price_per_sqft = $7, min_charge = $8, material = $9, image_url = $10, is_new = $11, is_active = $12, sku = $13, properties = $14::jsonb, updated_at = CURRENT_TIMESTAMP WHERE id = $15 RETURNING *`,
-      [nameVal, slugVal, descriptionVal, categoryIdVal, subcategoryVal, priceVal, pricePerSqftVal, minChargeVal, materialVal, imageUrlVal, isNewVal, isActiveVal, skuVal, propertiesVal, id]
+      `UPDATE products SET name = $1, slug = $2, description = $3, category_id = $4, subcategory = $5, price = $6, price_per_sqft = $7, min_charge = $8, material = $9, image_url = $10, is_new = $11, is_active = $12, sku = $13, properties = $14::jsonb, gallery_images = $15::jsonb, updated_at = CURRENT_TIMESTAMP WHERE id = $16 RETURNING *`,
+      [nameVal, slugVal, descriptionVal, categoryIdVal, subcategoryVal, priceVal, pricePerSqftVal, minChargeVal, materialVal, imageUrlVal, isNewVal, isActiveVal, skuVal, propertiesVal, galleryJson, id]
     );
     res.json({ product: result.rows[0] });
   } catch (error) {
