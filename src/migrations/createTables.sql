@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS orders (
     payment_method VARCHAR(50),
     payment_status VARCHAR(50) DEFAULT 'pending', -- pending, paid, failed, refunded
     notes TEXT,
+    order_tracking_id VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

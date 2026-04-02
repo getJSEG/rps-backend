@@ -343,6 +343,34 @@ const updateOrderStatus = async (req, res) => {
   }
 };
 
+const updateOrderTrackingId = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const raw = req.body?.orderTrackingId;
+    if (raw === undefined) {
+      return res.status(400).json({
+        message: 'orderTrackingId is required (use null or empty string to clear)',
+      });
+    }
+    let value = null;
+    if (raw !== null && raw !== '') {
+      const s = String(raw).trim();
+      if (s.length > 255) {
+        return res.status(400).json({ message: 'orderTrackingId must be 255 characters or fewer' });
+      }
+      value = s || null;
+    }
+    const updated = await orderRepository.updateOrderTrackingIdById(id, value);
+    if (!updated) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+    res.json({ order: updated });
+  } catch (error) {
+    console.error('Update order tracking id error:', error);
+    res.status(500).json({ message: 'Failed to update order tracking id', error: error.message });
+  }
+};
+
 const deleteOrderAdmin = async (req, res) => {
   try {
     const { id } = req.params;
@@ -608,6 +636,7 @@ module.exports = {
   getAllOrders,
   getOrderByIdAdmin,
   updateOrderStatus,
+  updateOrderTrackingId,
   deleteOrderAdmin,
   createOrderFromCartItem,
   createOrderWithPaymentIntent,

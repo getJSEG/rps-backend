@@ -282,6 +282,10 @@ const SQL = {
        SET status = $1, updated_at = CURRENT_TIMESTAMP 
        WHERE id = $2 
        RETURNING *`,
+  UPDATE_ORDER_TRACKING_ID: `UPDATE orders
+       SET order_tracking_id = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2
+       RETURNING *`,
   DELETE_ORDER: 'DELETE FROM orders WHERE id = $1 RETURNING id',
   PRODUCT_EXISTS: 'SELECT id FROM products WHERE id = $1',
   INSERT_ORDER_ADMIN_CART: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, notes)
@@ -476,6 +480,16 @@ async function findOrderByIdAdmin(orderId) {
  */
 async function updateOrderStatusById(orderId, statusLower) {
   const result = await pool.query(SQL.UPDATE_ORDER_STATUS, [statusLower, orderId]);
+  return result.rows[0] ?? null;
+}
+
+/**
+ * @param {string|number} orderId
+ * @param {string|null} trackingId
+ * @returns {Promise<object|null>}
+ */
+async function updateOrderTrackingIdById(orderId, trackingId) {
+  const result = await pool.query(SQL.UPDATE_ORDER_TRACKING_ID, [trackingId, orderId]);
   return result.rows[0] ?? null;
 }
 
@@ -751,6 +765,7 @@ module.exports = {
   findAllOrdersAdmin,
   findOrderByIdAdmin,
   updateOrderStatusById,
+  updateOrderTrackingIdById,
   deleteOrderById,
   productExists,
   createOrderFromCartItemAdmin,
