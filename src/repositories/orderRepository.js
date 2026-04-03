@@ -2,8 +2,8 @@ const pool = require('../config/database');
 
 const SQL = {
   INSERT_ORDER_FULL: `INSERT INTO orders (user_id, order_number, total_amount, shipping_address_id, 
-         billing_address_id, payment_method, notes, guest_checkout)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         billing_address_id, payment_method, notes, guest_checkout, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING *`,
   INSERT_ORDER_ITEM_WITH_JOB: `INSERT INTO order_items (order_id, product_id, product_name, job_name, quantity, unit_price, total_price, image_url, width_inches, height_inches)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
@@ -342,6 +342,7 @@ async function createOrderWithItems({
       paymentMethod,
       notes,
       guestCheckout,
+      'awaiting_artwork',
     ]);
     const order = orderResult.rows[0];
     for (const item of items) {
@@ -750,12 +751,12 @@ async function createPendingStripeOrderWithItems({
 }
 
 async function markOrderPaidFromStripe(orderId, paidAtIso) {
-  await pool.query(SQL.UPDATE_ORDER_STRIPE_PAID, ['paid', 'processing', paidAtIso, orderId]);
+  await pool.query(SQL.UPDATE_ORDER_STRIPE_PAID, ['paid', 'awaiting_artwork', paidAtIso, orderId]);
 }
 
 async function markOrderPaidWithoutStripe(orderId) {
   const suffix = ` | Completed without Stripe (STRIPE_PAYMENT_ENABLED=false) ${new Date().toISOString()}`;
-  await pool.query(SQL.UPDATE_ORDER_PAID_WITHOUT_STRIPE, ['paid', 'processing', 'manual', suffix, orderId]);
+  await pool.query(SQL.UPDATE_ORDER_PAID_WITHOUT_STRIPE, ['paid', 'awaiting_artwork', 'manual', suffix, orderId]);
 }
 
 module.exports = {

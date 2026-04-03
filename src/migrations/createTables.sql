@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS orders (
     id SERIAL PRIMARY KEY,
     user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     order_number VARCHAR(50) UNIQUE NOT NULL,
-    status VARCHAR(50) DEFAULT 'pending', -- pending, processing, shipped, delivered, cancelled
+    status VARCHAR(50) DEFAULT 'awaiting_artwork',
     total_amount DECIMAL(14, 2) NOT NULL,
     shipping_address_id INTEGER REFERENCES addresses(id),
     billing_address_id INTEGER REFERENCES addresses(id),

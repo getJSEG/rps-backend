@@ -27,15 +27,25 @@ function shouldUseStripePaymentIntent() {
 }
 
 const VALID_ORDER_STATUSES = [
-  'pending',
-  'processing',
+  'pending_payment',
+  'awaiting_artwork',
+  'on_hold',
+  'awaiting_customer_approval',
+  'printing',
+  'trimming',
   'shipped',
-  'delivered',
+  'completed',
+  'reprint',
+  'awaiting_refund',
+  'refunded',
   'cancelled',
-  'complete',
-  'refund',
-  'approval_needed',
 ];
+
+/** Terminal job status: cannot be changed via admin API. */
+function isOrderStatusLocked(currentStatus) {
+  const s = String(currentStatus || '').toLowerCase();
+  return s === 'completed' || s === 'complete' || s === 'delivered';
+}
 
 function generateOrderNumber() {
   return `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
@@ -331,6 +341,16 @@ const updateOrderStatus = async (req, res) => {
       return res.status(400).json({ message: 'Invalid status' });
     }
 
+    const existing = await orderRepository.findOrderByIdAdmin(id);
+    if (!existing) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+    if (isOrderStatusLocked(existing.status)) {
+      return res.status(400).json({
+        message: 'This order is completed and its status cannot be changed.',
+      });
+    }
+
     const updated = await orderRepository.updateOrderStatusById(id, status.toLowerCase());
     if (!updated) {
       return res.status(404).json({ message: 'Order not found' });
@@ -397,7 +417,7 @@ const createOrderFromCartItem = async (req, res) => {
     const orderStatus =
       status && VALID_ORDER_STATUSES.includes(String(status).toLowerCase())
         ? String(status).toLowerCase()
-        : 'pending';
+        : 'awaiting_artwork';
 
     const quantity = Math.max(1, parseInt(cartItem.quantity, 10) || 1);
     const totalFromCart = parseFloat(cartItem.total || cartItem.subtotal || cartItem.totalPrice) || 0;
