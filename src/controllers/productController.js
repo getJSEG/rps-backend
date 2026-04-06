@@ -2,6 +2,7 @@ const pool = require('../config/database');
 const path = require('path');
 const fs = require('fs');
 const { uploadFromBuffer, isConfigured: cloudinaryConfigured } = require('../utils/cloudinary');
+const { getProductPricingConfig, validateAndCalculatePricing } = require('../services/pricingService');
 
 /** @param {unknown} value */
 function normalizeGalleryArrayInput(value) {
@@ -16,6 +17,57 @@ function galleryFromRow(row) {
   if (Array.isArray(g) && g.length) return g.map((u) => String(u || '').trim()).filter(Boolean);
   if (row.image_url) return [String(row.image_url).trim()];
   return [];
+}
+
+function asNumberOrNull(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeMode(value, fallback) {
+  const v = String(value || '').trim().toLowerCase();
+  return v || fallback;
+}
+
+function parseSizeOptionsInput(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => ({
+      id: item?.id != null && item?.id !== '' ? parseInt(String(item.id), 10) : null,
+      label: String(item?.label || '').trim(),
+      width: asNumberOrNull(item?.width),
+      height: asNumberOrNull(item?.height),
+      unit_price: asNumberOrNull(item?.unit_price ?? item?.unitPrice),
+      is_default: item?.is_default === true || item?.isDefault === true,
+    }))
+    .filter((item) => item.label && item.width != null && item.height != null);
+}
+
+async function getProductSizeOptions(productId) {
+  const result = await pool.query(
+    `SELECT id, product_id, label, width, height, unit_price, is_default
+     FROM product_size_options
+     WHERE product_id = $1
+     ORDER BY is_default DESC, id ASC`,
+    [productId]
+  );
+  return result.rows;
+}
+
+async function replaceProductSizeOptions(productId, options) {
+  await pool.query('DELETE FROM product_size_options WHERE product_id = $1', [productId]);
+  if (!Array.isArray(options) || options.length === 0) return;
+  const hasDefault = options.some((o) => o.is_default);
+  for (let i = 0; i < options.length; i++) {
+    const opt = options[i];
+    const isDefault = hasDefault ? !!opt.is_default : i === 0;
+    await pool.query(
+      `INSERT INTO product_size_options (product_id, label, width, height, unit_price, is_default)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [productId, opt.label, opt.width, opt.height, opt.unit_price, isDefault]
+    );
+  }
 }
 
 const getAllProducts = async (req, res) => {
@@ -112,10 +164,36 @@ const getProductById = async (req, res) => {
       return res.status(404).json({ message: 'Product not found' });
     }
     const product = result.rows[0];
+    product.size_options = await getProductSizeOptions(product.id);
+    const sm = product.size_mode != null ? String(product.size_mode).trim() : '';
+    if (!sm && Array.isArray(product.size_options) && product.size_options.length > 0) {
+      product.size_mode = 'predefined';
+    }
     res.json({ product });
   } catch (error) {
     console.error('❌ Get product error:', error);
     res.status(500).json({ message: 'Failed to fetch product', error: error.message });
+  }
+};
+
+const previewProductPrice = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const productId = parseInt(String(id), 10);
+    if (Number.isNaN(productId)) {
+      return res.status(400).json({ message: 'Invalid product id.' });
+    }
+    const config = await getProductPricingConfig(productId);
+    if (!config) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
+    const pricing = validateAndCalculatePricing(config, req.body || {});
+    return res.json({ pricing });
+  } catch (error) {
+    const code = /required|invalid|must|missing|supported|at least|at most|configured/i.test(String(error.message || ''))
+      ? 400
+      : 500;
+    return res.status(code).json({ message: 'Failed to preview price', error: error.message });
   }
 };
 
@@ -286,7 +364,31 @@ const deleteCategory = async (req, res) => {
 
 const createProduct = async (req, res) => {
   try {
-    const { name, slug, description, category_id, subcategory, price, price_per_sqft, min_charge, material, image_url, is_new, is_active, sku, properties, gallery_images } = req.body;
+    const {
+      name,
+      slug,
+      description,
+      category_id,
+      subcategory,
+      price,
+      price_per_sqft,
+      min_charge,
+      material,
+      image_url,
+      is_new,
+      is_active,
+      sku,
+      properties,
+      gallery_images,
+      pricing_mode,
+      size_mode,
+      base_unit,
+      min_width,
+      max_width,
+      min_height,
+      max_height,
+      size_options,
+    } = req.body;
     if (!name) return res.status(400).json({ message: 'Product name is required' });
     const slugVal = slug || name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') + '-' + Date.now();
     const isActiveVal = (is_active === undefined || is_active === null) ? true : (is_active !== false && is_active !== 'false');
@@ -295,9 +397,21 @@ const createProduct = async (req, res) => {
     const galleryFinal = galleryFromBody.length ? galleryFromBody : (image_url ? [String(image_url).trim()] : []);
     const imageUrlFinal = galleryFinal[0] || null;
     const galleryJson = JSON.stringify(galleryFinal);
+    const pricingModeVal = normalizeMode(pricing_mode, price_per_sqft != null ? 'area' : 'fixed');
+    const sizeModeVal = normalizeMode(size_mode, 'custom');
+    const baseUnitVal = String(base_unit || 'inch').trim().toLowerCase() || 'inch';
+    const minWidthVal = asNumberOrNull(min_width);
+    const maxWidthVal = asNumberOrNull(max_width);
+    const minHeightVal = asNumberOrNull(min_height);
+    const maxHeightVal = asNumberOrNull(max_height);
+    const parsedSizeOptions = parseSizeOptionsInput(size_options);
+    if (sizeModeVal === 'predefined' && parsedSizeOptions.length === 0) {
+      return res.status(400).json({ message: 'size_options are required when size_mode is predefined.' });
+    }
+
     const result = await pool.query(
-      `INSERT INTO products (name, slug, description, category_id, subcategory, price, price_per_sqft, min_charge, material, image_url, is_new, is_active, sku, properties, gallery_images)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb)
+      `INSERT INTO products (name, slug, description, category_id, subcategory, price, price_per_sqft, min_charge, material, image_url, is_new, is_active, sku, properties, gallery_images, pricing_mode, size_mode, base_unit, min_width, max_width, min_height, max_height)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16, $17, $18, $19, $20, $21, $22)
        RETURNING *`,
       [
         name,
@@ -314,10 +428,20 @@ const createProduct = async (req, res) => {
         isActiveVal,
         sku || null,
         propsVal,
-        galleryJson
+        galleryJson,
+        pricingModeVal,
+        sizeModeVal,
+        baseUnitVal,
+        minWidthVal,
+        maxWidthVal,
+        minHeightVal,
+        maxHeightVal,
       ]
     );
-    res.status(201).json({ product: result.rows[0] });
+    const created = result.rows[0];
+    await replaceProductSizeOptions(created.id, parsedSizeOptions);
+    created.size_options = await getProductSizeOptions(created.id);
+    res.status(201).json({ product: created });
   } catch (error) {
     if (error.code === '23505') return res.status(400).json({ message: 'Product slug already exists' });
     console.error('Create product error:', error);
@@ -339,6 +463,13 @@ const updateProduct = async (req, res) => {
     const priceVal = req.body.price !== undefined ? (req.body.price != null ? parseFloat(req.body.price) : null) : row.price;
     const pricePerSqftVal = req.body.price_per_sqft !== undefined ? (req.body.price_per_sqft != null ? parseFloat(req.body.price_per_sqft) : null) : row.price_per_sqft;
     const minChargeVal = req.body.min_charge !== undefined ? (req.body.min_charge != null ? parseFloat(req.body.min_charge) : null) : row.min_charge;
+    const pricingModeVal = req.body.pricing_mode !== undefined ? normalizeMode(req.body.pricing_mode, 'fixed') : row.pricing_mode;
+    const sizeModeVal = req.body.size_mode !== undefined ? normalizeMode(req.body.size_mode, 'custom') : row.size_mode;
+    const baseUnitVal = req.body.base_unit !== undefined ? String(req.body.base_unit || 'inch').trim().toLowerCase() : row.base_unit;
+    const minWidthVal = req.body.min_width !== undefined ? asNumberOrNull(req.body.min_width) : row.min_width;
+    const maxWidthVal = req.body.max_width !== undefined ? asNumberOrNull(req.body.max_width) : row.max_width;
+    const minHeightVal = req.body.min_height !== undefined ? asNumberOrNull(req.body.min_height) : row.min_height;
+    const maxHeightVal = req.body.max_height !== undefined ? asNumberOrNull(req.body.max_height) : row.max_height;
     const materialVal = req.body.material !== undefined ? req.body.material : row.material;
     let galleryFinal;
     if (req.body.gallery_images !== undefined) {
@@ -356,11 +487,20 @@ const updateProduct = async (req, res) => {
     const propertiesVal = req.body.properties !== undefined
       ? (Array.isArray(req.body.properties) ? JSON.stringify(req.body.properties) : (typeof req.body.properties === 'string' ? req.body.properties : (row.properties ? JSON.stringify(row.properties) : '[]')))
       : (row.properties ? JSON.stringify(row.properties) : '[]');
+    const parsedSizeOptions = req.body.size_options !== undefined
+      ? parseSizeOptionsInput(req.body.size_options)
+      : await getProductSizeOptions(id);
+    if (sizeModeVal === 'predefined' && parsedSizeOptions.length === 0) {
+      return res.status(400).json({ message: 'size_options are required when size_mode is predefined.' });
+    }
     const result = await pool.query(
-      `UPDATE products SET name = $1, slug = $2, description = $3, category_id = $4, subcategory = $5, price = $6, price_per_sqft = $7, min_charge = $8, material = $9, image_url = $10, is_new = $11, is_active = $12, sku = $13, properties = $14::jsonb, gallery_images = $15::jsonb, updated_at = CURRENT_TIMESTAMP WHERE id = $16 RETURNING *`,
-      [nameVal, slugVal, descriptionVal, categoryIdVal, subcategoryVal, priceVal, pricePerSqftVal, minChargeVal, materialVal, imageUrlVal, isNewVal, isActiveVal, skuVal, propertiesVal, galleryJson, id]
+      `UPDATE products SET name = $1, slug = $2, description = $3, category_id = $4, subcategory = $5, price = $6, price_per_sqft = $7, min_charge = $8, material = $9, image_url = $10, is_new = $11, is_active = $12, sku = $13, properties = $14::jsonb, gallery_images = $15::jsonb, pricing_mode = $16, size_mode = $17, base_unit = $18, min_width = $19, max_width = $20, min_height = $21, max_height = $22, updated_at = CURRENT_TIMESTAMP WHERE id = $23 RETURNING *`,
+      [nameVal, slugVal, descriptionVal, categoryIdVal, subcategoryVal, priceVal, pricePerSqftVal, minChargeVal, materialVal, imageUrlVal, isNewVal, isActiveVal, skuVal, propertiesVal, galleryJson, pricingModeVal, sizeModeVal, baseUnitVal, minWidthVal, maxWidthVal, minHeightVal, maxHeightVal, id]
     );
-    res.json({ product: result.rows[0] });
+    const updated = result.rows[0];
+    await replaceProductSizeOptions(id, parsedSizeOptions);
+    updated.size_options = await getProductSizeOptions(id);
+    res.json({ product: updated });
   } catch (error) {
     if (error.code === '23505') return res.status(400).json({ message: 'Product slug already exists' });
     console.error('Update product error:', error);
@@ -451,5 +591,5 @@ const uploadCategoryImage = async (req, res) => {
   }
 };
 
-module.exports = { getAllProducts, getProductById, getCategories, getRelatedProducts, createCategory, updateCategory, deleteCategory, createProduct, updateProduct, getAllProductsAdmin, deleteProductAdmin, uploadProductImage, uploadCategoryImage };
+module.exports = { getAllProducts, getProductById, previewProductPrice, getCategories, getRelatedProducts, createCategory, updateCategory, deleteCategory, createProduct, updateProduct, getAllProductsAdmin, deleteProductAdmin, uploadProductImage, uploadCategoryImage };
 

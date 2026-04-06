@@ -74,6 +74,10 @@ async function ensureEmployeeColumns() {
       const sql12 = fs.readFileSync(path.join(migrationsDir, 'addProductGalleryImages.sql'), 'utf8');
       await pool.query(sql12);
     }
+    if (fs.existsSync(path.join(migrationsDir, 'addProductPricingEnginePhase1.sql'))) {
+      const sql13 = fs.readFileSync(path.join(migrationsDir, 'addProductPricingEnginePhase1.sql'), 'utf8');
+      await pool.query(sql13);
+    }
   } catch (err) {
     console.warn('Migrations (optional):', err.message);
   }

@@ -12,6 +12,9 @@ const SQL = {
            WHERE o.user_id IS NOT NULL AND oi.product_id IS NOT NULL`,
   SELECT_BY_USER_ID: `SELECT * FROM cart_items WHERE user_id = $1 ORDER BY created_at DESC`,
   SELECT_BY_GUEST_SESSION: `SELECT * FROM cart_items WHERE guest_session_id = $1 ORDER BY created_at DESC`,
+  SELECT_ROW_BY_ID_ADMIN: `SELECT * FROM cart_items WHERE id = $1`,
+  SELECT_ROW_BY_ID_AND_USER: `SELECT * FROM cart_items WHERE id = $1 AND user_id = $2`,
+  SELECT_ROW_BY_ID_AND_GUEST: `SELECT * FROM cart_items WHERE id = $1 AND guest_session_id = $2`,
   DELETE_BY_ID_ADMIN: 'DELETE FROM cart_items WHERE id = $1',
   DELETE_BY_ID_AND_USER: 'DELETE FROM cart_items WHERE id = $1 AND user_id = $2 RETURNING id',
   DELETE_BY_ID_AND_GUEST: 'DELETE FROM cart_items WHERE id = $1 AND guest_session_id = $2 RETURNING id',
@@ -153,6 +156,21 @@ async function clearCartByGuestSession(guestSessionId) {
   await pool.query(SQL.CLEAR_BY_GUEST_SESSION, [guestSessionId]);
 }
 
+async function findCartRowByIdAdmin(cartItemId) {
+  const r = await pool.query(SQL.SELECT_ROW_BY_ID_ADMIN, [cartItemId]);
+  return r.rows[0] || null;
+}
+
+async function findCartRowByIdAndUser(cartItemId, userId) {
+  const r = await pool.query(SQL.SELECT_ROW_BY_ID_AND_USER, [cartItemId, userId]);
+  return r.rows[0] || null;
+}
+
+async function findCartRowByIdAndGuest(cartItemId, guestSessionId) {
+  const r = await pool.query(SQL.SELECT_ROW_BY_ID_AND_GUEST, [cartItemId, guestSessionId]);
+  return r.rows[0] || null;
+}
+
 module.exports = {
   insertCartItem,
   findAdminCartItems,
@@ -166,4 +184,7 @@ module.exports = {
   updateCartItemDataByGuest,
   clearCartByUserId,
   clearCartByGuestSession,
+  findCartRowByIdAdmin,
+  findCartRowByIdAndUser,
+  findCartRowByIdAndGuest,
 };

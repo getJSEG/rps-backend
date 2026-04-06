@@ -184,6 +184,13 @@ async function clearBuyerCartAfterCheckout(req, userId) {
   }
 }
 
+async function loadServerCartForCheckout(req, userId) {
+  if (userId) return cartRepository.findCartItemsByUserId(userId);
+  const sid = readGuestSessionIdFromReq(req);
+  if (!sid) return [];
+  return cartRepository.findCartItemsByGuestSession(sid);
+}
+
 /** @returns {{ snapshot: object } | { error: string }} */
 function parseGuestCheckout(body) {
   const gc = body.guestCheckout;
@@ -516,9 +523,9 @@ const createOrderWithPaymentIntent = async (req, res) => {
       }
     }
 
-    const { cartItems } = req.body;
-    if (!cartItems || !Array.isArray(cartItems) || cartItems.length === 0) {
-      return res.status(400).json({ message: 'Cart items are required' });
+    const cartItems = await loadServerCartForCheckout(req, userId);
+    if (!Array.isArray(cartItems) || cartItems.length === 0) {
+      return res.status(400).json({ message: 'No cart items found for checkout.' });
     }
 
     const orderItems = cartItems.flatMap((item) => expandCartItemToOrderLines(item));

@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getAllProducts, getProductById, getCategories, getRelatedProducts, createCategory, updateCategory, deleteCategory, createProduct, updateProduct, getAllProductsAdmin, deleteProductAdmin, uploadProductImage, uploadCategoryImage } = require('../controllers/productController');
+const { getAllProducts, getProductById, previewProductPrice, getCategories, getRelatedProducts, createCategory, updateCategory, deleteCategory, createProduct, updateProduct, getAllProductsAdmin, deleteProductAdmin, uploadProductImage, uploadCategoryImage } = require('../controllers/productController');
 const { optionalAuth } = require('../middleware/auth');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const { uploadProductImage: uploadProductImageMw, uploadCategoryImage: uploadCategoryImageMw } = require('../middleware/upload');
@@ -8,6 +8,7 @@ const { uploadProductImage: uploadProductImageMw, uploadCategoryImage: uploadCat
 router.get('/', optionalAuth, getAllProducts);
 router.get('/categories', getCategories);
 router.get('/related', optionalAuth, getRelatedProducts);
+router.post('/:id/price-preview', optionalAuth, previewProductPrice);
 
 // Admin: products and categories (must be before /:id)
 router.get('/admin/products', authenticateToken, requireAdmin, getAllProductsAdmin);

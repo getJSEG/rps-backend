@@ -1,4 +1,5 @@
 const cartRepository = require('../repositories/cartRepository');
+const { calculateCartItemFromInput } = require('../services/pricingService');
 
 function isAdminUser(req) {
   const role = (req.user?.role || '').toString().toLowerCase();
@@ -22,16 +23,18 @@ const addToCart = async (req, res) => {
       return res.status(401).json({ message: 'Authentication or guest session required' });
     }
 
-    const itemData = req.body;
-    if (!itemData || typeof itemData !== 'object') {
+    const rawItemData = req.body;
+    if (!rawItemData || typeof rawItemData !== 'object') {
       return res.status(400).json({ message: 'Cart item data is required' });
     }
 
+    const itemData = await calculateCartItemFromInput(rawItemData);
     const cartItem = await cartRepository.insertCartItem(userId, guestSessionId, itemData);
     res.status(201).json({ cartItem });
   } catch (error) {
     console.error('Add to cart error:', error);
-    res.status(500).json({ message: 'Failed to add to cart', error: error.message });
+    const code = /required|invalid|must|missing|not found|supported/i.test(String(error.message || '')) ? 400 : 500;
+    res.status(code).json({ message: 'Failed to add to cart', error: error.message });
   }
 };
 
@@ -88,10 +91,26 @@ const updateCartItem = async (req, res) => {
   try {
     const { userId, guestSessionId } = cartContext(req);
     const { id } = req.params;
-    const itemData = req.body;
+    const incoming = req.body;
     if (!userId && !guestSessionId) {
       return res.status(401).json({ message: 'Authentication or guest session required' });
     }
+
+    let existingRow = null;
+    if (isAdminUser(req)) {
+      existingRow = await cartRepository.findCartRowByIdAdmin(id);
+    } else if (userId) {
+      existingRow = await cartRepository.findCartRowByIdAndUser(id, userId);
+    } else {
+      existingRow = await cartRepository.findCartRowByIdAndGuest(id, guestSessionId);
+    }
+    if (!existingRow) return res.status(404).json({ message: 'Cart item not found' });
+
+    const merged = {
+      ...(existingRow.item_data || {}),
+      ...(incoming && typeof incoming === 'object' ? incoming : {}),
+    };
+    const itemData = await calculateCartItemFromInput(merged);
 
     let result;
     if (isAdminUser(req)) {
@@ -105,7 +124,8 @@ const updateCartItem = async (req, res) => {
     res.json({ cartItem: result.row });
   } catch (error) {
     console.error('Update cart error:', error);
-    res.status(500).json({ message: 'Failed to update cart', error: error.message });
+    const code = /required|invalid|must|missing|not found|supported/i.test(String(error.message || '')) ? 400 : 500;
+    res.status(code).json({ message: 'Failed to update cart', error: error.message });
   }
 };
 
