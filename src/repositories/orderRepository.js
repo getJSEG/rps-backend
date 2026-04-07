@@ -296,8 +296,8 @@ const SQL = {
   INSERT_ORDER_ITEM_ADMIN_NO_JOB: `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price, image_url, width_inches, height_inches)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
   SELECT_ORDER_BY_ID: `SELECT o.* FROM orders o WHERE o.id = $1`,
-  INSERT_ORDER_STRIPE_PENDING: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, payment_status, notes, guest_checkout, shipping_address_id, billing_address_id, shipping_method, shipping_charge)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+  INSERT_ORDER_STRIPE_PENDING: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, payment_status, notes, guest_checkout, shipping_address_id, billing_address_id, shipping_method, shipping_charge, shipping_mode, store_pickup_address_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
          RETURNING id, order_number`,
   UPDATE_ORDER_STRIPE_PAID: `UPDATE orders SET payment_status = $1, status = $2, notes = COALESCE(notes, '') || ' | Paid via Stripe ' || $3 WHERE id = $4`,
   UPDATE_ORDER_PAID_WITHOUT_STRIPE: `UPDATE orders SET payment_status = $1, status = $2, payment_method = $3, notes = COALESCE(notes, '') || $4 WHERE id = $5`,
@@ -696,6 +696,15 @@ async function getOrderUserId(orderId) {
   return r.rows[0]?.user_id ?? null;
 }
 
+async function verifyStorePickupAddressExists(addressId) {
+  if (addressId == null) return false;
+  const r = await pool.query(
+    'SELECT id FROM store_pickup_addresses WHERE id = $1 AND is_active = true',
+    [addressId]
+  );
+  return r.rows.length > 0;
+}
+
 async function createPendingStripeOrderWithItems({
   userId,
   orderNumber,
@@ -706,6 +715,8 @@ async function createPendingStripeOrderWithItems({
   billingAddressId = null,
   shippingMethod = null,
   shippingCharge = 0,
+  shippingMode = 'blind_drop_ship',
+  storePickupAddressId = null,
 }) {
   const client = await pool.connect();
   try {
@@ -723,6 +734,8 @@ async function createPendingStripeOrderWithItems({
       billingAddressId,
       shippingMethod,
       shippingCharge,
+      shippingMode,
+      storePickupAddressId,
     ]);
     const order = orderResult.rows[0];
     const orderId = order.id;
@@ -775,5 +788,6 @@ module.exports = {
   markOrderPaidFromStripe,
   markOrderPaidWithoutStripe,
   verifyAddressBelongsToUser,
+  verifyStorePickupAddressExists,
   getOrderUserId,
 };

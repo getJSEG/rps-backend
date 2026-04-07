@@ -78,6 +78,14 @@ async function ensureEmployeeColumns() {
       const sql13 = fs.readFileSync(path.join(migrationsDir, 'addProductPricingEnginePhase1.sql'), 'utf8');
       await pool.query(sql13);
     }
+    if (fs.existsSync(path.join(migrationsDir, 'addStorePickupAddressesAndOrderMode.sql'))) {
+      const sql14 = fs.readFileSync(path.join(migrationsDir, 'addStorePickupAddressesAndOrderMode.sql'), 'utf8');
+      await pool.query(sql14);
+    }
+    if (fs.existsSync(path.join(migrationsDir, 'addShippingRateOptions.sql'))) {
+      const sql15 = fs.readFileSync(path.join(migrationsDir, 'addShippingRateOptions.sql'), 'utf8');
+      await pool.query(sql15);
+    }
   } catch (err) {
     console.warn('Migrations (optional):', err.message);
   }
@@ -98,6 +106,7 @@ const materialRoutes = require('./routes/materials');
 const employeeRoutes = require('./routes/employees');
 const cartRoutes = require('./routes/cart');
 const shippingRatesRoutes = require('./routes/shippingRates');
+const storePickupAddressRoutes = require('./routes/storePickupAddresses');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -174,6 +183,7 @@ app.use('/api/materials', materialRoutes);
 app.use('/api/admin/employees', employeeRoutes);
 app.use('/api/cart', cartRoutes);
 app.use('/api/shipping-rates', shippingRatesRoutes);
+app.use('/api/store-pickup-addresses', storePickupAddressRoutes);
 
 // 404 handler
 app.use((req, res) => {

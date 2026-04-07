@@ -21,6 +21,14 @@ function normalizeMode(value, fallback) {
   return v || fallback;
 }
 
+function normalizeShippingMode(value) {
+  const s = String(value || '').trim().toLowerCase();
+  if (s === 'store_pickup' || s === 'store-pickup' || s === 'store pickup') {
+    return 'store_pickup';
+  }
+  return 'blind_drop_ship';
+}
+
 /**
  * When `pricing_mode` is missing, infer the same way the storefront listing does:
  * listing shows `product.price` first, then `price_per_sqft`. Rows with both columns
@@ -177,7 +185,16 @@ function validateAndCalculatePricing(product, input) {
 }
 
 function buildCartSnapshot(pricing, input) {
-  const shippingService = String(input.shippingService ?? input.shipping_service ?? 'Ground');
+  const shippingMode = normalizeShippingMode(input.shippingMode ?? input.shipping_mode ?? input.shipping);
+  const shippingService =
+    shippingMode === 'store_pickup'
+      ? 'Store Pickup'
+      : String(input.shippingService ?? input.shipping_service ?? 'Ground');
+  const storePickupAddressIdRaw = input.storePickupAddressId ?? input.store_pickup_address_id;
+  const storePickupAddressId =
+    storePickupAddressIdRaw != null && storePickupAddressIdRaw !== ''
+      ? Number(storePickupAddressIdRaw)
+      : null;
   const jobsInput = Array.isArray(input.jobs) ? input.jobs : [];
   let jobs = [];
   let quantity = 0;
@@ -217,7 +234,10 @@ function buildCartSnapshot(pricing, input) {
     jobs,
     totalJobs: jobs.length,
     jobName: jobs.length === 1 ? jobs[0].jobName : `${jobs[0].jobName} (+${jobs.length - 1} more)`,
+    shippingMode,
+    shipping: shippingMode === 'store_pickup' ? 'store-pickup' : 'blind-drop',
     shippingService,
+    storePickupAddressId: shippingMode === 'store_pickup' ? storePickupAddressId : null,
     unitPrice: pricing.unitPrice,
     subtotal,
     total: subtotal,

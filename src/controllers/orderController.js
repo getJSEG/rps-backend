@@ -1,6 +1,7 @@
 const orderRepository = require('../repositories/orderRepository');
 const cartRepository = require('../repositories/cartRepository');
 const shippingRatesRepository = require('../repositories/shippingRatesRepository');
+const storePickupAddressRepository = require('../repositories/storePickupAddressRepository');
 const Stripe = require('stripe');
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 
@@ -58,20 +59,13 @@ function roundMoney2(n) {
   return Math.round(x * 100) / 100;
 }
 
-function shippingRateForServiceLabel(rates, label) {
-  const s = String(label || '').trim().toLowerCase();
-  if (s === 'ground') return roundMoney2(rates.ground);
-  if (s === 'express') return roundMoney2(rates.express);
-  if (s === 'overnight') return roundMoney2(rates.overnight);
-  return 0;
-}
-
 /** Sum admin-configured shipping per cart line from each line's shippingService; tax is not used. */
-function aggregateShippingFromCartItems(cartItems, rates) {
+async function aggregateShippingFromCartItems(cartItems) {
   let sum = 0;
   for (const i of cartItems) {
     const svc = i.shippingService ?? i.shipping_service ?? '';
-    sum += shippingRateForServiceLabel(rates, svc);
+    const price = await shippingRatesRepository.findPriceByServiceName(svc);
+    sum += roundMoney2(price);
   }
   const labels = [
     ...new Set(
@@ -86,6 +80,12 @@ function aggregateShippingFromCartItems(cartItems, rates) {
     shippingMethod,
     shippingCharge: roundMoney2(sum),
   };
+}
+
+function normalizeShippingMode(value) {
+  const s = String(value || '').trim().toLowerCase();
+  if (s === 'store_pickup' || s === 'store-pickup') return 'store_pickup';
+  return 'blind_drop_ship';
 }
 
 const MAX_ORDER_MONEY = 999_999_999_999.99;
@@ -530,8 +530,34 @@ const createOrderWithPaymentIntent = async (req, res) => {
 
     const orderItems = cartItems.flatMap((item) => expandCartItemToOrderLines(item));
     const subtotalSum = roundMoney2(orderItems.reduce((s, o) => s + o.total_price, 0));
-    const rateRow = await shippingRatesRepository.getRates();
-    const { shippingSum, shippingMethod, shippingCharge } = aggregateShippingFromCartItems(cartItems, rateRow);
+    const modeSet = new Set(cartItems.map((i) => normalizeShippingMode(i.shippingMode ?? i.shipping_mode)));
+    const shippingMode = modeSet.size === 1 ? Array.from(modeSet)[0] : 'blind_drop_ship';
+    let shippingSum = 0;
+    let shippingMethod = null;
+    let shippingCharge = 0;
+    let storePickupAddressId = null;
+    let storePickupAddress = null;
+    if (shippingMode === 'store_pickup') {
+      const rawPickup = cartItems[0]?.storePickupAddressId ?? cartItems[0]?.store_pickup_address_id;
+      const parsedPickup = rawPickup != null && rawPickup !== '' ? parseInt(String(rawPickup), 10) : NaN;
+      if (Number.isNaN(parsedPickup)) {
+        return res.status(400).json({ message: 'Store pickup requires a pickup address selection.' });
+      }
+      const exists = await orderRepository.verifyStorePickupAddressExists(parsedPickup);
+      if (!exists) {
+        return res.status(400).json({ message: 'Selected store pickup address is not available.' });
+      }
+      storePickupAddressId = parsedPickup;
+      storePickupAddress = await storePickupAddressRepository.findById(parsedPickup);
+      shippingMethod = 'Store Pickup';
+      shippingSum = 0;
+      shippingCharge = 0;
+    } else {
+      const agg = await aggregateShippingFromCartItems(cartItems);
+      shippingSum = agg.shippingSum;
+      shippingMethod = agg.shippingMethod;
+      shippingCharge = agg.shippingCharge;
+    }
     let totalAmount = roundMoney2(subtotalSum + shippingSum);
     if (totalAmount > MAX_ORDER_MONEY) {
       return res.status(400).json({ message: 'Order total exceeds the maximum allowed amount.' });
@@ -541,7 +567,7 @@ const createOrderWithPaymentIntent = async (req, res) => {
 
     let shippingAddressId = null;
     let billingAddressId = null;
-    if (userId) {
+    if (userId && shippingMode !== 'store_pickup') {
       const rawShip = req.body.shippingAddressId ?? req.body.shipping_address_id;
       const rawBill = req.body.billingAddressId ?? req.body.billing_address_id;
       const shipParsed = rawShip != null && rawShip !== '' ? parseInt(String(rawShip), 10) : NaN;
@@ -560,6 +586,34 @@ const createOrderWithPaymentIntent = async (req, res) => {
       billingAddressId = bill;
     }
 
+    if (shippingMode === 'store_pickup') {
+      shippingAddressId = null;
+      billingAddressId = null;
+      if (storePickupAddress) {
+        const pickupSnapshot = {
+          shippingAddress: {
+            street_address: storePickupAddress.street_address,
+            address_line2: storePickupAddress.address_line2,
+            city: storePickupAddress.city,
+            state: storePickupAddress.state,
+            postcode: storePickupAddress.postcode,
+            country: storePickupAddress.country,
+            label: storePickupAddress.label,
+          },
+          billingAddress: {
+            street_address: storePickupAddress.street_address,
+            address_line2: storePickupAddress.address_line2,
+            city: storePickupAddress.city,
+            state: storePickupAddress.state,
+            postcode: storePickupAddress.postcode,
+            country: storePickupAddress.country,
+            label: storePickupAddress.label,
+          },
+        };
+        guestCheckout = { ...(guestCheckout || {}), ...pickupSnapshot };
+      }
+    }
+
     const orderNumber = generateOrderNumber();
     const { orderId, orderNumber: savedOrderNumber } = await orderRepository.createPendingStripeOrderWithItems({
       userId,
@@ -571,6 +625,8 @@ const createOrderWithPaymentIntent = async (req, res) => {
       billingAddressId,
       shippingMethod,
       shippingCharge,
+      shippingMode,
+      storePickupAddressId,
     });
 
     if (!shouldUseStripePaymentIntent()) {
