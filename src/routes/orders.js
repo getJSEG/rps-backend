@@ -11,11 +11,13 @@ const {
   deleteOrderAdmin,
   createOrderFromCartItem,
   createOrderWithPaymentIntent,
+  confirmStripePayment,
 } = require('../controllers/orderController');
 const { authenticateToken, optionalAuth, requireAdmin } = require('../middleware/auth');
 
 router.post('/', optionalAuth, createOrder);
 router.post('/create-payment-intent', optionalAuth, createOrderWithPaymentIntent);
+router.post('/confirm-stripe-payment', optionalAuth, confirmStripePayment);
 router.get('/', authenticateToken, getOrders);
 // Admin routes - require admin role
 router.get('/admin/all', authenticateToken, requireAdmin, getAllOrders);

@@ -673,6 +673,42 @@ const createOrderWithPaymentIntent = async (req, res) => {
   }
 };
 
+/**
+ * Fallback for local/dev when webhook is delayed/missed:
+ * verify PaymentIntent with Stripe and mark order paid.
+ */
+const confirmStripePayment = async (req, res) => {
+  try {
+    if (!stripe) {
+      return res.status(503).json({ message: 'Stripe is not configured. Set STRIPE_SECRET_KEY in .env' });
+    }
+    const orderIdNum = Number(req.body?.orderId);
+    const paymentIntentId = String(req.body?.paymentIntentId || '').trim();
+    if (!Number.isFinite(orderIdNum) || orderIdNum <= 0) {
+      return res.status(400).json({ message: 'Valid orderId is required' });
+    }
+    if (!/^pi_[A-Za-z0-9_]+$/.test(paymentIntentId)) {
+      return res.status(400).json({ message: 'Valid paymentIntentId is required' });
+    }
+
+    const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+    if (!pi || pi.status !== 'succeeded') {
+      return res.status(409).json({ message: 'Payment is not completed yet' });
+    }
+
+    const metadataOrderId = Number(pi.metadata?.orderId);
+    if (!Number.isFinite(metadataOrderId) || metadataOrderId !== orderIdNum) {
+      return res.status(400).json({ message: 'PaymentIntent does not match this order' });
+    }
+
+    await orderRepository.markOrderPaidFromStripe(orderIdNum, new Date().toISOString());
+    return res.status(200).json({ ok: true, orderId: orderIdNum, paymentStatus: 'paid' });
+  } catch (error) {
+    console.error('Confirm Stripe payment error:', error);
+    return res.status(500).json({ message: error.message || 'Failed to confirm payment', error: error.message });
+  }
+};
+
 const handleStripeWebhook = async (req, res) => {
   if (!stripe) return res.status(503).send('Stripe not configured');
   const sig = req.headers['stripe-signature'];
@@ -723,5 +759,6 @@ module.exports = {
   deleteOrderAdmin,
   createOrderFromCartItem,
   createOrderWithPaymentIntent,
+  confirmStripePayment,
   handleStripeWebhook,
 };
