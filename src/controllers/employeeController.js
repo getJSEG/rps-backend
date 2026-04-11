@@ -2,7 +2,7 @@ const bcrypt = require('bcryptjs');
 const path = require('path');
 const fs = require('fs');
 const pool = require('../config/database');
-const { uploadFromBuffer, isConfigured: cloudinaryConfigured } = require('../utils/cloudinary');
+const { uploadFromBuffer, isConfigured: spacesConfigured } = require('../utils/spaces');
 
 const FIELDS = 'id, email, full_name, telephone, role, is_active, is_approved, profile_image, hire_date, created_at, updated_at';
 const FIELDS_MINIMAL = 'id, email, full_name, telephone, role, is_active, is_approved, created_at, updated_at';
@@ -281,14 +281,16 @@ function writeBufferToUploadDir(buffer, dirName) {
   return `/uploads/${dirName}/${filename}`;
 }
 
-// Upload profile image; Cloudinary (live) or disk. Returns { url }
+// Upload profile image; Spaces (live) or disk. Returns { url }
 const uploadProfileImage = async (req, res) => {
   if (!req.file || !req.file.buffer) {
     return res.status(400).json({ message: 'No image file uploaded' });
   }
   try {
-    if (cloudinaryConfigured()) {
-      const url = await uploadFromBuffer(req.file.buffer, 'elmer/employees');
+    if (spacesConfigured()) {
+      const url = await uploadFromBuffer(req.file.buffer, 'elmer/employees', {
+        contentType: req.file.mimetype,
+      });
       return res.json({ url });
     }
     const url = writeBufferToUploadDir(req.file.buffer, 'employees');

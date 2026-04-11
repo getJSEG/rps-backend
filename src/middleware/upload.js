@@ -13,7 +13,7 @@ const fileFilter = (req, file, cb) => {
 
 const limit = { fileSize: 5 * 1024 * 1024 }; // 5MB
 
-// ---- Employees: disk storage (or use memory + Cloudinary in controller) ----
+// ---- Employees: disk storage (or memory + Spaces in controller) ----
 const uploadDir = path.join(__dirname, '../../uploads/employees');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
@@ -28,12 +28,12 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, fileFilter, limits: limit });
 
-// ---- Product & Category: memory storage so we can send to Cloudinary or fallback to disk ----
+// ---- Product & Category: memory storage for Spaces upload or disk fallback ----
 const memoryStorage = multer.memoryStorage();
 const uploadProductImage = multer({ storage: memoryStorage, fileFilter, limits: limit });
 const uploadCategoryImage = multer({ storage: memoryStorage, fileFilter, limits: limit });
 
-// For employee profile we also support memory when using Cloudinary
+// Employee profile: memory when using Spaces
 const uploadEmployeeMemory = multer({ storage: memoryStorage, fileFilter, limits: limit });
 
 module.exports = { upload, uploadProductImage, uploadCategoryImage, uploadEmployeeMemory };

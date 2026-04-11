@@ -1,7 +1,7 @@
 const pool = require('../config/database');
 const path = require('path');
 const fs = require('fs');
-const { uploadFromBuffer, isConfigured: cloudinaryConfigured } = require('../utils/cloudinary');
+const { uploadFromBuffer, isConfigured: spacesConfigured } = require('../utils/spaces');
 const { getProductPricingConfig, validateAndCalculatePricing } = require('../services/pricingService');
 
 /** @param {unknown} value */
@@ -555,14 +555,16 @@ function writeBufferToUploadDir(buffer, dirName) {
   return `/uploads/${dirName}/${filename}`;
 }
 
-/** Admin: upload product image; Cloudinary (live) or disk. Returns { url } (full Cloudinary URL or /uploads/products/...) */
+/** Admin: upload product image; DigitalOcean Spaces (live) or disk. Returns { url } */
 const uploadProductImage = async (req, res) => {
   if (!req.file || !req.file.buffer) {
     return res.status(400).json({ message: 'No image file uploaded' });
   }
   try {
-    if (cloudinaryConfigured()) {
-      const url = await uploadFromBuffer(req.file.buffer, 'elmer/products');
+    if (spacesConfigured()) {
+      const url = await uploadFromBuffer(req.file.buffer, 'elmer/products', {
+        contentType: req.file.mimetype,
+      });
       return res.json({ url });
     }
     const url = writeBufferToUploadDir(req.file.buffer, 'products');
@@ -573,14 +575,16 @@ const uploadProductImage = async (req, res) => {
   }
 };
 
-/** Admin: upload category image; Cloudinary or disk. Returns { url } */
+/** Admin: upload category image; Spaces or disk. Returns { url } */
 const uploadCategoryImage = async (req, res) => {
   if (!req.file || !req.file.buffer) {
     return res.status(400).json({ message: 'No image file uploaded' });
   }
   try {
-    if (cloudinaryConfigured()) {
-      const url = await uploadFromBuffer(req.file.buffer, 'elmer/categories');
+    if (spacesConfigured()) {
+      const url = await uploadFromBuffer(req.file.buffer, 'elmer/categories', {
+        contentType: req.file.mimetype,
+      });
       return res.json({ url });
     }
     const url = writeBufferToUploadDir(req.file.buffer, 'categories');
