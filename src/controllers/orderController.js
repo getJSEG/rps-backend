@@ -59,26 +59,47 @@ function roundMoney2(n) {
   return Math.round(x * 100) / 100;
 }
 
-/** Sum admin-configured shipping per cart line from each line's shippingService; tax is not used. */
+/** True when this cart row is store pickup (no ship charge from rate table). */
+function isCartLineStorePickup(item) {
+  const mode = normalizeShippingMode(item.shippingMode ?? item.shipping_mode ?? '');
+  if (mode === 'store_pickup') return true;
+  const ship = String(item.shipping ?? '').trim().toLowerCase();
+  if (ship === 'store-pickup' || ship === 'store_pickup') return true;
+  const pid = item.storePickupAddressId ?? item.store_pickup_address_id;
+  if (pid != null && String(pid) !== '') return true;
+  return false;
+}
+
+/**
+ * One charge per distinct shipping method among shippable lines (same method on multiple lines is not stacked).
+ * Pickup lines are excluded.
+ */
 async function aggregateShippingFromCartItems(cartItems) {
-  let sum = 0;
+  const seenKeys = new Set();
+  let mergedSum = 0;
   for (const i of cartItems) {
-    const svc = i.shippingService ?? i.shipping_service ?? '';
-    const price = await shippingRatesRepository.findPriceByServiceName(svc);
-    sum += roundMoney2(price);
+    if (isCartLineStorePickup(i)) continue;
+    const svcRaw = String(i.shippingService ?? i.shipping_service ?? '').trim();
+    if (!svcRaw) continue;
+    const key = svcRaw.toLowerCase();
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    const price = await shippingRatesRepository.findPriceByServiceName(svcRaw);
+    mergedSum += roundMoney2(price);
   }
   const labels = [
     ...new Set(
       cartItems
+        .filter((i) => !isCartLineStorePickup(i))
         .map((i) => String(i.shippingService ?? i.shipping_service ?? '').trim())
         .filter(Boolean)
     ),
   ];
   const shippingMethod = labels.length === 0 ? null : labels.join(', ');
   return {
-    shippingSum: roundMoney2(sum),
+    shippingSum: roundMoney2(mergedSum),
     shippingMethod,
-    shippingCharge: roundMoney2(sum),
+    shippingCharge: roundMoney2(mergedSum),
   };
 }
 
@@ -557,6 +578,11 @@ const createOrderWithPaymentIntent = async (req, res) => {
       shippingSum = agg.shippingSum;
       shippingMethod = agg.shippingMethod;
       shippingCharge = agg.shippingCharge;
+      const policy = await shippingRatesRepository.getRates();
+      if (policy.freeShippingEnabled && subtotalSum >= roundMoney2(policy.freeShippingThreshold)) {
+        shippingSum = 0;
+        shippingCharge = 0;
+      }
     }
     let totalAmount = roundMoney2(subtotalSum + shippingSum);
     if (totalAmount > MAX_ORDER_MONEY) {
@@ -640,6 +666,9 @@ const createOrderWithPaymentIntent = async (req, res) => {
         orderNumber: savedOrderNumber,
         clientSecret: null,
         stripePaymentSkipped: true,
+        subtotal: subtotalSum,
+        shipping: shippingSum,
+        total: totalAmount,
       });
     }
 
@@ -663,6 +692,9 @@ const createOrderWithPaymentIntent = async (req, res) => {
       orderNumber: savedOrderNumber,
       clientSecret: paymentIntent.client_secret,
       stripePaymentSkipped: false,
+      subtotal: subtotalSum,
+      shipping: shippingSum,
+      total: totalAmount,
     });
   } catch (error) {
     console.error('Create order with payment intent error:', error);

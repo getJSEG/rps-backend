@@ -1,6 +1,12 @@
 const pool = require('../config/database');
 
-const DEFAULTS = { ground: 120.07, express: 0, overnight: 0 };
+const DEFAULTS = {
+  ground: 120.07,
+  express: 0,
+  overnight: 0,
+  freeShippingEnabled: false,
+  freeShippingThreshold: 0,
+};
 const DEFAULT_METHODS = [
   { name: 'Ground', price: 120.07 },
   { name: 'Express', price: 0 },
@@ -8,26 +14,40 @@ const DEFAULT_METHODS = [
 ];
 
 async function getRates() {
-  const r = await pool.query('SELECT ground, express, overnight FROM shipping_rates WHERE id = 1');
+  const r = await pool.query(
+    `SELECT ground, express, overnight,
+            COALESCE(free_shipping_enabled, FALSE) AS free_shipping_enabled,
+            COALESCE(free_shipping_threshold, 0) AS free_shipping_threshold
+     FROM shipping_rates WHERE id = 1`
+  );
   if (r.rows.length === 0) return { ...DEFAULTS };
   const row = r.rows[0];
   return {
     ground: Number(row.ground) || 0,
     express: Number(row.express) || 0,
     overnight: Number(row.overnight) || 0,
+    freeShippingEnabled: !!row.free_shipping_enabled,
+    freeShippingThreshold: Math.max(0, Number(row.free_shipping_threshold) || 0),
   };
 }
 
-async function updateRates({ ground, express, overnight }) {
+async function updateRates({ ground, express, overnight, freeShippingEnabled, freeShippingThreshold }) {
+  const cur = await getRates();
+  const fEnabled = freeShippingEnabled !== undefined ? !!freeShippingEnabled : cur.freeShippingEnabled;
+  let fThreshold = freeShippingThreshold !== undefined ? Number(freeShippingThreshold) : cur.freeShippingThreshold;
+  if (!Number.isFinite(fThreshold) || fThreshold < 0) fThreshold = 0;
+
   await pool.query(
-    `INSERT INTO shipping_rates (id, ground, express, overnight, updated_at)
-     VALUES (1, $1, $2, $3, CURRENT_TIMESTAMP)
+    `INSERT INTO shipping_rates (id, ground, express, overnight, free_shipping_enabled, free_shipping_threshold, updated_at)
+     VALUES (1, $1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
      ON CONFLICT (id) DO UPDATE SET
        ground = EXCLUDED.ground,
        express = EXCLUDED.express,
        overnight = EXCLUDED.overnight,
+       free_shipping_enabled = EXCLUDED.free_shipping_enabled,
+       free_shipping_threshold = EXCLUDED.free_shipping_threshold,
        updated_at = CURRENT_TIMESTAMP`,
-    [ground, express, overnight]
+    [ground, express, overnight, fEnabled, fThreshold]
   );
   return getRates();
 }

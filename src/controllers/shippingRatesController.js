@@ -2,9 +2,14 @@ const shippingRatesRepository = require('../repositories/shippingRatesRepository
 
 const getShippingRates = async (req, res) => {
   try {
-    const rates = await shippingRatesRepository.getRates();
+    const full = await shippingRatesRepository.getRates();
     const methods = await shippingRatesRepository.getAllMethods({ includeInactive: false });
-    res.json({ rates, methods });
+    res.json({
+      rates: { ground: full.ground, express: full.express, overnight: full.overnight },
+      freeShippingEnabled: full.freeShippingEnabled,
+      freeShippingThreshold: full.freeShippingThreshold,
+      methods,
+    });
   } catch (error) {
     console.error('getShippingRates:', error);
     res.status(500).json({ message: 'Failed to load shipping rates', error: error.message });
@@ -78,14 +83,32 @@ const deleteShippingMethodAdmin = async (req, res) => {
 
 const putShippingRatesAdmin = async (req, res) => {
   try {
-    const g = parseFloat(req.body.ground);
-    const e = parseFloat(req.body.express);
-    const o = parseFloat(req.body.overnight);
+    const cur = await shippingRatesRepository.getRates();
+    const g = req.body?.ground !== undefined ? parseFloat(req.body.ground) : cur.ground;
+    const e = req.body?.express !== undefined ? parseFloat(req.body.express) : cur.express;
+    const o = req.body?.overnight !== undefined ? parseFloat(req.body.overnight) : cur.overnight;
     if (![g, e, o].every((n) => Number.isFinite(n) && n >= 0)) {
       return res.status(400).json({ message: 'ground, express, and overnight must be non-negative numbers' });
     }
-    const rates = await shippingRatesRepository.updateRates({ ground: g, express: e, overnight: o });
-    res.json({ rates });
+    const freeShippingEnabled =
+      req.body?.freeShippingEnabled !== undefined ? !!req.body.freeShippingEnabled : cur.freeShippingEnabled;
+    const freeThRaw =
+      req.body?.freeShippingThreshold !== undefined ? parseFloat(req.body.freeShippingThreshold) : cur.freeShippingThreshold;
+    if (!Number.isFinite(freeThRaw) || freeThRaw < 0) {
+      return res.status(400).json({ message: 'freeShippingThreshold must be a non-negative number' });
+    }
+    const full = await shippingRatesRepository.updateRates({
+      ground: g,
+      express: e,
+      overnight: o,
+      freeShippingEnabled,
+      freeShippingThreshold: freeThRaw,
+    });
+    res.json({
+      rates: { ground: full.ground, express: full.express, overnight: full.overnight },
+      freeShippingEnabled: full.freeShippingEnabled,
+      freeShippingThreshold: full.freeShippingThreshold,
+    });
   } catch (error) {
     console.error('putShippingRatesAdmin:', error);
     res.status(500).json({ message: 'Failed to update shipping rates', error: error.message });
