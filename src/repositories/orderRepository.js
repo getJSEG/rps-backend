@@ -301,6 +301,22 @@ const SQL = {
          RETURNING id, order_number`,
   UPDATE_ORDER_STRIPE_PAID: `UPDATE orders SET payment_status = $1, status = $2, notes = COALESCE(notes, '') || ' | Paid via Stripe ' || $3 WHERE id = $4`,
   UPDATE_ORDER_PAID_WITHOUT_STRIPE: `UPDATE orders SET payment_status = $1, status = $2, payment_method = $3, notes = COALESCE(notes, '') || $4 WHERE id = $5`,
+  UPDATE_ORDER_REFUNDED: `UPDATE orders
+      SET status = $1,
+          payment_status = $2,
+          stripe_refund_id = $3,
+          refund_amount = $4,
+          refunded_at = $5,
+          refund_currency = $6,
+          refund_reason = $7,
+          updated_at = CURRENT_TIMESTAMP,
+          notes = COALESCE(notes, '') || $8
+      WHERE id = $9
+      RETURNING *`,
+  UPDATE_ORDER_STRIPE_PAYMENT_INTENT: `UPDATE orders
+      SET stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, $1),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = $2`,
 };
 
 function itemImageUrlFromBody(item) {
@@ -770,13 +786,46 @@ async function createPendingStripeOrderWithItems({
   }
 }
 
-async function markOrderPaidFromStripe(orderId, paidAtIso) {
+async function markOrderPaidFromStripe(orderId, paidAtIso, paymentIntentId = null) {
   await pool.query(SQL.UPDATE_ORDER_STRIPE_PAID, ['paid', 'awaiting_artwork', paidAtIso, orderId]);
+  if (paymentIntentId) {
+    await pool.query(SQL.UPDATE_ORDER_STRIPE_PAYMENT_INTENT, [String(paymentIntentId), orderId]);
+  }
+}
+
+async function setOrderStripePaymentIntent(orderId, paymentIntentId) {
+  if (!paymentIntentId) return;
+  await pool.query(SQL.UPDATE_ORDER_STRIPE_PAYMENT_INTENT, [String(paymentIntentId), orderId]);
 }
 
 async function markOrderPaidWithoutStripe(orderId) {
   const suffix = ` | Completed without Stripe (STRIPE_PAYMENT_ENABLED=false) ${new Date().toISOString()}`;
   await pool.query(SQL.UPDATE_ORDER_PAID_WITHOUT_STRIPE, ['paid', 'awaiting_artwork', 'manual', suffix, orderId]);
+}
+
+async function markOrderRefunded({
+  orderId,
+  refundId,
+  refundAmount,
+  refundedAtIso,
+  refundCurrency,
+  refundReason,
+}) {
+  const suffix = ` | Refunded via Stripe ${refundId} (${refundAmount} ${String(
+    refundCurrency || 'usd'
+  ).toUpperCase()}) ${refundedAtIso}`;
+  const result = await pool.query(SQL.UPDATE_ORDER_REFUNDED, [
+    'refunded',
+    'refunded',
+    refundId,
+    refundAmount,
+    refundedAtIso,
+    refundCurrency || 'usd',
+    refundReason || null,
+    suffix,
+    orderId,
+  ]);
+  return result.rows[0] ?? null;
 }
 
 module.exports = {
@@ -793,7 +842,9 @@ module.exports = {
   createOrderFromCartItemAdminMultiJob,
   createPendingStripeOrderWithItems,
   markOrderPaidFromStripe,
+  setOrderStripePaymentIntent,
   markOrderPaidWithoutStripe,
+  markOrderRefunded,
   verifyAddressBelongsToUser,
   verifyStorePickupAddressExists,
   getOrderUserId,
