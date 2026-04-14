@@ -11,6 +11,16 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
+const artworkFileFilter = (req, file, cb) => {
+  const mime = String(file.mimetype || "").toLowerCase();
+  const allowed = new Set(["image/png", "image/jpeg", "application/pdf"]);
+  if (allowed.has(mime)) {
+    cb(null, true);
+  } else {
+    cb(new Error("Only PNG, JPG and single-page PDF files are allowed"), false);
+  }
+};
+
 const limit = { fileSize: 5 * 1024 * 1024 }; // 5MB
 
 // ---- Employees: disk storage (or memory + Spaces in controller) ----
@@ -35,5 +45,6 @@ const uploadCategoryImage = multer({ storage: memoryStorage, fileFilter, limits:
 
 // Employee profile: memory when using Spaces
 const uploadEmployeeMemory = multer({ storage: memoryStorage, fileFilter, limits: limit });
+const uploadArtworkFile = multer({ storage: memoryStorage, fileFilter: artworkFileFilter, limits: limit });
 
-module.exports = { upload, uploadProductImage, uploadCategoryImage, uploadEmployeeMemory };
+module.exports = { upload, uploadProductImage, uploadCategoryImage, uploadEmployeeMemory, uploadArtworkFile };

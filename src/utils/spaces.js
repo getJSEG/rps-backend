@@ -54,6 +54,7 @@ function getClient() {
 
 function extFromMime(mime) {
   const m = (mime || '').toLowerCase();
+  if (m === 'application/pdf') return '.pdf';
   if (m === 'image/png') return '.png';
   if (m === 'image/webp') return '.webp';
   if (m === 'image/gif') return '.gif';
