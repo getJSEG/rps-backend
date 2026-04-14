@@ -1,5 +1,6 @@
 const cartRepository = require('../repositories/cartRepository');
 const { calculateCartItemFromInput } = require('../services/pricingService');
+const { computeShippingFromCartItems, computeTaxAndTotal, roundMoney2 } = require('../services/orderTotalsService');
 
 function isAdminUser(req) {
   const role = (req.user?.role || '').toString().toLowerCase();
@@ -13,6 +14,22 @@ function cartContext(req) {
   const userId = req.user?.id ?? null;
   const guestSessionId = userId ? null : (req.guestSessionId ?? null);
   return { userId, guestSessionId };
+}
+
+function cartItemLineSubtotal(item) {
+  if (item?.subtotal != null) return Number(item.subtotal) || 0;
+  const jobs = Array.isArray(item?.jobs) ? item.jobs : [];
+  if (jobs.length > 0) {
+    const fallbackUnit = Number(item?.unitPrice) || Number(item?.unit_price) || 0;
+    return jobs.reduce((sum, line) => {
+      if (line?.lineSubtotal != null) return sum + (Number(line.lineSubtotal) || 0);
+      const up = Number(line?.unitPrice ?? line?.unit_price) || fallbackUnit;
+      return sum + up * (Number(line?.quantity) || 0);
+    }, 0);
+  }
+  const qty = Number(item?.quantity) || 1;
+  const unit = Number(item?.unitPrice ?? item?.unit_price) || 0;
+  return unit * qty;
 }
 
 /** Add item to cart (logged-in user or guest with X-Guest-Session-Id) */
@@ -148,4 +165,35 @@ const clearCart = async (req, res) => {
   }
 };
 
-module.exports = { addToCart, getCart, removeFromCart, updateCartItem, clearCart };
+const getCartSummary = async (req, res) => {
+  try {
+    const { userId, guestSessionId } = cartContext(req);
+    if (!userId && !guestSessionId) {
+      return res.status(401).json({ message: 'Authentication or guest session required' });
+    }
+    const cartItems = userId
+      ? await cartRepository.findCartItemsByUserId(userId)
+      : await cartRepository.findCartItemsByGuestSession(guestSessionId);
+    const subtotal = roundMoney2(cartItems.reduce((sum, item) => sum + cartItemLineSubtotal(item), 0));
+    const shippingComputed = await computeShippingFromCartItems(cartItems);
+    let shipping = shippingComputed.shippingSum;
+    if (shippingComputed.applyFreeShipping) {
+      const freeShipping = shippingComputed.applyFreeShipping(subtotal);
+      shipping = freeShipping.shippingSum;
+    }
+    const totals = await computeTaxAndTotal(subtotal, shipping);
+    res.json({
+      subtotal: totals.subtotal,
+      shipping: totals.shipping,
+      taxAmount: totals.tax.amount,
+      taxName: totals.tax.name,
+      taxPercentage: totals.tax.percentage,
+      total: totals.total,
+    });
+  } catch (error) {
+    console.error('Get cart summary error:', error);
+    res.status(500).json({ message: 'Failed to get cart summary', error: error.message });
+  }
+};
+
+module.exports = { addToCart, getCart, removeFromCart, updateCartItem, clearCart, getCartSummary };

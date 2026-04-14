@@ -1,10 +1,11 @@
 const express = require('express');
 const router = express.Router();
-const { addToCart, getCart, removeFromCart, updateCartItem, clearCart } = require('../controllers/cartController');
+const { addToCart, getCart, removeFromCart, updateCartItem, clearCart, getCartSummary } = require('../controllers/cartController');
 const { authenticateTokenOrGuestSession } = require('../middleware/auth');
 
 router.post('/', authenticateTokenOrGuestSession, addToCart);
 router.get('/', authenticateTokenOrGuestSession, getCart);
+router.get('/summary', authenticateTokenOrGuestSession, getCartSummary);
 // Static paths must be registered before /:id or "clear" is parsed as an integer id
 router.delete('/clear', authenticateTokenOrGuestSession, clearCart);
 router.put('/:id', authenticateTokenOrGuestSession, updateCartItem);
