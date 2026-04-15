@@ -11,8 +11,10 @@ const {
   deleteOrderAdmin,
   createOrderFromCartItem,
   createOrderWithPaymentIntent,
+  getGuestOrderByIdWithToken,
   confirmStripePayment,
   requestOrderCancellation,
+  requestGuestOrderCancellation,
   refundOrderAdmin,
 } = require('../controllers/orderController');
 const { authenticateToken, optionalAuth, requireAdmin } = require('../middleware/auth');
@@ -20,6 +22,8 @@ const { authenticateToken, optionalAuth, requireAdmin } = require('../middleware
 router.post('/', optionalAuth, createOrder);
 router.post('/create-payment-intent', optionalAuth, createOrderWithPaymentIntent);
 router.post('/confirm-stripe-payment', optionalAuth, confirmStripePayment);
+router.get('/guest/:id', getGuestOrderByIdWithToken);
+router.post('/guest/:id/request-cancellation', requestGuestOrderCancellation);
 router.post('/:id/request-cancellation', authenticateToken, requestOrderCancellation);
 router.get('/', authenticateToken, getOrders);
 // Admin routes - require admin role

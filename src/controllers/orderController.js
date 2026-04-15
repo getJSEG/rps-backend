@@ -2,6 +2,7 @@ const orderRepository = require('../repositories/orderRepository');
 const cartRepository = require('../repositories/cartRepository');
 const storePickupAddressRepository = require('../repositories/storePickupAddressRepository');
 const { computeShippingFromCartItems, computeTaxAndTotal } = require('../services/orderTotalsService');
+const crypto = require('crypto');
 const Stripe = require('stripe');
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 
@@ -62,6 +63,30 @@ function roundMoney2(n) {
 
 const MAX_ORDER_MONEY = 999_999_999_999.99;
 const MAX_LINE_QTY = 1_000_000;
+const GUEST_TRACKING_TOKEN_BYTES = 32;
+
+function guestTrackingPepper() {
+  return String(process.env.GUEST_TRACKING_TOKEN_PEPPER || process.env.JWT_SECRET || 'rps-guest-tracking-pepper');
+}
+
+function createGuestTrackingTokenPlain() {
+  return crypto.randomBytes(GUEST_TRACKING_TOKEN_BYTES).toString('base64url');
+}
+
+function hashGuestTrackingToken(token) {
+  return crypto
+    .createHash('sha256')
+    .update(`${String(token || '')}:${guestTrackingPepper()}`)
+    .digest('hex');
+}
+
+function buildGuestTrackingUrl(req, orderId, token) {
+  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim();
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+  const origin = host ? `${proto}://${host}` : '';
+  const path = `/guest-orders/${encodeURIComponent(String(orderId))}?token=${encodeURIComponent(token)}`;
+  return origin ? `${origin}${path}` : path;
+}
 
 function itemImageUrlFromCartItem(item) {
   return item.image_url || item.product_image || item.productImage || null;
@@ -483,6 +508,8 @@ const createOrderWithPaymentIntent = async (req, res) => {
   try {
     const userId = req.user?.id ?? null;
     let guestCheckout = null;
+    let guestTrackingToken = null;
+    let guestTrackingTokenHash = null;
     if (!userId) {
       const parsed = parseGuestCheckout(req.body);
       if (parsed.error) {
@@ -493,6 +520,8 @@ const createOrderWithPaymentIntent = async (req, res) => {
       if (guestSid) {
         guestCheckout = { ...guestCheckout, guestSessionId: guestSid };
       }
+      guestTrackingToken = createGuestTrackingTokenPlain();
+      guestTrackingTokenHash = hashGuestTrackingToken(guestTrackingToken);
     }
 
     const cartItems = await loadServerCartForCheckout(req, userId);
@@ -591,6 +620,7 @@ const createOrderWithPaymentIntent = async (req, res) => {
       orderNumber,
       totalAmount,
       guestCheckout,
+      guestTrackingTokenHash,
       orderItems,
       shippingAddressId,
       billingAddressId,
@@ -612,6 +642,9 @@ const createOrderWithPaymentIntent = async (req, res) => {
         orderId,
         orderNumber: savedOrderNumber,
         clientSecret: null,
+        guestTrackingToken: guestTrackingToken || undefined,
+        guestTrackingUrl:
+          guestTrackingToken && !userId ? buildGuestTrackingUrl(req, orderId, guestTrackingToken) : undefined,
         stripePaymentSkipped: true,
         subtotal: totals.subtotal,
         shipping: totals.shipping,
@@ -642,6 +675,9 @@ const createOrderWithPaymentIntent = async (req, res) => {
       orderId,
       orderNumber: savedOrderNumber,
       clientSecret: paymentIntent.client_secret,
+      guestTrackingToken: guestTrackingToken || undefined,
+      guestTrackingUrl:
+        guestTrackingToken && !userId ? buildGuestTrackingUrl(req, orderId, guestTrackingToken) : undefined,
       stripePaymentSkipped: false,
       subtotal: totals.subtotal,
       shipping: totals.shipping,
@@ -656,6 +692,21 @@ const createOrderWithPaymentIntent = async (req, res) => {
       message: error.message || 'Failed to create payment intent',
       error: error.message,
     });
+  }
+};
+
+const getGuestOrderByIdWithToken = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const token = String(req.query?.token || '').trim();
+    if (!token) return res.status(400).json({ message: 'token is required' });
+    const tokenHash = hashGuestTrackingToken(token);
+    const order = await orderRepository.findGuestOrderByIdAndTokenHash(id, tokenHash);
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+    return res.json({ order });
+  } catch (error) {
+    console.error('Get guest order by token error:', error);
+    return res.status(500).json({ message: 'Failed to fetch guest order', error: error.message });
   }
 };
 
@@ -768,6 +819,42 @@ const requestOrderCancellation = async (req, res) => {
   }
 };
 
+const requestGuestOrderCancellation = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const token = String(req.query?.token || '').trim();
+    if (!token) return res.status(400).json({ message: 'token is required' });
+    const tokenHash = hashGuestTrackingToken(token);
+    const order = await orderRepository.findGuestOrderByIdAndTokenHash(id, tokenHash);
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+
+    const current = String(order.status || '')
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, '_');
+
+    if (current === 'cancellation_requested') {
+      return res.status(409).json({ message: 'Cancellation already requested for this order.' });
+    }
+    if (
+      current === 'cancelled' ||
+      current === 'refunded' ||
+      current === 'awaiting_refund' ||
+      current === 'shipped' ||
+      current === 'completed'
+    ) {
+      return res.status(400).json({ message: 'This order cannot be cancelled at its current stage.' });
+    }
+
+    const updated = await orderRepository.updateOrderStatusById(id, 'cancellation_requested');
+    if (!updated) return res.status(404).json({ message: 'Order not found' });
+    return res.json({ order: updated });
+  } catch (error) {
+    console.error('Request guest order cancellation error:', error);
+    return res.status(500).json({ message: 'Failed to request cancellation', error: error.message });
+  }
+};
+
 const refundOrderAdmin = async (req, res) => {
   try {
     if (!stripe) {
@@ -874,8 +961,10 @@ module.exports = {
   deleteOrderAdmin,
   createOrderFromCartItem,
   createOrderWithPaymentIntent,
+  getGuestOrderByIdWithToken,
   confirmStripePayment,
   handleStripeWebhook,
   requestOrderCancellation,
+  requestGuestOrderCancellation,
   refundOrderAdmin,
 };

@@ -89,6 +89,8 @@ CREATE TABLE IF NOT EXISTS orders (
     payment_status VARCHAR(50) DEFAULT 'pending', -- pending, paid, failed, refunded
     notes TEXT,
     order_tracking_id VARCHAR(255),
+    guest_tracking_token_hash VARCHAR(128),
+    guest_tracking_token_created_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
