@@ -117,6 +117,7 @@ const shippingRatesRoutes = require('./routes/shippingRates');
 const storePickupAddressRoutes = require('./routes/storePickupAddresses');
 const taxRoutes = require('./routes/taxes');
 const artworkRoutes = require('./routes/artworks');
+const reportsRoutes = require('./routes/reports');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -196,6 +197,7 @@ app.use('/api/shipping-rates', shippingRatesRoutes);
 app.use('/api/store-pickup-addresses', storePickupAddressRoutes);
 app.use('/api/taxes', taxRoutes);
 app.use('/api/artworks', artworkRoutes);
+app.use('/api/reports', reportsRoutes);
 
 // 404 handler
 app.use((req, res) => {
