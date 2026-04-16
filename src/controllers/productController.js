@@ -368,6 +368,10 @@ const createProduct = async (req, res) => {
       name,
       slug,
       description,
+      spec,
+      file_setup,
+      installation_guide,
+      faq,
       category_id,
       subcategory,
       price,
@@ -393,6 +397,7 @@ const createProduct = async (req, res) => {
     const slugVal = slug || name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') + '-' + Date.now();
     const isActiveVal = (is_active === undefined || is_active === null) ? true : (is_active !== false && is_active !== 'false');
     const propsVal = Array.isArray(properties) ? JSON.stringify(properties) : (typeof properties === 'string' ? properties : '[]');
+    const faqVal = Array.isArray(faq) ? JSON.stringify(faq) : (typeof faq === 'string' ? faq : '[]');
     const galleryFromBody = normalizeGalleryArrayInput(gallery_images);
     const galleryFinal = galleryFromBody.length ? galleryFromBody : (image_url ? [String(image_url).trim()] : []);
     const imageUrlFinal = galleryFinal[0] || null;
@@ -410,13 +415,17 @@ const createProduct = async (req, res) => {
     }
 
     const result = await pool.query(
-      `INSERT INTO products (name, slug, description, category_id, subcategory, price, price_per_sqft, min_charge, material, image_url, is_new, is_active, sku, properties, gallery_images, pricing_mode, size_mode, base_unit, min_width, max_width, min_height, max_height)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16, $17, $18, $19, $20, $21, $22)
+      `INSERT INTO products (name, slug, description, spec, file_setup, installation_guide, faq, category_id, subcategory, price, price_per_sqft, min_charge, material, image_url, is_new, is_active, sku, properties, gallery_images, pricing_mode, size_mode, base_unit, min_width, max_width, min_height, max_height)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb, $20, $21, $22, $23, $24, $25, $26)
        RETURNING *`,
       [
         name,
         slugVal,
         description || null,
+        spec || null,
+        file_setup || null,
+        installation_guide || null,
+        faqVal,
         category_id || null,
         subcategory || null,
         price != null ? parseFloat(price) : null,
@@ -458,6 +467,9 @@ const updateProduct = async (req, res) => {
     const nameVal = req.body.name !== undefined ? req.body.name : row.name;
     const slugVal = req.body.slug !== undefined ? req.body.slug : row.slug;
     const descriptionVal = req.body.description !== undefined ? req.body.description : row.description;
+    const specVal = req.body.spec !== undefined ? req.body.spec : row.spec;
+    const fileSetupVal = req.body.file_setup !== undefined ? req.body.file_setup : row.file_setup;
+    const installationGuideVal = req.body.installation_guide !== undefined ? req.body.installation_guide : row.installation_guide;
     const categoryIdVal = req.body.category_id !== undefined ? (req.body.category_id || null) : row.category_id;
     const subcategoryVal = req.body.subcategory !== undefined ? req.body.subcategory : row.subcategory;
     const priceVal = req.body.price !== undefined ? (req.body.price != null ? parseFloat(req.body.price) : null) : row.price;
@@ -487,6 +499,9 @@ const updateProduct = async (req, res) => {
     const propertiesVal = req.body.properties !== undefined
       ? (Array.isArray(req.body.properties) ? JSON.stringify(req.body.properties) : (typeof req.body.properties === 'string' ? req.body.properties : (row.properties ? JSON.stringify(row.properties) : '[]')))
       : (row.properties ? JSON.stringify(row.properties) : '[]');
+    const faqVal = req.body.faq !== undefined
+      ? (Array.isArray(req.body.faq) ? JSON.stringify(req.body.faq) : (typeof req.body.faq === 'string' ? req.body.faq : (row.faq ? JSON.stringify(row.faq) : '[]')))
+      : (row.faq ? JSON.stringify(row.faq) : '[]');
     const parsedSizeOptions = req.body.size_options !== undefined
       ? parseSizeOptionsInput(req.body.size_options)
       : await getProductSizeOptions(id);
@@ -494,8 +509,8 @@ const updateProduct = async (req, res) => {
       return res.status(400).json({ message: 'size_options are required when size_mode is predefined.' });
     }
     const result = await pool.query(
-      `UPDATE products SET name = $1, slug = $2, description = $3, category_id = $4, subcategory = $5, price = $6, price_per_sqft = $7, min_charge = $8, material = $9, image_url = $10, is_new = $11, is_active = $12, sku = $13, properties = $14::jsonb, gallery_images = $15::jsonb, pricing_mode = $16, size_mode = $17, base_unit = $18, min_width = $19, max_width = $20, min_height = $21, max_height = $22, updated_at = CURRENT_TIMESTAMP WHERE id = $23 RETURNING *`,
-      [nameVal, slugVal, descriptionVal, categoryIdVal, subcategoryVal, priceVal, pricePerSqftVal, minChargeVal, materialVal, imageUrlVal, isNewVal, isActiveVal, skuVal, propertiesVal, galleryJson, pricingModeVal, sizeModeVal, baseUnitVal, minWidthVal, maxWidthVal, minHeightVal, maxHeightVal, id]
+      `UPDATE products SET name = $1, slug = $2, description = $3, spec = $4, file_setup = $5, installation_guide = $6, faq = $7::jsonb, category_id = $8, subcategory = $9, price = $10, price_per_sqft = $11, min_charge = $12, material = $13, image_url = $14, is_new = $15, is_active = $16, sku = $17, properties = $18::jsonb, gallery_images = $19::jsonb, pricing_mode = $20, size_mode = $21, base_unit = $22, min_width = $23, max_width = $24, min_height = $25, max_height = $26, updated_at = CURRENT_TIMESTAMP WHERE id = $27 RETURNING *`,
+      [nameVal, slugVal, descriptionVal, specVal, fileSetupVal, installationGuideVal, faqVal, categoryIdVal, subcategoryVal, priceVal, pricePerSqftVal, minChargeVal, materialVal, imageUrlVal, isNewVal, isActiveVal, skuVal, propertiesVal, galleryJson, pricingModeVal, sizeModeVal, baseUnitVal, minWidthVal, maxWidthVal, minHeightVal, maxHeightVal, id]
     );
     const updated = result.rows[0];
     await replaceProductSizeOptions(id, parsedSizeOptions);

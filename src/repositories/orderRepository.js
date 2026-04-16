@@ -137,9 +137,46 @@ const SQL = {
        LEFT JOIN addresses ba ON o.billing_address_id = ba.id
        WHERE o.id = $1 AND o.user_id = $2
        GROUP BY o.id`,
+  ORDER_BY_ID_PUBLIC: `SELECT o.*,
+      MAX(sa.street_address) as shipping_street_address,
+      MAX(sa.address_line2) as shipping_address_line2,
+      MAX(sa.city) as shipping_city,
+      MAX(sa.state) as shipping_state,
+      MAX(sa.postcode) as shipping_postcode,
+      MAX(sa.country) as shipping_country,
+      MAX(ba.street_address) as billing_street_address,
+      MAX(ba.address_line2) as billing_address_line2,
+      MAX(ba.city) as billing_city,
+      MAX(ba.state) as billing_state,
+      MAX(ba.postcode) as billing_postcode,
+      MAX(ba.country) as billing_country,
+      COALESCE(
+        json_agg(
+          json_build_object(
+            'id', oi.id,
+            'product_id', oi.product_id,
+            'product_name', oi.product_name,
+            'job_name', oi.job_name,
+            'quantity', oi.quantity,
+            'unit_price', oi.unit_price,
+            'total_price', oi.total_price,
+            'image_url', COALESCE(oi.image_url, p.image_url),
+            'width_inches', oi.width_inches,
+            'height_inches', oi.height_inches
+          )
+        ) FILTER (WHERE oi.id IS NOT NULL),
+        '[]'::json
+      ) as items
+      FROM orders o
+      LEFT JOIN order_items oi ON o.id = oi.order_id
+      LEFT JOIN products p ON oi.product_id = p.id
+      LEFT JOIN addresses sa ON o.shipping_address_id = sa.id
+      LEFT JOIN addresses ba ON o.billing_address_id = ba.id
+      WHERE o.id = $1
+      GROUP BY o.id`,
   ALL_ORDERS_ADMIN_WITH_STATUS: `SELECT o.*, 
-      u.email as user_email,
-      u.full_name as user_name,
+      COALESCE(u.email, o.guest_checkout->>'email') as user_email,
+      COALESCE(u.full_name, o.guest_checkout->>'fullName') as user_name,
       COALESCE(
         json_agg(
           json_build_object(
@@ -161,11 +198,11 @@ const SQL = {
       LEFT JOIN users u ON o.user_id = u.id
       LEFT JOIN order_items oi ON o.id = oi.order_id
       LEFT JOIN products p ON oi.product_id = p.id
-      WHERE o.status = $1
-      GROUP BY o.id, u.email, u.full_name ORDER BY o.created_at DESC LIMIT $2 OFFSET $3`,
+      WHERE 1=1 AND o.status = $1
+      GROUP BY o.id, u.email, u.full_name, o.guest_checkout ORDER BY o.created_at DESC LIMIT $2 OFFSET $3`,
   ALL_ORDERS_ADMIN: `SELECT o.*, 
-      u.email as user_email,
-      u.full_name as user_name,
+      COALESCE(u.email, o.guest_checkout->>'email') as user_email,
+      COALESCE(u.full_name, o.guest_checkout->>'fullName') as user_name,
       COALESCE(
         json_agg(
           json_build_object(
@@ -187,7 +224,8 @@ const SQL = {
       LEFT JOIN users u ON o.user_id = u.id
       LEFT JOIN order_items oi ON o.id = oi.order_id
       LEFT JOIN products p ON oi.product_id = p.id
-      GROUP BY o.id, u.email, u.full_name ORDER BY o.created_at DESC LIMIT $1 OFFSET $2`,
+      WHERE 1=1
+      GROUP BY o.id, u.email, u.full_name, o.guest_checkout ORDER BY o.created_at DESC LIMIT $1 OFFSET $2`,
   ORDER_ADMIN_DETAIL_WITH_JOB: `SELECT o.*, 
        u.email as user_email,
        u.full_name as user_name,
@@ -303,8 +341,8 @@ const SQL = {
   INSERT_ORDER_ITEM_ADMIN_NO_JOB: `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price, image_url, width_inches, height_inches)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
   SELECT_ORDER_BY_ID: `SELECT o.* FROM orders o WHERE o.id = $1`,
-  INSERT_ORDER_STRIPE_PENDING: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, payment_status, notes, guest_checkout, shipping_address_id, billing_address_id, shipping_method, shipping_charge, shipping_mode, store_pickup_address_id, subtotal_amount, tax_id, tax_name, tax_percentage, tax_amount)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+  INSERT_ORDER_STRIPE_PENDING: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, payment_status, notes, guest_checkout, guest_tracking_token_hash, guest_tracking_token_created_at, shipping_address_id, billing_address_id, shipping_method, shipping_charge, shipping_mode, store_pickup_address_id, subtotal_amount, tax_id, tax_name, tax_percentage, tax_amount)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
          RETURNING id, order_number`,
   UPDATE_ORDER_STRIPE_PAID: `UPDATE orders SET payment_status = $1, status = $2, notes = COALESCE(notes, '') || ' | Paid via Stripe ' || $3 WHERE id = $4`,
   UPDATE_ORDER_PAID_WITHOUT_STRIPE: `UPDATE orders SET payment_status = $1, status = $2, payment_method = $3, notes = COALESCE(notes, '') || $4 WHERE id = $5`,
@@ -324,6 +362,22 @@ const SQL = {
       AND oi.order_id = $2
       AND o.user_id = $3
       AND lower(trim(COALESCE(o.status, ''))) IN ('awaiting_artwork', 'awaiting_customer_approval', 'on_hold')`,
+  UPDATE_ORDER_REFUNDED: `UPDATE orders
+      SET status = $1,
+          payment_status = $2,
+          stripe_refund_id = $3,
+          refund_amount = $4,
+          refunded_at = $5,
+          refund_currency = $6,
+          refund_reason = $7,
+          updated_at = CURRENT_TIMESTAMP,
+          notes = COALESCE(notes, '') || $8
+      WHERE id = $9
+      RETURNING *`,
+  UPDATE_ORDER_STRIPE_PAYMENT_INTENT: `UPDATE orders
+      SET stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, $1),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = $2`,
 };
 
 function itemImageUrlFromBody(item) {
@@ -437,6 +491,14 @@ async function findOrdersForUser(userId, opts = {}) {
  */
 async function findOrderByIdAndUserId(orderId, userId) {
   const result = await pool.query(SQL.ORDER_BY_ID_AND_USER, [orderId, userId]);
+  const row = result.rows[0];
+  if (!row) return null;
+  const [normalized] = normalizeUserOrderRows([row]);
+  return normalized;
+}
+
+async function findOrderById(orderId) {
+  const result = await pool.query(SQL.ORDER_BY_ID_PUBLIC, [orderId]);
   const row = result.rows[0];
   if (!row) return null;
   const [normalized] = normalizeUserOrderRows([row]);
@@ -719,6 +781,7 @@ async function createPendingStripeOrderWithItems({
   orderNumber,
   totalAmount,
   guestCheckout,
+  guestTrackingTokenHash = null,
   orderItems,
   shippingAddressId = null,
   billingAddressId = null,
@@ -741,6 +804,8 @@ async function createPendingStripeOrderWithItems({
       'pending',
       'Checkout via Stripe',
       guestCheckout,
+      guestTrackingTokenHash,
+      guestTrackingTokenHash ? new Date().toISOString() : null,
       shippingAddressId,
       billingAddressId,
       shippingMethod,
@@ -779,8 +844,25 @@ async function createPendingStripeOrderWithItems({
   }
 }
 
-async function markOrderPaidFromStripe(orderId, paidAtIso) {
+async function findGuestOrderByIdAndTokenHash(orderId, tokenHash) {
+  if (!tokenHash) return null;
+  const order = await findOrderById(orderId);
+  if (!order) return null;
+  const currentHash = String(order.guest_tracking_token_hash || '');
+  if (!currentHash || currentHash !== String(tokenHash)) return null;
+  return order;
+}
+
+async function markOrderPaidFromStripe(orderId, paidAtIso, paymentIntentId = null) {
   await pool.query(SQL.UPDATE_ORDER_STRIPE_PAID, ['paid', 'awaiting_artwork', paidAtIso, orderId]);
+  if (paymentIntentId) {
+    await pool.query(SQL.UPDATE_ORDER_STRIPE_PAYMENT_INTENT, [String(paymentIntentId), orderId]);
+  }
+}
+
+async function setOrderStripePaymentIntent(orderId, paymentIntentId) {
+  if (!paymentIntentId) return;
+  await pool.query(SQL.UPDATE_ORDER_STRIPE_PAYMENT_INTENT, [String(paymentIntentId), orderId]);
 }
 
 async function markOrderPaidWithoutStripe(orderId) {
@@ -813,10 +895,37 @@ async function selectOrderItemForCustomerArtwork(orderId, itemId, userId) {
   return r.rows[0] ?? null;
 }
 
+async function markOrderRefunded({
+  orderId,
+  refundId,
+  refundAmount,
+  refundedAtIso,
+  refundCurrency,
+  refundReason,
+}) {
+  const suffix = ` | Refunded via Stripe ${refundId} (${refundAmount} ${String(
+    refundCurrency || 'usd'
+  ).toUpperCase()}) ${refundedAtIso}`;
+  const result = await pool.query(SQL.UPDATE_ORDER_REFUNDED, [
+    'refunded',
+    'refunded',
+    refundId,
+    refundAmount,
+    refundedAtIso,
+    refundCurrency || 'usd',
+    refundReason || null,
+    suffix,
+    orderId,
+  ]);
+  return result.rows[0] ?? null;
+}
+
 module.exports = {
   createOrderWithItems,
   findOrdersForUser,
   findOrderByIdAndUserId,
+  findOrderById,
+  findGuestOrderByIdAndTokenHash,
   findAllOrdersAdmin,
   findOrderByIdAdmin,
   updateOrderStatusById,
@@ -827,9 +936,11 @@ module.exports = {
   createOrderFromCartItemAdminMultiJob,
   createPendingStripeOrderWithItems,
   markOrderPaidFromStripe,
+  setOrderStripePaymentIntent,
   markOrderPaidWithoutStripe,
   updateCustomerArtworkForOrderItem,
   selectOrderItemForCustomerArtwork,
+  markOrderRefunded,
   verifyAddressBelongsToUser,
   verifyStorePickupAddressExists,
   getOrderUserId,

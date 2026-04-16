@@ -12,7 +12,11 @@ const {
   deleteOrderAdmin,
   createOrderFromCartItem,
   createOrderWithPaymentIntent,
+  getGuestOrderByIdWithToken,
   confirmStripePayment,
+  requestOrderCancellation,
+  requestGuestOrderCancellation,
+  refundOrderAdmin,
 } = require('../controllers/orderController');
 const { authenticateToken, optionalAuth, requireAdmin } = require('../middleware/auth');
 const { uploadArtworkFile } = require('../middleware/upload');
@@ -20,6 +24,9 @@ const { uploadArtworkFile } = require('../middleware/upload');
 router.post('/', optionalAuth, createOrder);
 router.post('/create-payment-intent', optionalAuth, createOrderWithPaymentIntent);
 router.post('/confirm-stripe-payment', optionalAuth, confirmStripePayment);
+router.get('/guest/:id', getGuestOrderByIdWithToken);
+router.post('/guest/:id/request-cancellation', requestGuestOrderCancellation);
+router.post('/:id/request-cancellation', authenticateToken, requestOrderCancellation);
 router.get('/', authenticateToken, getOrders);
 router.post(
   '/:orderId/items/:itemId/approve-artwork',
@@ -37,6 +44,7 @@ router.get('/admin/all', authenticateToken, requireAdmin, getAllOrders);
 router.post('/admin/from-cart', authenticateToken, requireAdmin, createOrderFromCartItem);
 router.get('/admin/:id', authenticateToken, requireAdmin, getOrderByIdAdmin);
 router.put('/admin/:id/status', authenticateToken, requireAdmin, updateOrderStatus);
+router.post('/admin/:id/refund', authenticateToken, requireAdmin, refundOrderAdmin);
 router.put('/admin/:id/order-tracking', authenticateToken, requireAdmin, updateOrderTrackingId);
 router.delete('/admin/:id', authenticateToken, requireAdmin, deleteOrderAdmin);
 // This route should be last to avoid conflicts

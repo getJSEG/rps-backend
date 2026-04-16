@@ -6,6 +6,7 @@ const {
 const cartRepository = require('../repositories/cartRepository');
 const storePickupAddressRepository = require('../repositories/storePickupAddressRepository');
 const { computeShippingFromCartItems, computeTaxAndTotal } = require('../services/orderTotalsService');
+const crypto = require('crypto');
 const Stripe = require('stripe');
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 
@@ -34,6 +35,7 @@ function shouldUseStripePaymentIntent() {
 const VALID_ORDER_STATUSES = [
   'pending_payment',
   'awaiting_artwork',
+  'cancellation_requested',
   'on_hold',
   'awaiting_customer_approval',
   'printing',
@@ -49,7 +51,7 @@ const VALID_ORDER_STATUSES = [
 /** Terminal job status: cannot be changed via admin API. */
 function isOrderStatusLocked(currentStatus) {
   const s = String(currentStatus || '').toLowerCase();
-  return s === 'completed' || s === 'complete' || s === 'delivered';
+  return s === 'completed' || s === 'complete' || s === 'delivered' || s === 'refunded';
 }
 
 function generateOrderNumber() {
@@ -65,6 +67,30 @@ function roundMoney2(n) {
 
 const MAX_ORDER_MONEY = 999_999_999_999.99;
 const MAX_LINE_QTY = 1_000_000;
+const GUEST_TRACKING_TOKEN_BYTES = 32;
+
+function guestTrackingPepper() {
+  return String(process.env.GUEST_TRACKING_TOKEN_PEPPER || process.env.JWT_SECRET || 'rps-guest-tracking-pepper');
+}
+
+function createGuestTrackingTokenPlain() {
+  return crypto.randomBytes(GUEST_TRACKING_TOKEN_BYTES).toString('base64url');
+}
+
+function hashGuestTrackingToken(token) {
+  return crypto
+    .createHash('sha256')
+    .update(`${String(token || '')}:${guestTrackingPepper()}`)
+    .digest('hex');
+}
+
+function buildGuestTrackingUrl(req, orderId, token) {
+  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim();
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+  const origin = host ? `${proto}://${host}` : '';
+  const path = `/guest-orders/${encodeURIComponent(String(orderId))}?token=${encodeURIComponent(token)}`;
+  return origin ? `${origin}${path}` : path;
+}
 
 function itemImageUrlFromCartItem(item) {
   return item.image_url || item.product_image || item.productImage || null;
@@ -533,6 +559,8 @@ const createOrderWithPaymentIntent = async (req, res) => {
   try {
     const userId = req.user?.id ?? null;
     let guestCheckout = null;
+    let guestTrackingToken = null;
+    let guestTrackingTokenHash = null;
     if (!userId) {
       const parsed = parseGuestCheckout(req.body);
       if (parsed.error) {
@@ -543,6 +571,8 @@ const createOrderWithPaymentIntent = async (req, res) => {
       if (guestSid) {
         guestCheckout = { ...guestCheckout, guestSessionId: guestSid };
       }
+      guestTrackingToken = createGuestTrackingTokenPlain();
+      guestTrackingTokenHash = hashGuestTrackingToken(guestTrackingToken);
     }
 
     const cartItems = await loadServerCartForCheckout(req, userId);
@@ -641,6 +671,7 @@ const createOrderWithPaymentIntent = async (req, res) => {
       orderNumber,
       totalAmount,
       guestCheckout,
+      guestTrackingTokenHash,
       orderItems,
       shippingAddressId,
       billingAddressId,
@@ -662,6 +693,9 @@ const createOrderWithPaymentIntent = async (req, res) => {
         orderId,
         orderNumber: savedOrderNumber,
         clientSecret: null,
+        guestTrackingToken: guestTrackingToken || undefined,
+        guestTrackingUrl:
+          guestTrackingToken && !userId ? buildGuestTrackingUrl(req, orderId, guestTrackingToken) : undefined,
         stripePaymentSkipped: true,
         subtotal: totals.subtotal,
         shipping: totals.shipping,
@@ -686,11 +720,15 @@ const createOrderWithPaymentIntent = async (req, res) => {
       automatic_payment_methods: { enabled: true },
       metadata,
     });
+    await orderRepository.setOrderStripePaymentIntent(orderId, paymentIntent.id);
 
     res.status(201).json({
       orderId,
       orderNumber: savedOrderNumber,
       clientSecret: paymentIntent.client_secret,
+      guestTrackingToken: guestTrackingToken || undefined,
+      guestTrackingUrl:
+        guestTrackingToken && !userId ? buildGuestTrackingUrl(req, orderId, guestTrackingToken) : undefined,
       stripePaymentSkipped: false,
       subtotal: totals.subtotal,
       shipping: totals.shipping,
@@ -705,6 +743,21 @@ const createOrderWithPaymentIntent = async (req, res) => {
       message: error.message || 'Failed to create payment intent',
       error: error.message,
     });
+  }
+};
+
+const getGuestOrderByIdWithToken = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const token = String(req.query?.token || '').trim();
+    if (!token) return res.status(400).json({ message: 'token is required' });
+    const tokenHash = hashGuestTrackingToken(token);
+    const order = await orderRepository.findGuestOrderByIdAndTokenHash(id, tokenHash);
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+    return res.json({ order });
+  } catch (error) {
+    console.error('Get guest order by token error:', error);
+    return res.status(500).json({ message: 'Failed to fetch guest order', error: error.message });
   }
 };
 
@@ -736,7 +789,7 @@ const confirmStripePayment = async (req, res) => {
       return res.status(400).json({ message: 'PaymentIntent does not match this order' });
     }
 
-    await orderRepository.markOrderPaidFromStripe(orderIdNum, new Date().toISOString());
+    await orderRepository.markOrderPaidFromStripe(orderIdNum, new Date().toISOString(), pi.id);
     return res.status(200).json({ ok: true, orderId: orderIdNum, paymentStatus: 'paid' });
   } catch (error) {
     console.error('Confirm Stripe payment error:', error);
@@ -764,7 +817,7 @@ const handleStripeWebhook = async (req, res) => {
     const orderId = pi.metadata?.orderId;
     if (orderId) {
       try {
-        await orderRepository.markOrderPaidFromStripe(orderId, new Date().toISOString());
+        await orderRepository.markOrderPaidFromStripe(orderId, new Date().toISOString(), pi.id);
         const buyerId = await orderRepository.getOrderUserId(orderId);
         if (buyerId) {
           await cartRepository.clearCartByUserId(buyerId);
@@ -783,6 +836,171 @@ const handleStripeWebhook = async (req, res) => {
   res.status(200).send('ok');
 };
 
+const requestOrderCancellation = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+    const order = await orderRepository.findOrderByIdAndUserId(id, userId);
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+
+    const current = String(order.status || '')
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, '_');
+
+    if (current === 'cancellation_requested') {
+      return res.status(409).json({ message: 'Cancellation already requested for this order.' });
+    }
+    if (
+      current === 'cancelled' ||
+      current === 'refunded' ||
+      current === 'awaiting_refund' ||
+      current === 'shipped' ||
+      current === 'completed'
+    ) {
+      return res.status(400).json({ message: 'This order cannot be cancelled at its current stage.' });
+    }
+
+    const updated = await orderRepository.updateOrderStatusById(id, 'cancellation_requested');
+    if (!updated) return res.status(404).json({ message: 'Order not found' });
+    return res.json({ order: updated });
+  } catch (error) {
+    console.error('Request order cancellation error:', error);
+    return res.status(500).json({ message: 'Failed to request cancellation', error: error.message });
+  }
+};
+
+const requestGuestOrderCancellation = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const token = String(req.query?.token || '').trim();
+    if (!token) return res.status(400).json({ message: 'token is required' });
+    const tokenHash = hashGuestTrackingToken(token);
+    const order = await orderRepository.findGuestOrderByIdAndTokenHash(id, tokenHash);
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+
+    const current = String(order.status || '')
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, '_');
+
+    if (current === 'cancellation_requested') {
+      return res.status(409).json({ message: 'Cancellation already requested for this order.' });
+    }
+    if (
+      current === 'cancelled' ||
+      current === 'refunded' ||
+      current === 'awaiting_refund' ||
+      current === 'shipped' ||
+      current === 'completed'
+    ) {
+      return res.status(400).json({ message: 'This order cannot be cancelled at its current stage.' });
+    }
+
+    const updated = await orderRepository.updateOrderStatusById(id, 'cancellation_requested');
+    if (!updated) return res.status(404).json({ message: 'Order not found' });
+    return res.json({ order: updated });
+  } catch (error) {
+    console.error('Request guest order cancellation error:', error);
+    return res.status(500).json({ message: 'Failed to request cancellation', error: error.message });
+  }
+};
+
+const refundOrderAdmin = async (req, res) => {
+  try {
+    if (!stripe) {
+      return res.status(503).json({ message: 'Stripe is not configured. Set STRIPE_SECRET_KEY in .env' });
+    }
+    const { id } = req.params;
+    const order = await orderRepository.findOrderByIdAdmin(id);
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+
+    const status = String(order.status || '')
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, '_');
+    const allowedStatuses = new Set(['awaiting_refund', 'cancellation_requested']);
+    if (!allowedStatuses.has(status)) {
+      return res.status(400).json({
+        message: 'Refund is allowed only when order status is Awaiting refund or Cancellation requested.',
+      });
+    }
+    if (isOrderStatusLocked(status)) {
+      return res.status(400).json({ message: 'This order is locked and cannot be changed.' });
+    }
+
+    let paymentIntentId = String(order.stripe_payment_intent_id || '').trim();
+    if (!paymentIntentId) {
+      // Backfill older orders by searching Stripe metadata.
+      try {
+        const byOrderId = await stripe.paymentIntents.search({
+          query: `metadata['orderId']:'${String(order.id)}' AND status:'succeeded'`,
+          limit: 1,
+        });
+        if (Array.isArray(byOrderId?.data) && byOrderId.data.length > 0) {
+          paymentIntentId = String(byOrderId.data[0].id || '').trim();
+        }
+      } catch (e) {
+        console.warn('Stripe payment intent search by orderId failed:', e.message);
+      }
+      if (!paymentIntentId) {
+        try {
+          const byOrderNumber = await stripe.paymentIntents.search({
+            query: `metadata['orderNumber']:'${String(order.order_number || '')}' AND status:'succeeded'`,
+            limit: 1,
+          });
+          if (Array.isArray(byOrderNumber?.data) && byOrderNumber.data.length > 0) {
+            paymentIntentId = String(byOrderNumber.data[0].id || '').trim();
+          }
+        } catch (e) {
+          console.warn('Stripe payment intent search by orderNumber failed:', e.message);
+        }
+      }
+      if (paymentIntentId) {
+        await orderRepository.setOrderStripePaymentIntent(id, paymentIntentId);
+      }
+    }
+    if (!paymentIntentId) {
+      return res.status(400).json({
+        message:
+          'Stripe payment intent ID is missing for this order and could not be auto-resolved from Stripe metadata.',
+      });
+    }
+
+    const refund = await stripe.refunds.create({
+      payment_intent: paymentIntentId,
+      reason: 'requested_by_customer',
+      metadata: {
+        orderId: String(order.id),
+        orderNumber: String(order.order_number || ''),
+      },
+    });
+
+    const refundedAtIso = new Date(Number(refund.created || 0) * 1000 || Date.now()).toISOString();
+    const updated = await orderRepository.markOrderRefunded({
+      orderId: id,
+      refundId: refund.id,
+      refundAmount: Number(refund.amount || 0) / 100,
+      refundedAtIso,
+      refundCurrency: String(refund.currency || 'usd').toLowerCase(),
+      refundReason: refund.reason || 'requested_by_customer',
+    });
+
+    return res.json({
+      order: updated || { ...order, status: 'refunded' },
+      refund: {
+        id: refund.id,
+        amount: Number(refund.amount || 0) / 100,
+        currency: String(refund.currency || 'usd').toLowerCase(),
+        date: refundedAtIso,
+      },
+    });
+  } catch (error) {
+    console.error('Refund order admin error:', error);
+    return res.status(500).json({ message: 'Failed to process refund', error: error.message });
+  }
+};
+
 module.exports = {
   createOrder,
   getOrders,
@@ -795,6 +1013,10 @@ module.exports = {
   deleteOrderAdmin,
   createOrderFromCartItem,
   createOrderWithPaymentIntent,
+  getGuestOrderByIdWithToken,
   confirmStripePayment,
   handleStripeWebhook,
+  requestOrderCancellation,
+  requestGuestOrderCancellation,
+  refundOrderAdmin,
 };
