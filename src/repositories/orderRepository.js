@@ -16,7 +16,8 @@ const SQL = {
            'unit_price', oi.unit_price,
            'total_price', oi.total_price,
            'width_inches', oi.width_inches,
-           'height_inches', oi.height_inches
+           'height_inches', oi.height_inches,
+           'customer_artwork_url', oi.customer_artwork_url
          )) as items
          FROM orders o
          LEFT JOIN order_items oi ON o.id = oi.order_id
@@ -47,7 +48,8 @@ const SQL = {
             'total_price', oi.total_price,
             'image_url', COALESCE(oi.image_url, p.image_url),
             'width_inches', oi.width_inches,
-            'height_inches', oi.height_inches
+            'height_inches', oi.height_inches,
+            'customer_artwork_url', oi.customer_artwork_url
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
         '[]'::json
@@ -84,7 +86,8 @@ const SQL = {
             'total_price', oi.total_price,
             'image_url', COALESCE(oi.image_url, p.image_url),
             'width_inches', oi.width_inches,
-            'height_inches', oi.height_inches
+            'height_inches', oi.height_inches,
+            'customer_artwork_url', oi.customer_artwork_url
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
         '[]'::json
@@ -121,7 +124,8 @@ const SQL = {
              'total_price', oi.total_price,
              'image_url', COALESCE(oi.image_url, p.image_url),
              'width_inches', oi.width_inches,
-             'height_inches', oi.height_inches
+             'height_inches', oi.height_inches,
+             'customer_artwork_url', oi.customer_artwork_url
            )
          ) FILTER (WHERE oi.id IS NOT NULL),
          '[]'::json
@@ -147,7 +151,8 @@ const SQL = {
             'total_price', oi.total_price,
             'product_image', COALESCE(oi.image_url, p.image_url),
             'width_inches', oi.width_inches,
-            'height_inches', oi.height_inches
+            'height_inches', oi.height_inches,
+            'customer_artwork_url', oi.customer_artwork_url
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
         '[]'::json
@@ -156,7 +161,7 @@ const SQL = {
       LEFT JOIN users u ON o.user_id = u.id
       LEFT JOIN order_items oi ON o.id = oi.order_id
       LEFT JOIN products p ON oi.product_id = p.id
-      WHERE 1=1 AND o.status = $1
+      WHERE o.status = $1
       GROUP BY o.id, u.email, u.full_name ORDER BY o.created_at DESC LIMIT $2 OFFSET $3`,
   ALL_ORDERS_ADMIN: `SELECT o.*, 
       u.email as user_email,
@@ -172,7 +177,8 @@ const SQL = {
             'total_price', oi.total_price,
             'product_image', COALESCE(oi.image_url, p.image_url),
             'width_inches', oi.width_inches,
-            'height_inches', oi.height_inches
+            'height_inches', oi.height_inches,
+            'customer_artwork_url', oi.customer_artwork_url
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
         '[]'::json
@@ -181,7 +187,6 @@ const SQL = {
       LEFT JOIN users u ON o.user_id = u.id
       LEFT JOIN order_items oi ON o.id = oi.order_id
       LEFT JOIN products p ON oi.product_id = p.id
-      WHERE 1=1
       GROUP BY o.id, u.email, u.full_name ORDER BY o.created_at DESC LIMIT $1 OFFSET $2`,
   ORDER_ADMIN_DETAIL_WITH_JOB: `SELECT o.*, 
        u.email as user_email,
@@ -217,7 +222,8 @@ const SQL = {
              'product_subcategory', p.subcategory,
              'product_sku', p.sku,
              'width_inches', oi.width_inches,
-             'height_inches', oi.height_inches
+             'height_inches', oi.height_inches,
+             'customer_artwork_url', oi.customer_artwork_url
            )
          ) FILTER (WHERE oi.id IS NOT NULL),
          '[]'::json
@@ -264,7 +270,8 @@ const SQL = {
              'product_subcategory', p.subcategory,
              'product_sku', p.sku,
              'width_inches', oi.width_inches,
-             'height_inches', oi.height_inches
+             'height_inches', oi.height_inches,
+             'customer_artwork_url', oi.customer_artwork_url
            )
          ) FILTER (WHERE oi.id IS NOT NULL),
          '[]'::json
@@ -301,6 +308,22 @@ const SQL = {
          RETURNING id, order_number`,
   UPDATE_ORDER_STRIPE_PAID: `UPDATE orders SET payment_status = $1, status = $2, notes = COALESCE(notes, '') || ' | Paid via Stripe ' || $3 WHERE id = $4`,
   UPDATE_ORDER_PAID_WITHOUT_STRIPE: `UPDATE orders SET payment_status = $1, status = $2, payment_method = $3, notes = COALESCE(notes, '') || $4 WHERE id = $5`,
+  UPDATE_CUSTOMER_ARTWORK_ON_ORDER_ITEM: `UPDATE order_items oi
+    SET customer_artwork_url = $4
+    FROM orders o
+    WHERE oi.id = $1
+      AND oi.order_id = $2
+      AND o.id = oi.order_id
+      AND o.user_id = $3
+      AND lower(trim(COALESCE(o.status, ''))) IN ('awaiting_artwork', 'awaiting_customer_approval', 'on_hold')
+    RETURNING oi.id, oi.customer_artwork_url, oi.order_id`,
+  SELECT_ORDER_ITEM_FOR_CUSTOMER_ARTWORK: `SELECT oi.id, oi.order_id, oi.width_inches, oi.height_inches
+    FROM order_items oi
+    INNER JOIN orders o ON o.id = oi.order_id
+    WHERE oi.id = $1
+      AND oi.order_id = $2
+      AND o.user_id = $3
+      AND lower(trim(COALESCE(o.status, ''))) IN ('awaiting_artwork', 'awaiting_customer_approval', 'on_hold')`,
 };
 
 function itemImageUrlFromBody(item) {
@@ -420,18 +443,6 @@ async function findOrderByIdAndUserId(orderId, userId) {
   return normalized;
 }
 
-function normalizeAdminListOrders(rows) {
-  return rows.map((order) => {
-    const o = { ...order };
-    if (!o.items || !Array.isArray(o.items)) {
-      o.items = [];
-    } else {
-      o.items = o.items.filter((item) => item && item.id !== null);
-    }
-    return o;
-  });
-}
-
 /**
  * @param {{ status?: string, page?: number, limit?: number }} opts
  */
@@ -445,7 +456,7 @@ async function findAllOrdersAdmin(opts = {}) {
   } else {
     result = await pool.query(SQL.ALL_ORDERS_ADMIN, [limit, offset]);
   }
-  return normalizeAdminListOrders(result.rows);
+  return normalizeUserOrderRows(result.rows);
 }
 
 /**
@@ -629,8 +640,6 @@ async function createOrderFromCartItemAdmin(params) {
     }
     const fullOrder = await pool.query(SQL.SELECT_ORDER_BY_ID, [order.id]);
     return fullOrder.rows[0];
-  } catch (err) {
-    throw err;
   } finally {
     client.release();
   }
@@ -673,15 +682,6 @@ async function createOrderFromCartItemAdminMultiJob(params) {
   }
 }
 
-/**
- * @param {object} params
- * @param {number|null} params.userId
- * @param {string} params.orderNumber
- * @param {number} params.totalAmount
- * @param {object|null} params.guestCheckout
- * @param {Array<{product_id, product_name, job_name, quantity, unit_price, total_price, image_url}>} params.orderItems
- * @returns {Promise<{ orderId: number, orderNumber: string }>}
- */
 async function verifyAddressBelongsToUser(userId, addressId) {
   if (userId == null || addressId == null) return false;
   const r = await pool.query('SELECT id FROM addresses WHERE id = $1 AND user_id = $2', [
@@ -705,6 +705,15 @@ async function verifyStorePickupAddressExists(addressId) {
   return r.rows.length > 0;
 }
 
+/**
+ * @param {object} params
+ * @param {number|null} params.userId
+ * @param {string} params.orderNumber
+ * @param {number} params.totalAmount
+ * @param {object|null} params.guestCheckout
+ * @param {Array<{product_id, product_name, job_name, quantity, unit_price, total_price, image_url}>} params.orderItems
+ * @returns {Promise<{ orderId: number, orderNumber: string }>}
+ */
 async function createPendingStripeOrderWithItems({
   userId,
   orderNumber,
@@ -779,6 +788,31 @@ async function markOrderPaidWithoutStripe(orderId) {
   await pool.query(SQL.UPDATE_ORDER_PAID_WITHOUT_STRIPE, ['paid', 'awaiting_artwork', 'manual', suffix, orderId]);
 }
 
+/**
+ * @param {number|string} orderId
+ * @param {number|string} itemId
+ * @param {number} userId
+ * @param {string} artworkUrl
+ * @returns {Promise<{ id: number, customer_artwork_url: string, order_id: number }|null>}
+ */
+async function updateCustomerArtworkForOrderItem(orderId, itemId, userId, artworkUrl) {
+  const r = await pool.query(SQL.UPDATE_CUSTOMER_ARTWORK_ON_ORDER_ITEM, [
+    itemId,
+    orderId,
+    userId,
+    artworkUrl,
+  ]);
+  return r.rows[0] ?? null;
+}
+
+/**
+ * @returns {Promise<{ id: number, order_id: number, width_inches: number|null, height_inches: number|null }|null>}
+ */
+async function selectOrderItemForCustomerArtwork(orderId, itemId, userId) {
+  const r = await pool.query(SQL.SELECT_ORDER_ITEM_FOR_CUSTOMER_ARTWORK, [itemId, orderId, userId]);
+  return r.rows[0] ?? null;
+}
+
 module.exports = {
   createOrderWithItems,
   findOrdersForUser,
@@ -794,6 +828,8 @@ module.exports = {
   createPendingStripeOrderWithItems,
   markOrderPaidFromStripe,
   markOrderPaidWithoutStripe,
+  updateCustomerArtworkForOrderItem,
+  selectOrderItemForCustomerArtwork,
   verifyAddressBelongsToUser,
   verifyStorePickupAddressExists,
   getOrderUserId,

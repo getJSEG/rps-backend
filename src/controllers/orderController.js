@@ -1,4 +1,8 @@
 const orderRepository = require('../repositories/orderRepository');
+const {
+  saveArtworkBufferToStorage,
+  validateArtworkBufferAgainstOrderDimensions,
+} = require('./artworkController');
 const cartRepository = require('../repositories/cartRepository');
 const storePickupAddressRepository = require('../repositories/storePickupAddressRepository');
 const { computeShippingFromCartItems, computeTaxAndTotal } = require('../services/orderTotalsService');
@@ -228,8 +232,13 @@ const createOrder = async (req, res) => {
       billId = null;
     }
 
+    const normalizedItems = items.map((item) => {
+      const dims = dimensionsFromCartItem(item);
+      return { ...item, width_inches: dims.width_inches, height_inches: dims.height_inches };
+    });
+
     let totalAmount = 0;
-    for (const item of items) {
+    for (const item of normalizedItems) {
       totalAmount += parseFloat(item.unit_price) * parseInt(item.quantity);
     }
 
@@ -244,7 +253,7 @@ const createOrder = async (req, res) => {
       paymentMethod,
       notes,
       guestCheckout,
-      items,
+      items: normalizedItems,
     });
 
     res.status(201).json({ order: completeOrder });
@@ -278,6 +287,48 @@ const getOrderById = async (req, res) => {
   } catch (error) {
     console.error('Get order error:', error);
     res.status(500).json({ message: 'Failed to fetch order', error: error.message });
+  }
+};
+
+const APPROVE_ARTWORK_BLOCKED_MESSAGE =
+  'Order line not found, access denied, or this order is not open for customer artwork upload.';
+
+/** POST multipart file: saves artwork and links URL to order_items for the authenticated buyer. */
+const approveOrderItemArtwork = async (req, res) => {
+  if (!req.file || !req.file.buffer) {
+    return res.status(400).json({ message: 'No artwork file uploaded.' });
+  }
+  const orderId = parseInt(String(req.params.orderId), 10);
+  const itemId = parseInt(String(req.params.itemId), 10);
+  if (!Number.isFinite(orderId) || orderId <= 0 || !Number.isFinite(itemId) || itemId <= 0) {
+    return res.status(400).json({ message: 'Invalid order or line item id.' });
+  }
+  const userId = req.user.id;
+  const mimeType = String(req.file.mimetype || '').toLowerCase();
+  try {
+    const line = await orderRepository.selectOrderItemForCustomerArtwork(orderId, itemId, userId);
+    if (!line) {
+      return res.status(404).json({ message: APPROVE_ARTWORK_BLOCKED_MESSAGE });
+    }
+    const dimensions = await validateArtworkBufferAgainstOrderDimensions(
+      req.file.buffer,
+      mimeType,
+      line.width_inches,
+      line.height_inches
+    );
+    const { url } = await saveArtworkBufferToStorage(req.file.buffer, mimeType, dimensions);
+    const row = await orderRepository.updateCustomerArtworkForOrderItem(orderId, itemId, userId, url);
+    if (!row) {
+      return res.status(404).json({ message: APPROVE_ARTWORK_BLOCKED_MESSAGE });
+    }
+    return res.status(200).json({
+      orderItemId: row.id,
+      customerArtworkUrl: row.customer_artwork_url,
+      orderId: row.order_id,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Could not save artwork.';
+    return res.status(400).json({ message });
   }
 };
 
@@ -736,6 +787,7 @@ module.exports = {
   createOrder,
   getOrders,
   getOrderById,
+  approveOrderItemArtwork,
   getAllOrders,
   getOrderByIdAdmin,
   updateOrderStatus,

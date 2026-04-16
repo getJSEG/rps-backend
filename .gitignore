@@ -23,3 +23,6 @@ Thumbs.db
 dist/
 build/
 
+# Local user uploads (product/employee/artwork files); paths live in the database — not source control
+uploads/
+

@@ -4,6 +4,10 @@ const sharp = require("sharp");
 const { PDFDocument } = require("pdf-lib");
 const pool = require("../config/database");
 const { uploadFromBuffer, isConfigured: spacesConfigured } = require("../utils/spaces");
+
+/** Match frontend `artworkProportion.ts` so pass/fail is consistent. */
+const RATIO_TOLERANCE = 0.06;
+
 let tableReady = false;
 
 async function ensureArtworkTable() {
@@ -33,6 +37,59 @@ function writeBufferToUploadDir(buffer, ext) {
   const fullPath = path.join(uploadDir, filename);
   fs.writeFileSync(fullPath, buffer);
   return `/uploads/artworks/${filename}`;
+}
+
+/**
+ * Save buffer to Spaces or local uploads/artworks. Does not insert into artworks table.
+ * @param {{ widthPx: number, heightPx: number, pdfPageCount: number|null, extension: string }} [precomputedDimensions] from validateArtworkBufferAgainstOrderDimensions to avoid a second decode.
+ */
+async function saveArtworkBufferToStorage(fileBuffer, mimeType, precomputedDimensions = null) {
+  const dimensions = precomputedDimensions ?? (await readArtworkDimensions(fileBuffer, mimeType));
+  let url;
+  if (spacesConfigured()) {
+    url = await uploadFromBuffer(fileBuffer, "elmer/artworks", { contentType: mimeType });
+  } else {
+    url = writeBufferToUploadDir(fileBuffer, dimensions.extension);
+  }
+  return { url, dimensions };
+}
+
+function aspectMatch(pxW, pxH, reqW, reqH) {
+  if (pxW <= 0 || pxH <= 0 || reqW <= 0 || reqH <= 0) return true;
+  const rU = pxW / pxH;
+  const rR = reqW / reqH;
+  const rel = Math.abs(rU - rR) / rR;
+  return rel <= RATIO_TOLERANCE;
+}
+
+/** Compare to job W×H, or artwork rotated 90° vs job (swap required W/H). */
+function assertAspectRatioMatchesPrintSize(pxW, pxH, reqWIn, reqHIn) {
+  const rw = reqWIn != null && reqWIn !== "" ? Number(reqWIn) : NaN;
+  const rh = reqHIn != null && reqHIn !== "" ? Number(reqHIn) : NaN;
+  if (!Number.isFinite(rw) || !Number.isFinite(rh) || rw <= 0 || rh <= 0) {
+    return;
+  }
+  if (!Number.isFinite(pxW) || !Number.isFinite(pxH) || pxW <= 0 || pxH <= 0) {
+    throw new Error("Could not read artwork dimensions.");
+  }
+  const ok = aspectMatch(pxW, pxH, rw, rh) || aspectMatch(pxW, pxH, rh, rw);
+  if (!ok) {
+    const wf = Number(rw.toFixed(4));
+    const hf = Number(rh.toFixed(4));
+    throw new Error(
+      `Artwork aspect ratio does not match this job's print size (required ${wf}" × ${hf}").`
+    );
+  }
+}
+
+/**
+ * Reads dimensions once and checks aspect ratio vs order line inches (when both are set).
+ * @returns {Promise<{ widthPx: number, heightPx: number, pdfPageCount: number|null, extension: string }>}
+ */
+async function validateArtworkBufferAgainstOrderDimensions(fileBuffer, mimeType, widthInches, heightInches) {
+  const dimensions = await readArtworkDimensions(fileBuffer, mimeType);
+  assertAspectRatioMatchesPrintSize(dimensions.widthPx, dimensions.heightPx, widthInches, heightInches);
+  return dimensions;
 }
 
 async function readArtworkDimensions(fileBuffer, mimeType) {
@@ -73,14 +130,7 @@ const uploadArtwork = async (req, res) => {
     await ensureArtworkTable();
     const mimeType = String(req.file.mimetype || "").toLowerCase();
     const fileBuffer = req.file.buffer;
-    const dimensions = await readArtworkDimensions(fileBuffer, mimeType);
-
-    let url;
-    if (spacesConfigured()) {
-      url = await uploadFromBuffer(fileBuffer, "elmer/artworks", { contentType: mimeType });
-    } else {
-      url = writeBufferToUploadDir(fileBuffer, dimensions.extension);
-    }
+    const { url, dimensions } = await saveArtworkBufferToStorage(fileBuffer, mimeType);
 
     const saved = await pool.query(
       `INSERT INTO artworks (user_id, file_name, mime_type, size_bytes, width_px, height_px, pdf_page_count, url)
@@ -140,7 +190,7 @@ const getMyArtworks = async (req, res) => {
         createdAt: r.created_at,
       })),
     });
-  } catch (error) {
+  } catch {
     return res.status(500).json({ message: "Could not load artworks." });
   }
 };
@@ -176,4 +226,10 @@ const deleteArtwork = async (req, res) => {
   }
 };
 
-module.exports = { uploadArtwork, getMyArtworks, deleteArtwork };
+module.exports = {
+  uploadArtwork,
+  getMyArtworks,
+  deleteArtwork,
+  saveArtworkBufferToStorage,
+  validateArtworkBufferAgainstOrderDimensions,
+};

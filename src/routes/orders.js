@@ -4,6 +4,7 @@ const {
   createOrder,
   getOrders,
   getOrderById,
+  approveOrderItemArtwork,
   getAllOrders,
   getOrderByIdAdmin,
   updateOrderStatus,
@@ -14,11 +15,23 @@ const {
   confirmStripePayment,
 } = require('../controllers/orderController');
 const { authenticateToken, optionalAuth, requireAdmin } = require('../middleware/auth');
+const { uploadArtworkFile } = require('../middleware/upload');
 
 router.post('/', optionalAuth, createOrder);
 router.post('/create-payment-intent', optionalAuth, createOrderWithPaymentIntent);
 router.post('/confirm-stripe-payment', optionalAuth, confirmStripePayment);
 router.get('/', authenticateToken, getOrders);
+router.post(
+  '/:orderId/items/:itemId/approve-artwork',
+  authenticateToken,
+  (req, res, next) => {
+    uploadArtworkFile.single('file')(req, res, (err) => {
+      if (err) return res.status(400).json({ message: err.message || 'File upload failed' });
+      next();
+    });
+  },
+  approveOrderItemArtwork
+);
 // Admin routes - require admin role
 router.get('/admin/all', authenticateToken, requireAdmin, getAllOrders);
 router.post('/admin/from-cart', authenticateToken, requireAdmin, createOrderFromCartItem);
