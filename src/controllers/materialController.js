@@ -29,7 +29,7 @@ const getMaterials = async (req, res) => {
     res.json({ materials: result.rows });
   } catch (error) {
     console.error('Get materials error:', error);
-    res.status(500).json({ message: 'Failed to fetch materials', error: error.message });
+    res.status(500).json({ message: 'Failed to fetch materials' });
   }
 };
 
@@ -49,7 +49,7 @@ const getMaterialById = async (req, res) => {
     res.json({ material: result.rows[0] });
   } catch (error) {
     console.error('Get material error:', error);
-    res.status(500).json({ message: 'Failed to fetch material', error: error.message });
+    res.status(500).json({ message: 'Failed to fetch material' });
   }
 };
 

@@ -43,8 +43,7 @@ const getAll = async (req, res) => {
   } catch (error) {
     console.error('Get employees error:', error);
     res.status(500).json({
-      message: 'Failed to fetch employees. ' + (error.message || ''),
-      error: error.message,
+      message: 'Failed to fetch employees',
     });
   }
 };
@@ -82,7 +81,7 @@ const getById = async (req, res) => {
     res.json({ employee: result.rows[0] });
   } catch (error) {
     console.error('Get employee error:', error);
-    res.status(500).json({ message: 'Failed to fetch employee', error: error.message });
+    res.status(500).json({ message: 'Failed to fetch employee' });
   }
 };
 
@@ -132,7 +131,7 @@ const create = async (req, res) => {
     res.status(201).json({ employee: row });
   } catch (error) {
     console.error('Create employee error:', error);
-    res.status(500).json({ message: 'Failed to create employee. ' + (error.message || ''), error: error.message });
+    res.status(500).json({ message: 'Failed to create employee' });
   }
 };
 
@@ -247,7 +246,7 @@ const update = async (req, res) => {
     res.json({ employee: row });
   } catch (error) {
     console.error('Update employee error:', error);
-    res.status(500).json({ message: 'Failed to update employee. ' + (error.message || ''), error: error.message });
+    res.status(500).json({ message: 'Failed to update employee' });
   }
 };
 
@@ -268,7 +267,7 @@ const remove = async (req, res) => {
     res.json({ message: 'Employee deleted successfully', employee: result.rows[0] });
   } catch (error) {
     console.error('Delete employee error:', error);
-    res.status(500).json({ message: 'Failed to delete employee', error: error.message });
+    res.status(500).json({ message: 'Failed to delete employee' });
   }
 };
 
@@ -297,7 +296,7 @@ const uploadProfileImage = async (req, res) => {
     res.json({ url });
   } catch (err) {
     console.error('Upload profile image error:', err);
-    res.status(500).json({ message: err.message || 'Image upload failed' });
+    res.status(500).json({ message: 'Image upload failed' });
   }
 };
 

@@ -285,7 +285,7 @@ const createOrder = async (req, res) => {
     res.status(201).json({ order: completeOrder });
   } catch (error) {
     console.error('Create order error:', error);
-    res.status(500).json({ message: 'Failed to create order', error: error.message });
+    res.status(500).json({ message: 'Failed to create order' });
   }
 };
 
@@ -297,7 +297,7 @@ const getOrders = async (req, res) => {
     res.json({ orders });
   } catch (error) {
     console.error('Get orders error:', error);
-    res.status(500).json({ message: 'Failed to fetch orders', error: error.message });
+    res.status(500).json({ message: 'Failed to fetch orders' });
   }
 };
 
@@ -312,7 +312,7 @@ const getOrderById = async (req, res) => {
     res.json({ order });
   } catch (error) {
     console.error('Get order error:', error);
-    res.status(500).json({ message: 'Failed to fetch order', error: error.message });
+    res.status(500).json({ message: 'Failed to fetch order' });
   }
 };
 
@@ -426,7 +426,7 @@ const getAllOrders = async (req, res) => {
     res.json({ orders });
   } catch (error) {
     console.error('Get all orders error:', error);
-    res.status(500).json({ message: 'Failed to fetch orders', error: error.message });
+    res.status(500).json({ message: 'Failed to fetch orders' });
   }
 };
 
@@ -440,7 +440,7 @@ const getOrderByIdAdmin = async (req, res) => {
     res.json({ order });
   } catch (error) {
     console.error('Get order by id admin error:', error);
-    res.status(500).json({ message: 'Failed to fetch order', error: error.message });
+    res.status(500).json({ message: 'Failed to fetch order' });
   }
 };
 
@@ -475,7 +475,7 @@ const updateOrderStatus = async (req, res) => {
     res.json({ order: updated });
   } catch (error) {
     console.error('Update order status error:', error);
-    res.status(500).json({ message: 'Failed to update order status', error: error.message });
+    res.status(500).json({ message: 'Failed to update order status' });
   }
 };
 
@@ -503,7 +503,7 @@ const updateOrderTrackingId = async (req, res) => {
     res.json({ order: updated });
   } catch (error) {
     console.error('Update order tracking id error:', error);
-    res.status(500).json({ message: 'Failed to update order tracking id', error: error.message });
+    res.status(500).json({ message: 'Failed to update order tracking id' });
   }
 };
 
@@ -517,7 +517,7 @@ const deleteOrderAdmin = async (req, res) => {
     res.json({ message: 'Order deleted', id: deletedId });
   } catch (error) {
     console.error('Delete order error:', error);
-    res.status(500).json({ message: 'Failed to delete order', error: error.message });
+    res.status(500).json({ message: 'Failed to delete order' });
   }
 };
 
@@ -611,7 +611,6 @@ const createOrderFromCartItem = async (req, res) => {
     console.error('Create order from cart error:', error);
     res.status(500).json({
       message: 'Failed to create order from cart',
-      error: error.message || String(error),
     });
   }
 };
@@ -801,8 +800,7 @@ const createOrderWithPaymentIntent = async (req, res) => {
   } catch (error) {
     console.error('Create order with payment intent error:', error);
     res.status(500).json({
-      message: error.message || 'Failed to create payment intent',
-      error: error.message,
+      message: 'Failed to create payment intent',
     });
   }
 };
@@ -818,7 +816,7 @@ const getGuestOrderByIdWithToken = async (req, res) => {
     return res.json({ order });
   } catch (error) {
     console.error('Get guest order by token error:', error);
-    return res.status(500).json({ message: 'Failed to fetch guest order', error: error.message });
+    return res.status(500).json({ message: 'Failed to fetch guest order' });
   }
 };
 
@@ -854,7 +852,7 @@ const confirmStripePayment = async (req, res) => {
     return res.status(200).json({ ok: true, orderId: orderIdNum, paymentStatus: 'paid' });
   } catch (error) {
     console.error('Confirm Stripe payment error:', error);
-    return res.status(500).json({ message: error.message || 'Failed to confirm payment', error: error.message });
+    return res.status(500).json({ message: 'Failed to confirm payment' });
   }
 };
 
@@ -927,7 +925,7 @@ const requestOrderCancellation = async (req, res) => {
     return res.json({ order: updated });
   } catch (error) {
     console.error('Request order cancellation error:', error);
-    return res.status(500).json({ message: 'Failed to request cancellation', error: error.message });
+    return res.status(500).json({ message: 'Failed to request cancellation' });
   }
 };
 
@@ -963,7 +961,7 @@ const requestGuestOrderCancellation = async (req, res) => {
     return res.json({ order: updated });
   } catch (error) {
     console.error('Request guest order cancellation error:', error);
-    return res.status(500).json({ message: 'Failed to request cancellation', error: error.message });
+    return res.status(500).json({ message: 'Failed to request cancellation' });
   }
 };
 
@@ -1058,7 +1056,7 @@ const refundOrderAdmin = async (req, res) => {
     });
   } catch (error) {
     console.error('Refund order admin error:', error);
-    return res.status(500).json({ message: 'Failed to process refund', error: error.message });
+    return res.status(500).json({ message: 'Failed to process refund' });
   }
 };
 

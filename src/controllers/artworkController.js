@@ -161,8 +161,8 @@ const uploadArtwork = async (req, res) => {
       createdAt: row.created_at,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Artwork upload failed.";
-    return res.status(400).json({ message });
+    console.error('uploadArtwork error:', error);
+    return res.status(400).json({ message: "Artwork upload failed." });
   }
 };
 
@@ -190,7 +190,8 @@ const getMyArtworks = async (req, res) => {
         createdAt: r.created_at,
       })),
     });
-  } catch {
+  } catch (error) {
+    console.error('getMyArtworks error:', error);
     return res.status(500).json({ message: "Could not load artworks." });
   }
 };
@@ -221,7 +222,8 @@ const deleteArtwork = async (req, res) => {
       }
     }
     return res.json({ ok: true });
-  } catch {
+  } catch (error) {
+    console.error('deleteArtwork error:', error);
     return res.status(500).json({ message: "Could not delete artwork." });
   }
 };

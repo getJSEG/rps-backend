@@ -43,13 +43,14 @@ const authenticateToken = async (req, res, next) => {
     req.user = result.rows[0];
     next();
   } catch (error) {
+    console.error('authenticateToken error:', error);
     if (error.name === 'JsonWebTokenError') {
       return res.status(401).json({ message: 'Invalid token' });
     }
     if (error.name === 'TokenExpiredError') {
       return res.status(401).json({ message: 'Token expired' });
     }
-    return res.status(500).json({ message: 'Authentication error', error: error.message });
+    return res.status(500).json({ message: 'Authentication error' });
   }
 };
 
@@ -186,7 +187,8 @@ const authenticateTokenOrGuestSession = async (req, res, next) => {
         'Login or send header X-Guest-Session-Id (e.g. a UUID) for guest cart and checkout.',
     });
   } catch (error) {
-    return res.status(500).json({ message: 'Authentication error', error: error.message });
+    console.error('authenticateTokenOrGuestSession error:', error);
+    return res.status(500).json({ message: 'Authentication error' });
   }
 };
 

@@ -6,7 +6,7 @@ const { uploadArtwork, getMyArtworks, deleteArtwork } = require("../controllers/
 
 router.post("/upload", authenticateToken, (req, res, next) => {
   uploadArtworkFile.single("file")(req, res, (err) => {
-    if (err) return res.status(400).json({ message: err.message || "File upload failed" });
+    if (err) return res.status(400).json({ message: "File upload failed" });
     next();
   });
 }, uploadArtwork);

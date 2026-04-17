@@ -14,7 +14,7 @@ const getClaims = async (req, res) => {
     res.json({ claims: result.rows });
   } catch (error) {
     console.error('Get claims error:', error);
-    res.status(500).json({ message: 'Failed to fetch claims', error: error.message });
+    res.status(500).json({ message: 'Failed to fetch claims' });
   }
 };
 
@@ -37,7 +37,7 @@ const createClaim = async (req, res) => {
     res.status(201).json({ claim: result.rows[0] });
   } catch (error) {
     console.error('Create claim error:', error);
-    res.status(500).json({ message: 'Failed to create claim', error: error.message });
+    res.status(500).json({ message: 'Failed to create claim' });
   }
 };
 
@@ -61,7 +61,7 @@ const getClaimById = async (req, res) => {
     res.json({ claim: result.rows[0] });
   } catch (error) {
     console.error('Get claim error:', error);
-    res.status(500).json({ message: 'Failed to fetch claim', error: error.message });
+    res.status(500).json({ message: 'Failed to fetch claim' });
   }
 };
 

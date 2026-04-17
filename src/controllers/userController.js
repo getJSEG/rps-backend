@@ -20,7 +20,7 @@ const updateProfile = async (req, res) => {
     res.json({ user: result.rows[0] });
   } catch (error) {
     console.error('Update profile error:', error);
-    res.status(500).json({ message: 'Failed to update profile', error: error.message });
+    res.status(500).json({ message: 'Failed to update profile' });
   }
 };
 
@@ -36,7 +36,7 @@ const getAllRegisteredUsers = async (req, res) => {
     res.json({ users: result.rows });
   } catch (error) {
     console.error('Get registered users error:', error);
-    res.status(500).json({ message: 'Failed to get registered users', error: error.message });
+    res.status(500).json({ message: 'Failed to get registered users' });
   }
 };
 
@@ -81,7 +81,7 @@ const changePassword = async (req, res) => {
     res.json({ message: 'Password changed successfully' });
   } catch (error) {
     console.error('Change password error:', error);
-    res.status(500).json({ message: 'Failed to change password', error: error.message });
+    res.status(500).json({ message: 'Failed to change password' });
   }
 };
 

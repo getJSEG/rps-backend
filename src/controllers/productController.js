@@ -145,7 +145,7 @@ const getAllProducts = async (req, res) => {
     });
   } catch (error) {
     console.error('Get products error:', error);
-    res.status(500).json({ message: 'Failed to fetch products', error: error.message });
+    res.status(500).json({ message: 'Failed to fetch products' });
   }
 };
 
@@ -172,7 +172,7 @@ const getProductById = async (req, res) => {
     res.json({ product });
   } catch (error) {
     console.error('❌ Get product error:', error);
-    res.status(500).json({ message: 'Failed to fetch product', error: error.message });
+    res.status(500).json({ message: 'Failed to fetch product' });
   }
 };
 
@@ -193,7 +193,7 @@ const previewProductPrice = async (req, res) => {
     const code = /required|invalid|must|missing|supported|at least|at most|configured/i.test(String(error.message || ''))
       ? 400
       : 500;
-    return res.status(code).json({ message: 'Failed to preview price', error: error.message });
+    return res.status(code).json({ message: 'Failed to preview price' });
   }
 };
 
@@ -239,7 +239,7 @@ const getCategories = async (req, res) => {
     res.json({ categories });
   } catch (error) {
     console.error('Get categories error:', error);
-    res.status(500).json({ message: 'Failed to fetch categories', error: error.message });
+    res.status(500).json({ message: 'Failed to fetch categories' });
   }
 };
 
@@ -286,7 +286,7 @@ const getRelatedProducts = async (req, res) => {
     });
   } catch (error) {
     console.error('Get related products error:', error);
-    res.status(500).json({ message: 'Failed to fetch related products', error: error.message });
+    res.status(500).json({ message: 'Failed to fetch related products' });
   }
 };
 
@@ -308,7 +308,7 @@ const createCategory = async (req, res) => {
   } catch (error) {
     if (error.code === '23505') return res.status(400).json({ message: 'Category slug already exists' });
     console.error('Create category error:', error);
-    res.status(500).json({ message: 'Failed to create category', error: error.message });
+    res.status(500).json({ message: 'Failed to create category' });
   }
 };
 
@@ -333,7 +333,7 @@ const updateCategory = async (req, res) => {
   } catch (error) {
     if (error.code === '23505') return res.status(400).json({ message: 'Category slug already exists' });
     console.error('Update category error:', error);
-    res.status(500).json({ message: 'Failed to update category', error: error.message });
+    res.status(500).json({ message: 'Failed to update category' });
   }
 };
 
@@ -358,7 +358,7 @@ const deleteCategory = async (req, res) => {
     res.json({ message: 'Category deleted', id: result.rows[0].id });
   } catch (error) {
     console.error('Delete category error:', error);
-    res.status(500).json({ message: 'Failed to delete category', error: error.message });
+    res.status(500).json({ message: 'Failed to delete category' });
   }
 };
 
@@ -454,7 +454,7 @@ const createProduct = async (req, res) => {
   } catch (error) {
     if (error.code === '23505') return res.status(400).json({ message: 'Product slug already exists' });
     console.error('Create product error:', error);
-    res.status(500).json({ message: 'Failed to create product', error: error.message });
+    res.status(500).json({ message: 'Failed to create product' });
   }
 };
 
@@ -519,7 +519,7 @@ const updateProduct = async (req, res) => {
   } catch (error) {
     if (error.code === '23505') return res.status(400).json({ message: 'Product slug already exists' });
     console.error('Update product error:', error);
-    res.status(500).json({ message: 'Failed to update product', error: error.message });
+    res.status(500).json({ message: 'Failed to update product' });
   }
 };
 
@@ -540,7 +540,7 @@ const getAllProductsAdmin = async (req, res) => {
     });
   } catch (error) {
     console.error('Get all products admin error:', error);
-    res.status(500).json({ message: 'Failed to fetch products', error: error.message });
+    res.status(500).json({ message: 'Failed to fetch products' });
   }
 };
 
@@ -555,7 +555,7 @@ const deleteProductAdmin = async (req, res) => {
     res.json({ message: 'Product deleted', id: result.rows[0].id });
   } catch (error) {
     console.error('Delete product error:', error);
-    res.status(500).json({ message: 'Failed to delete product', error: error.message });
+    res.status(500).json({ message: 'Failed to delete product' });
   }
 };
 
@@ -586,7 +586,7 @@ const uploadProductImage = async (req, res) => {
     res.json({ url });
   } catch (err) {
     console.error('Upload product image error:', err);
-    res.status(500).json({ message: err.message || 'Image upload failed' });
+    res.status(500).json({ message: 'Image upload failed' });
   }
 };
 
@@ -606,7 +606,7 @@ const uploadCategoryImage = async (req, res) => {
     res.json({ url });
   } catch (err) {
     console.error('Upload category image error:', err);
-    res.status(500).json({ message: err.message || 'Image upload failed' });
+    res.status(500).json({ message: 'Image upload failed' });
   }
 };
 

@@ -122,11 +122,7 @@ const register = async (req, res) => {
     }
   } catch (error) {
     console.error('Registration error:', error);
-    const isDbError = /ECONNREFUSED|ETIMEDOUT|connection|connect ECONNREFUSED/i.test(error.message || '');
-    const safeMessage = (process.env.NODE_ENV === 'production' && isDbError)
-      ? 'Service temporarily unavailable. Please try again later.'
-      : error.message;
-    res.status(500).json({ message: 'Registration failed', error: safeMessage });
+    res.status(500).json({ message: 'Registration failed' });
   }
 };
 
@@ -189,7 +185,7 @@ const createAdmin = async (req, res) => {
     res.status(201).json({ message: 'Admin created', user, token });
   } catch (error) {
     console.error('Create admin error:', error);
-    res.status(500).json({ message: 'Create admin failed', error: error.message });
+    res.status(500).json({ message: 'Create admin failed' });
   }
 };
 
@@ -252,7 +248,7 @@ const login = async (req, res) => {
     });
   } catch (error) {
     console.error('Login error:', error);
-    res.status(500).json({ message: 'Login failed', error: error.message });
+    res.status(500).json({ message: 'Login failed' });
   }
 };
 
@@ -271,7 +267,7 @@ const getProfile = async (req, res) => {
     res.json({ user: result.rows[0] });
   } catch (error) {
     console.error('Get profile error:', error);
-    res.status(500).json({ message: 'Failed to get profile', error: error.message });
+    res.status(500).json({ message: 'Failed to get profile' });
   }
 };
 
@@ -318,15 +314,14 @@ const sendResetCode = async (req, res) => {
         });
       }
       return res.status(503).json({
-        message: 'Email could not be sent. Configure SMTP in .env or check server log for code.',
-        error: error || 'Email not configured',
+        message: 'Email service is temporarily unavailable. Please try again later.',
       });
     }
 
     res.json({ message: 'Code sent to your email. Check your inbox.' });
   } catch (error) {
     console.error('Send reset code error:', error);
-    res.status(500).json({ message: 'Failed to send code', error: error.message });
+    res.status(500).json({ message: 'Failed to send code' });
   }
 };
 
@@ -375,7 +370,7 @@ const resetPasswordWithCode = async (req, res) => {
     res.json({ message: 'Password changed successfully. You can now log in with your new password.' });
   } catch (error) {
     console.error('Reset password error:', error);
-    res.status(500).json({ message: 'Failed to reset password', error: error.message });
+    res.status(500).json({ message: 'Failed to reset password' });
   }
 };
 

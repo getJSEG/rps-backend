@@ -10,7 +10,7 @@ const getCards = async (req, res) => {
     res.json({ cards: result.rows });
   } catch (error) {
     console.error('Get cards error:', error);
-    res.status(500).json({ message: 'Failed to fetch cards', error: error.message });
+    res.status(500).json({ message: 'Failed to fetch cards' });
   }
 };
 
@@ -41,7 +41,7 @@ const createCard = async (req, res) => {
     res.status(201).json({ card: result.rows[0] });
   } catch (error) {
     console.error('Create card error:', error);
-    res.status(500).json({ message: 'Failed to create card', error: error.message });
+    res.status(500).json({ message: 'Failed to create card' });
   }
 };
 
@@ -83,7 +83,7 @@ const updateCard = async (req, res) => {
     res.json({ card: result.rows[0] });
   } catch (error) {
     console.error('Update card error:', error);
-    res.status(500).json({ message: 'Failed to update card', error: error.message });
+    res.status(500).json({ message: 'Failed to update card' });
   }
 };
 
@@ -104,7 +104,7 @@ const deleteCard = async (req, res) => {
     res.json({ message: 'Card deleted successfully' });
   } catch (error) {
     console.error('Delete card error:', error);
-    res.status(500).json({ message: 'Failed to delete card', error: error.message });
+    res.status(500).json({ message: 'Failed to delete card' });
   }
 };
 

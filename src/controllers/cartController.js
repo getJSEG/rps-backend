@@ -51,7 +51,7 @@ const addToCart = async (req, res) => {
   } catch (error) {
     console.error('Add to cart error:', error);
     const code = /required|invalid|must|missing|not found|supported/i.test(String(error.message || '')) ? 400 : 500;
-    res.status(code).json({ message: 'Failed to add to cart', error: error.message });
+    res.status(code).json({ message: 'Failed to add to cart' });
   }
 };
 
@@ -74,7 +74,7 @@ const getCart = async (req, res) => {
     res.json({ cartItems: items, isAdminView: false });
   } catch (error) {
     console.error('Get cart error:', error);
-    res.status(500).json({ message: 'Failed to get cart', error: error.message });
+    res.status(500).json({ message: 'Failed to get cart' });
   }
 };
 
@@ -99,7 +99,7 @@ const removeFromCart = async (req, res) => {
     res.json({ message: 'Removed from cart' });
   } catch (error) {
     console.error('Remove from cart error:', error);
-    res.status(500).json({ message: 'Failed to remove from cart', error: error.message });
+    res.status(500).json({ message: 'Failed to remove from cart' });
   }
 };
 
@@ -142,7 +142,7 @@ const updateCartItem = async (req, res) => {
   } catch (error) {
     console.error('Update cart error:', error);
     const code = /required|invalid|must|missing|not found|supported/i.test(String(error.message || '')) ? 400 : 500;
-    res.status(code).json({ message: 'Failed to update cart', error: error.message });
+    res.status(code).json({ message: 'Failed to update cart' });
   }
 };
 
@@ -161,7 +161,7 @@ const clearCart = async (req, res) => {
     res.json({ message: 'Cart cleared' });
   } catch (error) {
     console.error('Clear cart error:', error);
-    res.status(500).json({ message: 'Failed to clear cart', error: error.message });
+    res.status(500).json({ message: 'Failed to clear cart' });
   }
 };
 
@@ -192,7 +192,7 @@ const getCartSummary = async (req, res) => {
     });
   } catch (error) {
     console.error('Get cart summary error:', error);
-    res.status(500).json({ message: 'Failed to get cart summary', error: error.message });
+    res.status(500).json({ message: 'Failed to get cart summary' });
   }
 };
 

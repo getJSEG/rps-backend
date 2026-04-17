@@ -110,7 +110,6 @@ async function getAdminDashboard(req, res) {
     console.error('Get admin dashboard report error:', error);
     return res.status(500).json({
       message: 'Failed to fetch dashboard report',
-      error: error.message,
     });
   }
 }

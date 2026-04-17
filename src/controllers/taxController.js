@@ -16,7 +16,8 @@ async function getTaxesAdmin(req, res) {
     const taxes = await taxRepository.getAllTaxes();
     res.json({ taxes });
   } catch (error) {
-    res.status(500).json({ message: 'Failed to load taxes', error: error.message });
+    console.error('getTaxesAdmin:', error);
+    res.status(500).json({ message: 'Failed to load taxes' });
   }
 }
 
@@ -25,7 +26,8 @@ async function getActiveTax(req, res) {
     const tax = await taxRepository.getActiveTax();
     res.json({ tax });
   } catch (error) {
-    res.status(500).json({ message: 'Failed to load active tax', error: error.message });
+    console.error('getActiveTax:', error);
+    res.status(500).json({ message: 'Failed to load active tax' });
   }
 }
 
@@ -39,7 +41,8 @@ async function createTaxAdmin(req, res) {
     const tax = await taxRepository.createTax({ name, percentage, isActive });
     res.status(201).json({ tax });
   } catch (error) {
-    res.status(500).json({ message: 'Failed to create tax', error: error.message });
+    console.error('createTaxAdmin:', error);
+    res.status(500).json({ message: 'Failed to create tax' });
   }
 }
 
@@ -63,7 +66,8 @@ async function updateTaxAdmin(req, res) {
     if (!tax) return res.status(404).json({ message: 'Tax not found' });
     res.json({ tax });
   } catch (error) {
-    res.status(500).json({ message: 'Failed to update tax', error: error.message });
+    console.error('updateTaxAdmin:', error);
+    res.status(500).json({ message: 'Failed to update tax' });
   }
 }
 
@@ -75,7 +79,8 @@ async function deleteTaxAdmin(req, res) {
     if (!deleted) return res.status(404).json({ message: 'Tax not found' });
     res.json({ message: 'Tax deleted' });
   } catch (error) {
-    res.status(500).json({ message: 'Failed to delete tax', error: error.message });
+    console.error('deleteTaxAdmin:', error);
+    res.status(500).json({ message: 'Failed to delete tax' });
   }
 }
 
@@ -87,7 +92,8 @@ async function activateTaxAdmin(req, res) {
     if (!tax) return res.status(404).json({ message: 'Tax not found' });
     res.json({ tax });
   } catch (error) {
-    res.status(500).json({ message: 'Failed to activate tax', error: error.message });
+    console.error('activateTaxAdmin:', error);
+    res.status(500).json({ message: 'Failed to activate tax' });
   }
 }
 

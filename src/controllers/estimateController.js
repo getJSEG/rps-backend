@@ -23,7 +23,7 @@ const getEstimates = async (req, res) => {
     res.json({ estimates: result.rows });
   } catch (error) {
     console.error('Get estimates error:', error);
-    res.status(500).json({ message: 'Failed to fetch estimates', error: error.message });
+    res.status(500).json({ message: 'Failed to fetch estimates' });
   }
 };
 
@@ -104,7 +104,7 @@ const createEstimate = async (req, res) => {
     }
   } catch (error) {
     console.error('Create estimate error:', error);
-    res.status(500).json({ message: 'Failed to create estimate', error: error.message });
+    res.status(500).json({ message: 'Failed to create estimate' });
   }
 };
 
@@ -137,7 +137,7 @@ const getEstimateById = async (req, res) => {
     res.json({ estimate: result.rows[0] });
   } catch (error) {
     console.error('Get estimate error:', error);
-    res.status(500).json({ message: 'Failed to fetch estimate', error: error.message });
+    res.status(500).json({ message: 'Failed to fetch estimate' });
   }
 };
 

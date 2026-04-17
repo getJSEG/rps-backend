@@ -27,7 +27,7 @@ const getPublicStorePickupAddresses = async (_req, res) => {
     res.json({ addresses });
   } catch (error) {
     console.error('getPublicStorePickupAddresses:', error);
-    res.status(500).json({ message: 'Failed to load store pickup addresses', error: error.message });
+    res.status(500).json({ message: 'Failed to load store pickup addresses' });
   }
 };
 
@@ -37,7 +37,7 @@ const getStorePickupAddressesAdmin = async (_req, res) => {
     res.json({ addresses });
   } catch (error) {
     console.error('getStorePickupAddressesAdmin:', error);
-    res.status(500).json({ message: 'Failed to load store pickup addresses', error: error.message });
+    res.status(500).json({ message: 'Failed to load store pickup addresses' });
   }
 };
 
@@ -51,7 +51,7 @@ const createStorePickupAddressAdmin = async (req, res) => {
     res.status(201).json({ address });
   } catch (error) {
     console.error('createStorePickupAddressAdmin:', error);
-    res.status(500).json({ message: 'Failed to create store pickup address', error: error.message });
+    res.status(500).json({ message: 'Failed to create store pickup address' });
   }
 };
 
@@ -65,7 +65,7 @@ const updateStorePickupAddressAdmin = async (req, res) => {
     res.json({ address });
   } catch (error) {
     console.error('updateStorePickupAddressAdmin:', error);
-    res.status(500).json({ message: 'Failed to update store pickup address', error: error.message });
+    res.status(500).json({ message: 'Failed to update store pickup address' });
   }
 };
 
@@ -78,7 +78,7 @@ const deleteStorePickupAddressAdmin = async (req, res) => {
     res.json({ message: 'Address archived', id: deletedId });
   } catch (error) {
     console.error('deleteStorePickupAddressAdmin:', error);
-    res.status(500).json({ message: 'Failed to delete store pickup address', error: error.message });
+    res.status(500).json({ message: 'Failed to delete store pickup address' });
   }
 };
 

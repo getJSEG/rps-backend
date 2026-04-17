@@ -35,7 +35,7 @@ const getAddresses = async (req, res) => {
     res.json({ addresses: rows });
   } catch (error) {
     console.error('Get addresses error:', error);
-    res.status(500).json({ message: 'Failed to fetch addresses', error: error.message });
+    res.status(500).json({ message: 'Failed to fetch addresses' });
   }
 };
 
@@ -63,7 +63,7 @@ const createAddress = async (req, res) => {
     res.status(201).json({ address: result.rows[0] });
   } catch (error) {
     console.error('Create address error:', error);
-    res.status(500).json({ message: 'Failed to create address', error: error.message });
+    res.status(500).json({ message: 'Failed to create address' });
   }
 };
 
@@ -91,7 +91,7 @@ const setAddressDefault = async (req, res) => {
     res.json({ address: result.rows[0] });
   } catch (error) {
     console.error('Set default address error:', error);
-    res.status(500).json({ message: 'Failed to set default address', error: error.message });
+    res.status(500).json({ message: 'Failed to set default address' });
   }
 };
 
@@ -138,7 +138,7 @@ const updateAddress = async (req, res) => {
     res.json({ address: result.rows[0] });
   } catch (error) {
     console.error('Update address error:', error);
-    res.status(500).json({ message: 'Failed to update address', error: error.message });
+    res.status(500).json({ message: 'Failed to update address' });
   }
 };
 
@@ -156,7 +156,7 @@ const deleteAddress = async (req, res) => {
     res.json({ message: 'Address deleted successfully' });
   } catch (error) {
     console.error('Delete address error:', error);
-    res.status(500).json({ message: 'Failed to delete address', error: error.message });
+    res.status(500).json({ message: 'Failed to delete address' });
   }
 };
 

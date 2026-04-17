@@ -19,7 +19,7 @@ const getMessages = async (req, res) => {
     res.json({ messages: result.rows });
   } catch (error) {
     console.error('Get messages error:', error);
-    res.status(500).json({ message: 'Failed to fetch messages', error: error.message });
+    res.status(500).json({ message: 'Failed to fetch messages' });
   }
 };
 
@@ -40,7 +40,7 @@ const createMessage = async (req, res) => {
     res.status(201).json({ message: result.rows[0] });
   } catch (error) {
     console.error('Create message error:', error);
-    res.status(500).json({ message: 'Failed to create message', error: error.message });
+    res.status(500).json({ message: 'Failed to create message' });
   }
 };
 
@@ -61,7 +61,7 @@ const markAsRead = async (req, res) => {
     res.json({ message: result.rows[0] });
   } catch (error) {
     console.error('Mark as read error:', error);
-    res.status(500).json({ message: 'Failed to mark message as read', error: error.message });
+    res.status(500).json({ message: 'Failed to mark message as read' });
   }
 };
 

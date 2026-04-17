@@ -14,7 +14,7 @@ const getFavorites = async (req, res) => {
     res.json({ favorites: result.rows });
   } catch (error) {
     console.error('Get favorites error:', error);
-    res.status(500).json({ message: 'Failed to fetch favorites', error: error.message });
+    res.status(500).json({ message: 'Failed to fetch favorites' });
   }
 };
 
@@ -55,7 +55,7 @@ const addFavorite = async (req, res) => {
     res.status(201).json({ favorite: result.rows[0] });
   } catch (error) {
     console.error('Add favorite error:', error);
-    res.status(500).json({ message: 'Failed to add favorite', error: error.message });
+    res.status(500).json({ message: 'Failed to add favorite' });
   }
 };
 
@@ -76,7 +76,7 @@ const removeFavorite = async (req, res) => {
     res.json({ message: 'Favorite removed successfully' });
   } catch (error) {
     console.error('Remove favorite error:', error);
-    res.status(500).json({ message: 'Failed to remove favorite', error: error.message });
+    res.status(500).json({ message: 'Failed to remove favorite' });
   }
 };
 

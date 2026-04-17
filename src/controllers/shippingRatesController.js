@@ -12,7 +12,7 @@ const getShippingRates = async (req, res) => {
     });
   } catch (error) {
     console.error('getShippingRates:', error);
-    res.status(500).json({ message: 'Failed to load shipping rates', error: error.message });
+    res.status(500).json({ message: 'Failed to load shipping rates' });
   }
 };
 
@@ -22,7 +22,7 @@ const getShippingMethodsAdmin = async (req, res) => {
     res.json({ methods });
   } catch (error) {
     console.error('getShippingMethodsAdmin:', error);
-    res.status(500).json({ message: 'Failed to load shipping methods', error: error.message });
+    res.status(500).json({ message: 'Failed to load shipping methods' });
   }
 };
 
@@ -37,7 +37,7 @@ const createShippingMethodAdmin = async (req, res) => {
     res.status(201).json({ method });
   } catch (error) {
     console.error('createShippingMethodAdmin:', error);
-    res.status(500).json({ message: 'Failed to create shipping method', error: error.message });
+    res.status(500).json({ message: 'Failed to create shipping method' });
   }
 };
 
@@ -64,7 +64,7 @@ const updateShippingMethodAdmin = async (req, res) => {
     res.json({ method });
   } catch (error) {
     console.error('updateShippingMethodAdmin:', error);
-    res.status(500).json({ message: 'Failed to update shipping method', error: error.message });
+    res.status(500).json({ message: 'Failed to update shipping method' });
   }
 };
 
@@ -77,7 +77,7 @@ const deleteShippingMethodAdmin = async (req, res) => {
     res.json({ message: 'Shipping method deleted' });
   } catch (error) {
     console.error('deleteShippingMethodAdmin:', error);
-    res.status(500).json({ message: 'Failed to delete shipping method', error: error.message });
+    res.status(500).json({ message: 'Failed to delete shipping method' });
   }
 };
 
@@ -111,7 +111,7 @@ const putShippingRatesAdmin = async (req, res) => {
     });
   } catch (error) {
     console.error('putShippingRatesAdmin:', error);
-    res.status(500).json({ message: 'Failed to update shipping rates', error: error.message });
+    res.status(500).json({ message: 'Failed to update shipping rates' });
   }
 };
 

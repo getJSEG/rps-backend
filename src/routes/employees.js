@@ -9,7 +9,7 @@ router.get('/:id', authenticateToken, requireAdmin, getById);
 router.post('/upload', authenticateToken, requireAdmin, (req, res, next) => {
   uploadEmployeeMemory.single('profile_image')(req, res, (err) => {
     if (err) {
-      return res.status(400).json({ message: err.message || 'File upload failed' });
+      return res.status(400).json({ message: 'File upload failed' });
     }
     next();
   });

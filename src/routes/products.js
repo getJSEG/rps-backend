@@ -15,13 +15,13 @@ router.get('/admin/products', authenticateToken, requireAdmin, getAllProductsAdm
 router.post('/admin/products', authenticateToken, requireAdmin, createProduct);
 router.post('/admin/upload-image', authenticateToken, requireAdmin, (req, res, next) => {
   uploadProductImageMw.single('image')(req, res, (err) => {
-    if (err) return res.status(400).json({ message: err.message || 'File upload failed' });
+    if (err) return res.status(400).json({ message: 'File upload failed' });
     next();
   });
 }, uploadProductImage);
 router.post('/admin/upload-category-image', authenticateToken, requireAdmin, (req, res, next) => {
   uploadCategoryImageMw.single('image')(req, res, (err) => {
-    if (err) return res.status(400).json({ message: err.message || 'File upload failed' });
+    if (err) return res.status(400).json({ message: 'File upload failed' });
     next();
   });
 }, uploadCategoryImage);
