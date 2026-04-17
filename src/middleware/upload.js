@@ -21,6 +21,23 @@ const artworkFileFilter = (req, file, cb) => {
   }
 };
 
+/**
+ * Guest upload is more tolerant with browser-provided PDF mime values.
+ * Keep buyer route strict by using a separate middleware instance.
+ */
+const guestArtworkFileFilter = (req, file, cb) => {
+  const mime = String(file.mimetype || "").toLowerCase().trim();
+  const name = String(file.originalname || "").toLowerCase().trim();
+  const allowedImageMimes = new Set(["image/png", "image/jpeg"]);
+  const allowedPdfMimes = new Set(["application/pdf", "application/x-pdf", "application/acrobat"]);
+  const isPdfByName = name.endsWith(".pdf");
+  if (allowedImageMimes.has(mime) || allowedPdfMimes.has(mime) || isPdfByName) {
+    cb(null, true);
+  } else {
+    cb(new Error("Only PNG, JPG and single-page PDF files are allowed"), false);
+  }
+};
+
 const limit = { fileSize: 5 * 1024 * 1024 }; // 5MB
 
 // ---- Employees: disk storage (or memory + Spaces in controller) ----
@@ -46,5 +63,13 @@ const uploadCategoryImage = multer({ storage: memoryStorage, fileFilter, limits:
 // Employee profile: memory when using Spaces
 const uploadEmployeeMemory = multer({ storage: memoryStorage, fileFilter, limits: limit });
 const uploadArtworkFile = multer({ storage: memoryStorage, fileFilter: artworkFileFilter, limits: limit });
+const uploadGuestArtworkFile = multer({ storage: memoryStorage, fileFilter: guestArtworkFileFilter, limits: limit });
 
-module.exports = { upload, uploadProductImage, uploadCategoryImage, uploadEmployeeMemory, uploadArtworkFile };
+module.exports = {
+  upload,
+  uploadProductImage,
+  uploadCategoryImage,
+  uploadEmployeeMemory,
+  uploadArtworkFile,
+  uploadGuestArtworkFile,
+};

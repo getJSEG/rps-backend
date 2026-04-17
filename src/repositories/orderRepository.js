@@ -162,7 +162,8 @@ const SQL = {
             'total_price', oi.total_price,
             'image_url', COALESCE(oi.image_url, p.image_url),
             'width_inches', oi.width_inches,
-            'height_inches', oi.height_inches
+            'height_inches', oi.height_inches,
+            'customer_artwork_url', oi.customer_artwork_url
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
         '[]'::json
@@ -362,6 +363,21 @@ const SQL = {
       AND oi.order_id = $2
       AND o.user_id = $3
       AND lower(trim(COALESCE(o.status, ''))) IN ('awaiting_artwork', 'awaiting_customer_approval', 'on_hold')`,
+  /** Guest / token flow: line belongs to order; caller must verify tracking token first. */
+  SELECT_ORDER_ITEM_ARTWORK_LINE_FOR_ORDER: `SELECT oi.id, oi.order_id, oi.width_inches, oi.height_inches
+    FROM order_items oi
+    INNER JOIN orders o ON o.id = oi.order_id
+    WHERE oi.id = $1
+      AND oi.order_id = $2
+      AND lower(trim(COALESCE(o.status, ''))) IN ('awaiting_artwork', 'awaiting_customer_approval', 'on_hold')`,
+  UPDATE_CUSTOMER_ARTWORK_ON_ORDER_ITEM_BY_ORDER: `UPDATE order_items oi
+    SET customer_artwork_url = $3
+    FROM orders o
+    WHERE oi.id = $1
+      AND oi.order_id = $2
+      AND o.id = oi.order_id
+      AND lower(trim(COALESCE(o.status, ''))) IN ('awaiting_artwork', 'awaiting_customer_approval', 'on_hold')
+    RETURNING oi.id, oi.customer_artwork_url, oi.order_id`,
   UPDATE_ORDER_REFUNDED: `UPDATE orders
       SET status = $1,
           payment_status = $2,
@@ -895,6 +911,68 @@ async function selectOrderItemForCustomerArtwork(orderId, itemId, userId) {
   return r.rows[0] ?? null;
 }
 
+/**
+ * @returns {Promise<{ id: number, order_id: number, width_inches: number|null, height_inches: number|null }|null>}
+ */
+async function selectOrderItemArtworkLineForOrder(orderId, itemId) {
+  const r = await pool.query(SQL.SELECT_ORDER_ITEM_ARTWORK_LINE_FOR_ORDER, [itemId, orderId]);
+  return r.rows[0] ?? null;
+}
+
+/**
+ * @returns {Promise<{ id: number, customer_artwork_url: string, order_id: number }|null>}
+ */
+async function updateCustomerArtworkForOrderItemByOrderId(orderId, itemId, artworkUrl) {
+  const r = await pool.query(SQL.UPDATE_CUSTOMER_ARTWORK_ON_ORDER_ITEM_BY_ORDER, [itemId, orderId, artworkUrl]);
+  return r.rows[0] ?? null;
+}
+
+/**
+ * True when every order line has a non-empty customer_artwork_url.
+ * @param {number|string} orderId
+ * @returns {Promise<boolean>}
+ */
+async function allOrderLinesHaveCustomerArtwork(orderId) {
+  const id = parseInt(String(orderId), 10);
+  if (!Number.isFinite(id) || id <= 0) return false;
+  const totalR = await pool.query(
+    `SELECT COUNT(*)::int AS c FROM order_items WHERE order_id = $1`,
+    [id]
+  );
+  const total = totalR.rows[0]?.c ?? 0;
+  if (total === 0) return false;
+  const missingR = await pool.query(
+    `SELECT COUNT(*)::int AS c FROM order_items
+     WHERE order_id = $1
+       AND (customer_artwork_url IS NULL OR TRIM(COALESCE(customer_artwork_url, '')) = '')`,
+    [id]
+  );
+  const missing = missingR.rows[0]?.c ?? 0;
+  return missing === 0;
+}
+
+/**
+ * When every line has artwork and order is still in artwork-waiting phase, set status to printing.
+ * @param {number|string} orderId
+ * @returns {Promise<object|null>} updated order row if status changed
+ */
+async function maybeAdvanceOrderToPrintingAfterArtwork(orderId) {
+  const id = parseInt(String(orderId), 10);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  const hasAll = await allOrderLinesHaveCustomerArtwork(id);
+  if (!hasAll) return null;
+  const order = await findOrderById(id);
+  if (!order) return null;
+  const st = String(order.status || '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, '_');
+  if (st !== 'awaiting_artwork' && st !== 'awaiting_customer_approval') {
+    return null;
+  }
+  return updateOrderStatusById(id, 'printing');
+}
+
 async function markOrderRefunded({
   orderId,
   refundId,
@@ -940,6 +1018,10 @@ module.exports = {
   markOrderPaidWithoutStripe,
   updateCustomerArtworkForOrderItem,
   selectOrderItemForCustomerArtwork,
+  selectOrderItemArtworkLineForOrder,
+  updateCustomerArtworkForOrderItemByOrderId,
+  allOrderLinesHaveCustomerArtwork,
+  maybeAdvanceOrderToPrintingAfterArtwork,
   markOrderRefunded,
   verifyAddressBelongsToUser,
   verifyStorePickupAddressExists,

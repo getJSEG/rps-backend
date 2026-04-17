@@ -319,6 +319,18 @@ const getOrderById = async (req, res) => {
 const APPROVE_ARTWORK_BLOCKED_MESSAGE =
   'Order line not found, access denied, or this order is not open for customer artwork upload.';
 
+function normalizeGuestArtworkMime(file) {
+  const mime = String(file?.mimetype || '').toLowerCase().trim();
+  const name = String(file?.originalname || '').toLowerCase().trim();
+  if (mime === 'application/pdf' || mime === 'application/x-pdf' || mime === 'application/acrobat') {
+    return 'application/pdf';
+  }
+  if (name.endsWith('.pdf')) {
+    return 'application/pdf';
+  }
+  return mime;
+}
+
 /** POST multipart file: saves artwork and links URL to order_items for the authenticated buyer. */
 const approveOrderItemArtwork = async (req, res) => {
   if (!req.file || !req.file.buffer) {
@@ -347,10 +359,59 @@ const approveOrderItemArtwork = async (req, res) => {
     if (!row) {
       return res.status(404).json({ message: APPROVE_ARTWORK_BLOCKED_MESSAGE });
     }
+    const advanced = await orderRepository.maybeAdvanceOrderToPrintingAfterArtwork(orderId);
     return res.status(200).json({
       orderItemId: row.id,
       customerArtworkUrl: row.customer_artwork_url,
       orderId: row.order_id,
+      ...(advanced?.status ? { orderStatus: advanced.status } : {}),
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Could not save artwork.';
+    return res.status(400).json({ message });
+  }
+};
+
+/** POST multipart: guest saves artwork using tracking token (same file rules as buyer approve). */
+const approveGuestOrderItemArtwork = async (req, res) => {
+  if (!req.file || !req.file.buffer) {
+    return res.status(400).json({ message: 'No artwork file uploaded.' });
+  }
+  const orderId = parseInt(String(req.params.id), 10);
+  const itemId = parseInt(String(req.params.itemId), 10);
+  if (!Number.isFinite(orderId) || orderId <= 0 || !Number.isFinite(itemId) || itemId <= 0) {
+    return res.status(400).json({ message: 'Invalid order or line item id.' });
+  }
+  const token = String(req.query?.token || '').trim();
+  if (!token) return res.status(400).json({ message: 'token is required' });
+  const tokenHash = hashGuestTrackingToken(token);
+  const order = await orderRepository.findGuestOrderByIdAndTokenHash(orderId, tokenHash);
+  if (!order) {
+    return res.status(404).json({ message: APPROVE_ARTWORK_BLOCKED_MESSAGE });
+  }
+  const mimeType = normalizeGuestArtworkMime(req.file);
+  try {
+    const line = await orderRepository.selectOrderItemArtworkLineForOrder(orderId, itemId);
+    if (!line) {
+      return res.status(404).json({ message: APPROVE_ARTWORK_BLOCKED_MESSAGE });
+    }
+    const dimensions = await validateArtworkBufferAgainstOrderDimensions(
+      req.file.buffer,
+      mimeType,
+      line.width_inches,
+      line.height_inches
+    );
+    const { url } = await saveArtworkBufferToStorage(req.file.buffer, mimeType, dimensions);
+    const row = await orderRepository.updateCustomerArtworkForOrderItemByOrderId(orderId, itemId, url);
+    if (!row) {
+      return res.status(404).json({ message: APPROVE_ARTWORK_BLOCKED_MESSAGE });
+    }
+    const advanced = await orderRepository.maybeAdvanceOrderToPrintingAfterArtwork(orderId);
+    return res.status(200).json({
+      orderItemId: row.id,
+      customerArtworkUrl: row.customer_artwork_url,
+      orderId: row.order_id,
+      ...(advanced?.status ? { orderStatus: advanced.status } : {}),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Could not save artwork.';
@@ -1006,6 +1067,7 @@ module.exports = {
   getOrders,
   getOrderById,
   approveOrderItemArtwork,
+  approveGuestOrderItemArtwork,
   getAllOrders,
   getOrderByIdAdmin,
   updateOrderStatus,

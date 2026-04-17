@@ -16,16 +16,27 @@ const {
   confirmStripePayment,
   requestOrderCancellation,
   requestGuestOrderCancellation,
+  approveGuestOrderItemArtwork,
   refundOrderAdmin,
 } = require('../controllers/orderController');
 const { authenticateToken, optionalAuth, requireAdmin } = require('../middleware/auth');
-const { uploadArtworkFile } = require('../middleware/upload');
+const { uploadArtworkFile, uploadGuestArtworkFile } = require('../middleware/upload');
 
 router.post('/', optionalAuth, createOrder);
 router.post('/create-payment-intent', optionalAuth, createOrderWithPaymentIntent);
 router.post('/confirm-stripe-payment', optionalAuth, confirmStripePayment);
 router.get('/guest/:id', getGuestOrderByIdWithToken);
 router.post('/guest/:id/request-cancellation', requestGuestOrderCancellation);
+router.post(
+  '/guest/:id/items/:itemId/approve-artwork',
+  (req, res, next) => {
+    uploadGuestArtworkFile.single('file')(req, res, (err) => {
+      if (err) return res.status(400).json({ message: err.message || 'File upload failed' });
+      next();
+    });
+  },
+  approveGuestOrderItemArtwork
+);
 router.post('/:id/request-cancellation', authenticateToken, requestOrderCancellation);
 router.get('/', authenticateToken, getOrders);
 router.post(
