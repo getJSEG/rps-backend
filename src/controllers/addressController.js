@@ -144,18 +144,38 @@ const updateAddress = async (req, res) => {
 
 const deleteAddress = async (req, res) => {
   try {
-    const { id } = req.params;
+    const addressId = parseInt(req.params.id, 10);
+    if (Number.isNaN(addressId)) {
+      return res.status(400).json({ message: 'Invalid address id' });
+    }
     const userId = req.user.id;
 
-    const result = await pool.query('DELETE FROM addresses WHERE id = $1 AND user_id = $2 RETURNING id', [id, userId]);
-
-    if (result.rows.length === 0) {
+    const own = await pool.query('SELECT id FROM addresses WHERE id = $1 AND user_id = $2', [addressId, userId]);
+    if (own.rows.length === 0) {
       return res.status(404).json({ message: 'Address not found' });
     }
 
+    const used = await pool.query(
+      `SELECT 1 FROM orders WHERE shipping_address_id = $1 OR billing_address_id = $1 LIMIT 1`,
+      [addressId]
+    );
+    if (used.rows.length > 0) {
+      return res.status(409).json({
+        message:
+          'This address is linked to one or more orders and cannot be removed. Edit it to change the details, or add a new address.',
+      });
+    }
+
+    await pool.query('DELETE FROM addresses WHERE id = $1 AND user_id = $2', [addressId, userId]);
     res.json({ message: 'Address deleted successfully' });
   } catch (error) {
     console.error('Delete address error:', error);
+    if (error.code === '23503') {
+      return res.status(409).json({
+        message:
+          'This address is still in use (for example on an order) and cannot be removed. Edit it instead, or add a new address.',
+      });
+    }
     res.status(500).json({ message: 'Failed to delete address' });
   }
 };

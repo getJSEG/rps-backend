@@ -43,33 +43,24 @@ const getAllRegisteredUsers = async (req, res) => {
 const changePassword = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { currentPassword, newPassword } = req.body;
+    const { newPassword } = req.body;
 
-    if (!currentPassword || !newPassword) {
-      return res.status(400).json({ message: 'Current password and new password are required' });
+    if (!newPassword) {
+      return res.status(400).json({ message: 'New password is required' });
     }
 
     if (newPassword.length < 6) {
       return res.status(400).json({ message: 'New password must be at least 6 characters' });
     }
 
-    // Get current password hash
-    const userResult = await pool.query(
-      'SELECT password_hash FROM users WHERE id = $1',
-      [userId]
-    );
-
+    const userResult = await pool.query('SELECT id FROM users WHERE id = $1', [userId]);
     if (userResult.rows.length === 0) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Verify current password
-    const isValidPassword = await bcrypt.compare(currentPassword, userResult.rows[0].password_hash);
-    if (!isValidPassword) {
-      return res.status(401).json({ message: 'Current password is incorrect' });
-    }
+    // Account change-password UI: logged-in user sets a new password only (no email code, no current-password check).
+    // Email + code flow remains on POST /auth/send-reset-code and POST /auth/reset-password for unauthenticated reset.
 
-    // Hash new password
     const newPasswordHash = await bcrypt.hash(newPassword, 10);
 
     // Update password
