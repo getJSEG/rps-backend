@@ -20,6 +20,8 @@ function getSqlMigrationFiles(migrationsDir) {
   const priority = new Map([
     ['createTables.sql', 0],
     ['updateTables.sql', 1],
+    ['addShippingRatesAndOrderShipping.sql', 2],
+    ['addFreeShippingSettings.sql', 3],
   ]);
 
   return files.sort((a, b) => {

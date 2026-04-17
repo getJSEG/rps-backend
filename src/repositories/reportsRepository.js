@@ -2,6 +2,9 @@ const pool = require('../config/database');
 
 const NORMALIZED_STATUS = `replace(lower(trim(COALESCE(o.status, ''))), ' ', '_')`;
 
+/** Order totals included in dashboard "Total revenue" (completed pipeline only). */
+const COMPLETED_FOR_REVENUE = `${NORMALIZED_STATUS} IN ('completed', 'complete', 'delivered')`;
+
 const PAID_OR_COMPLETED_CLAUSE = `
   (
     COALESCE(o.payment_status, '') = 'paid'
@@ -17,8 +20,8 @@ const SUMMARY_QUERY = `
       WHERE COALESCE(lower(trim(u.role)), 'customer') = 'customer'
     ) AS registered_users_count,
     COUNT(*)::int AS total_orders,
-    COALESCE(SUM(CASE WHEN ${PAID_OR_COMPLETED_CLAUSE} THEN o.total_amount ELSE 0 END), 0)::numeric AS total_revenue,
-    COUNT(*) FILTER (WHERE ${PAID_OR_COMPLETED_CLAUSE})::int AS paid_orders,
+    COALESCE(SUM(CASE WHEN ${COMPLETED_FOR_REVENUE} THEN o.total_amount ELSE 0 END), 0)::numeric AS total_revenue,
+    COUNT(*) FILTER (WHERE ${COMPLETED_FOR_REVENUE})::int AS revenue_completed_order_count,
     COUNT(*) FILTER (
       WHERE ${NORMALIZED_STATUS} NOT IN ('completed', 'refunded')
     )::int AS pending_orders,
@@ -133,8 +136,9 @@ async function getAdminDashboardData({ fromIso, toIso, chartYear, topLimit, rece
 
   const summary = summaryResult.rows[0] || {};
   const totalRevenue = Number(summary.total_revenue || 0);
-  const paidOrders = Number(summary.paid_orders || 0);
-  const averageOrderValue = paidOrders > 0 ? totalRevenue / paidOrders : 0;
+  const revenueCompletedOrderCount = Number(summary.revenue_completed_order_count || 0);
+  const averageOrderValue =
+    revenueCompletedOrderCount > 0 ? totalRevenue / revenueCompletedOrderCount : 0;
 
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const revenueByMonthMap = new Map(

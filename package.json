@@ -9,6 +9,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "npx nodemon src/server.js",
+    "db:reset": "node -e \"require('dotenv').config();const { Pool } = require('pg');(async()=>{const raw=process.env.DATABASE_PRIVATE_URL||process.env.DATABASE_URL;const connectionString=typeof raw==='string'&&raw.trim()?raw.trim():null;const pool=connectionString?new Pool({connectionString,ssl:{rejectUnauthorized:false}}):new Pool({database:process.env.DB_NAME||'elmer_db',user:process.env.DB_USER||'postgres',host:process.env.DB_HOST||'localhost',port:parseInt(process.env.DB_PORT||'5432',10),password:process.env.DB_PASSWORD!=null?String(process.env.DB_PASSWORD):undefined});await pool.query('DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;');await pool.end();})().catch((error)=>{console.error('Database reset failed:',error);process.exit(1);});\" && npm run migrate && npm run seed",
     "migrate": "node src/migrations/runMigrations.js",
     "migrate:pricing": "node src/migrations/runAddPricingColumns.js",
     "migrate:employees": "node src/migrations/runEmployeeColumns.js",
