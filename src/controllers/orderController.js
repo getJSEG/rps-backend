@@ -777,7 +777,7 @@ const createOrderWithPaymentIntent = async (req, res) => {
     const paymentIntent = await stripe.paymentIntents.create({
       amount: amountCents,
       currency: 'usd',
-      automatic_payment_methods: { enabled: true },
+      payment_method_types: ['card'],
       metadata,
     });
     await orderRepository.setOrderStripePaymentIntent(orderId, paymentIntent.id);
