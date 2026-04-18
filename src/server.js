@@ -6,6 +6,7 @@ const morgan = require('morgan');
 require('dotenv').config();
 
 const pool = require('./config/database');
+const { startCartCleanupJob } = require('./jobs/cartCleanupJob');
 
 /** Create base tables (users, addresses, etc.) if they do not exist - for fresh Railway DB */
 async function ensureBaseTables() {
@@ -224,6 +225,7 @@ ensureBaseTables()
   const server = app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    startCartCleanupJob();
   });
 
   server.on('error', (err) => {

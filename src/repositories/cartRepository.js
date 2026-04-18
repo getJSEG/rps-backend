@@ -23,6 +23,8 @@ const SQL = {
   UPDATE_BY_ID_AND_GUEST: `UPDATE cart_items SET item_data = $1::jsonb WHERE id = $2 AND guest_session_id = $3 RETURNING *`,
   CLEAR_BY_USER_ID: 'DELETE FROM cart_items WHERE user_id = $1',
   CLEAR_BY_GUEST_SESSION: 'DELETE FROM cart_items WHERE guest_session_id = $1',
+  DELETE_EXPIRED_ITEMS: `DELETE FROM cart_items
+    WHERE created_at < NOW() - INTERVAL '30 days'`,
 };
 
 const ORDER_PAIR_SEP = '_';
@@ -171,6 +173,15 @@ async function findCartRowByIdAndGuest(cartItemId, guestSessionId) {
   return r.rows[0] || null;
 }
 
+/**
+ * Deletes cart rows older than 30 days.
+ * @returns {number} rowCount
+ */
+async function deleteExpiredCartItems() {
+  const r = await pool.query(SQL.DELETE_EXPIRED_ITEMS);
+  return r.rowCount;
+}
+
 module.exports = {
   insertCartItem,
   findAdminCartItems,
@@ -184,6 +195,7 @@ module.exports = {
   updateCartItemDataByGuest,
   clearCartByUserId,
   clearCartByGuestSession,
+  deleteExpiredCartItems,
   findCartRowByIdAdmin,
   findCartRowByIdAndUser,
   findCartRowByIdAndGuest,
