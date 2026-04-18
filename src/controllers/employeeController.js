@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const pool = require('../config/database');
 const { uploadFromBuffer, isConfigured: spacesConfigured } = require('../utils/spaces');
+const STRONG_PASSWORD_REGEX = /^(?=.*[A-Z])(?=.*\d).+$/;
 
 const FIELDS = 'id, email, full_name, telephone, role, is_active, is_approved, profile_image, hire_date, created_at, updated_at';
 const FIELDS_MINIMAL = 'id, email, full_name, telephone, role, is_active, is_approved, created_at, updated_at';
@@ -95,6 +96,9 @@ const create = async (req, res) => {
     }
     if (password.length < 6) {
       return res.status(400).json({ message: 'Password must be at least 6 characters' });
+    }
+    if (!STRONG_PASSWORD_REGEX.test(password)) {
+      return res.status(400).json({ message: 'Password must include at least one uppercase letter and one number' });
     }
     const safeRole = role === 'admin' ? 'admin' : 'employee';
 
@@ -201,6 +205,9 @@ const update = async (req, res) => {
       idx++;
     }
     if (password && password.length >= 6) {
+      if (!STRONG_PASSWORD_REGEX.test(password)) {
+        return res.status(400).json({ message: 'Password must include at least one uppercase letter and one number' });
+      }
       const passwordHash = await bcrypt.hash(password, 10);
       query += `, password_hash = $${idx}`;
       params.push(passwordHash);
@@ -226,6 +233,9 @@ const update = async (req, res) => {
         if (is_approved !== undefined) { minimalQuery += `, is_approved = $${i}`; minParams.push(!!is_approved); i++; }
         if (role === 'admin' || role === 'employee') { minimalQuery += `, role = $${i}`; minParams.push(role); i++; }
         if (password && password.length >= 6) {
+          if (!STRONG_PASSWORD_REGEX.test(password)) {
+            return res.status(400).json({ message: 'Password must include at least one uppercase letter and one number' });
+          }
           const passwordHash = await bcrypt.hash(password, 10);
           minimalQuery += `, password_hash = $${i}`;
           minParams.push(passwordHash);

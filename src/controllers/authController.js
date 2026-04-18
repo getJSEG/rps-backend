@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const pool = require('../config/database');
 const { generateToken } = require('../utils/jwt');
 const { sendPasswordResetCode } = require('../utils/email');
+const STRONG_PASSWORD_REGEX = /^(?=.*[A-Z])(?=.*\d).+$/;
 
 const register = async (req, res) => {
   try {
@@ -35,6 +36,9 @@ const register = async (req, res) => {
 
     if (password.length < 6) {
       return res.status(400).json({ message: 'Password must be at least 6 characters' });
+    }
+    if (!STRONG_PASSWORD_REGEX.test(password)) {
+      return res.status(400).json({ message: 'Password must include at least one uppercase letter and one number' });
     }
 
     // Validate shipping address if not same as billing
@@ -148,6 +152,9 @@ const createAdmin = async (req, res) => {
     }
     if (password.length < 6) {
       return res.status(400).json({ message: 'Password must be at least 6 characters' });
+    }
+    if (!STRONG_PASSWORD_REGEX.test(password)) {
+      return res.status(400).json({ message: 'Password must include at least one uppercase letter and one number' });
     }
     const existing = await pool.query('SELECT id, email, role FROM users WHERE email = $1', [email]);
     const passwordHash = await bcrypt.hash(password, 10);
@@ -341,6 +348,9 @@ const resetPasswordWithCode = async (req, res) => {
 
     if (newPassword.length < 6) {
       return res.status(400).json({ message: 'New password must be at least 6 characters' });
+    }
+    if (!STRONG_PASSWORD_REGEX.test(newPassword)) {
+      return res.status(400).json({ message: 'New password must include at least one uppercase letter and one number' });
     }
 
     const row = await pool.query(

@@ -1,5 +1,6 @@
 const bcrypt = require('bcryptjs');
 const pool = require('../config/database');
+const STRONG_PASSWORD_REGEX = /^(?=.*[A-Z])(?=.*\d).+$/;
 
 const updateProfile = async (req, res) => {
   try {
@@ -51,6 +52,11 @@ const changePassword = async (req, res) => {
 
     if (newPassword.length < 6) {
       return res.status(400).json({ message: 'New password must be at least 6 characters' });
+    }
+    if (!STRONG_PASSWORD_REGEX.test(newPassword)) {
+      return res.status(400).json({
+        message: 'New password must include at least one uppercase letter and one number',
+      });
     }
 
     const userResult = await pool.query('SELECT id FROM users WHERE id = $1', [userId]);
