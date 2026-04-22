@@ -24,14 +24,18 @@ const register = async (req, res) => {
       shippingState,
       shippingPostcode,
       shippingCountry,
-      shippingTelephone,
       newsletter,
       termsAccepted
     } = req.body;
 
-    // Validation
-    if (!email || !password || !fullName || !termsAccepted) {
+    // Base required fields
+    if (!email || !password || !fullName) {
       return res.status(400).json({ message: 'Missing required fields' });
+    }
+
+    // Terms acceptance must be explicit
+    if (termsAccepted !== true) {
+      return res.status(400).json({ message: 'Please accept the terms and conditions' });
     }
 
     if (password.length < 6) {
