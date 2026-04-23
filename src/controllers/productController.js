@@ -30,6 +30,12 @@ function normalizeMode(value, fallback) {
   return v || fallback;
 }
 
+function normalizeModeScope(value) {
+  const v = String(value || '').trim().toLowerCase();
+  if (v === 'graphic_only' || v === 'graphic_frame') return v;
+  return 'all';
+}
+
 function parseSizeOptionsInput(value) {
   if (!Array.isArray(value)) return [];
   return value
@@ -67,6 +73,352 @@ async function replaceProductSizeOptions(productId, options) {
        VALUES ($1, $2, $3, $4, $5, $6)`,
       [productId, opt.label, opt.width, opt.height, opt.unit_price, isDefault]
     );
+  }
+}
+
+async function getProductModifierGroups(productId, { includeInactive = false } = {}) {
+  const result = await pool.query(
+    `SELECT
+      pm.id AS product_modifier_id,
+      pm.is_required,
+      pm.sort_order AS product_sort_order,
+      pm.mode_scope,
+      pm.is_active AS product_modifier_active,
+      mg.id AS modifier_group_id,
+      mg.name AS group_name,
+      mg.key AS group_key,
+      mg.input_type,
+      mg.is_active AS group_active,
+      mo.id AS modifier_option_id,
+      mo.label AS option_label,
+      mo.value AS option_value,
+      mo.price_adjustment AS option_price_adjustment,
+      mo.price_type AS option_price_type,
+      mo.is_default AS option_default,
+      mo.is_active AS option_active,
+      pmo.id AS product_modifier_option_id,
+      pmo.price_adjustment_override,
+      pmo.is_default AS product_option_default,
+      pmo.is_active AS product_option_active
+    FROM product_modifiers pm
+    INNER JOIN modifier_groups mg ON mg.id = pm.modifier_group_id
+    INNER JOIN product_modifier_options pmo ON pmo.product_modifier_id = pm.id
+    INNER JOIN modifier_options mo ON mo.id = pmo.modifier_option_id
+    WHERE pm.product_id = $1
+    ORDER BY pm.sort_order ASC, mg.sort_order ASC, pmo.is_default DESC, mo.sort_order ASC, mo.id ASC`,
+    [productId]
+  );
+  const byKey = new Map();
+  for (const row of result.rows) {
+    if (!includeInactive) {
+      if (!row.product_modifier_active || !row.group_active || !row.product_option_active || !row.option_active) {
+        continue;
+      }
+    }
+    const key = String(row.group_key || '').trim();
+    if (!key) continue;
+    if (!byKey.has(key)) {
+      byKey.set(key, {
+        product_modifier_id: Number(row.product_modifier_id),
+        modifier_group_id: Number(row.modifier_group_id),
+        key,
+        name: String(row.group_name || key),
+        input_type: String(row.input_type || 'dropdown'),
+        is_required: !!row.is_required,
+        mode_scope: normalizeModeScope(row.mode_scope),
+        is_active: !!row.product_modifier_active,
+        sort_order: Number(row.product_sort_order || 0),
+        options: [],
+      });
+    }
+    byKey.get(key).options.push({
+      id: Number(row.modifier_option_id),
+      product_modifier_option_id: Number(row.product_modifier_option_id),
+      label: String(row.option_label || ''),
+      value: String(row.option_value || ''),
+      price_adjustment:
+        row.price_adjustment_override != null
+          ? Number(row.price_adjustment_override)
+          : Number(row.option_price_adjustment || 0),
+      price_type: String(row.option_price_type || 'fixed').toLowerCase(),
+      is_default: !!row.product_option_default,
+      _catalog_default: !!row.option_default,
+      is_active: !!row.product_option_active,
+    });
+  }
+  const groups = Array.from(byKey.values());
+  for (const group of groups) {
+    const hasProductDefault = group.options.some((opt) => opt.is_default === true);
+    group.options = group.options.map((opt, idx) => ({
+      ...opt,
+      // Product-level default must win. Only fall back to catalog default when
+      // no explicit product default exists for this group.
+      is_default: hasProductDefault
+        ? !!opt.is_default
+        : !!opt._catalog_default,
+      _catalog_default: undefined,
+    }));
+  }
+  return groups;
+}
+
+async function replaceProductModifierConfig(productId, payload) {
+  const groups = Array.isArray(payload?.groups) ? payload.groups : [];
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM product_modifier_options WHERE product_modifier_id IN (SELECT id FROM product_modifiers WHERE product_id = $1)', [productId]);
+    await client.query('DELETE FROM product_modifiers WHERE product_id = $1', [productId]);
+    for (let i = 0; i < groups.length; i++) {
+      const g = groups[i] || {};
+      const groupKey = String(g.key || '').trim().toLowerCase();
+      if (!groupKey) continue;
+      const mgRes = await client.query(
+        `SELECT id FROM modifier_groups WHERE key = $1 AND is_active = true`,
+        [groupKey]
+      );
+      if (mgRes.rows.length === 0) {
+        throw new Error(`Modifier group not found: ${groupKey}`);
+      }
+      const productModifierRes = await client.query(
+        `INSERT INTO product_modifiers (product_id, modifier_group_id, is_required, sort_order, mode_scope, is_active)
+         VALUES ($1, $2, $3, $4, $5, true)
+         RETURNING id`,
+        [
+          productId,
+          mgRes.rows[0].id,
+          g.is_required === true,
+          g.sort_order != null ? Number(g.sort_order) : i,
+          normalizeModeScope(g.mode_scope),
+        ]
+      );
+      const productModifierId = productModifierRes.rows[0].id;
+      const options = Array.isArray(g.options) ? g.options : [];
+      const insertedOptionIds = new Set();
+      for (let j = 0; j < options.length; j++) {
+        const opt = options[j] || {};
+        const explicitOptionId = opt.option_id != null ? Number(opt.option_id) : null;
+        let resolvedOptionId = null;
+        if (explicitOptionId != null && Number.isFinite(explicitOptionId)) {
+          const checkById = await client.query(
+            `SELECT id FROM modifier_options WHERE id = $1 AND modifier_group_id = $2 AND is_active = true`,
+            [explicitOptionId, mgRes.rows[0].id]
+          );
+          if (checkById.rows.length === 0) {
+            throw new Error(`Modifier option not found for id ${explicitOptionId}.`);
+          }
+          resolvedOptionId = Number(checkById.rows[0].id);
+        } else {
+          const optionValue = String(opt.value || '').trim();
+          if (!optionValue) continue;
+          const moRes = await client.query(
+            `SELECT id FROM modifier_options WHERE modifier_group_id = $1 AND value = $2 AND is_active = true ORDER BY id ASC`,
+            [mgRes.rows[0].id, optionValue]
+          );
+          if (moRes.rows.length === 0) {
+            throw new Error(`Modifier option not found: ${groupKey}.${optionValue}`);
+          }
+          resolvedOptionId = Number(moRes.rows[0].id);
+        }
+        if (insertedOptionIds.has(resolvedOptionId)) continue;
+        insertedOptionIds.add(resolvedOptionId);
+        await client.query(
+          `INSERT INTO product_modifier_options (product_modifier_id, modifier_option_id, price_adjustment_override, is_default, is_active)
+           VALUES ($1, $2, $3, $4, true)`,
+          [
+            productModifierId,
+            resolvedOptionId,
+            opt.price_adjustment_override != null ? Number(opt.price_adjustment_override) : null,
+            opt.is_default === true,
+          ]
+        );
+      }
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function getModifierCatalog({ includeInactive = true } = {}) {
+  const result = await pool.query(
+    `SELECT
+      mg.id AS group_id,
+      mg.name AS group_name,
+      mg.key AS group_key,
+      mg.input_type,
+      mg.sort_order AS group_sort_order,
+      mg.is_active AS group_active,
+      mo.id AS option_id,
+      mo.label AS option_label,
+      mo.value AS option_value,
+      mo.price_adjustment,
+      mo.price_type,
+      mo.is_default,
+      mo.sort_order AS option_sort_order,
+      mo.is_active AS option_active
+    FROM modifier_groups mg
+    LEFT JOIN modifier_options mo ON mo.modifier_group_id = mg.id
+    ORDER BY mg.sort_order ASC, mg.id ASC, mo.sort_order ASC, mo.id ASC`
+  );
+  const groupsByKey = new Map();
+  for (const row of result.rows) {
+    if (!includeInactive && !row.group_active) continue;
+    const key = String(row.group_key || '').trim();
+    if (!key) continue;
+    if (!groupsByKey.has(key)) {
+      groupsByKey.set(key, {
+        id: Number(row.group_id),
+        key,
+        name: String(row.group_name || key),
+        input_type: String(row.input_type || 'dropdown'),
+        sort_order: Number(row.group_sort_order || 0),
+        is_active: !!row.group_active,
+        options: [],
+      });
+    }
+    if (row.option_id == null) continue;
+    if (!includeInactive && !row.option_active) continue;
+    groupsByKey.get(key).options.push({
+      id: Number(row.option_id),
+      label: String(row.option_label || ''),
+      value: String(row.option_value || ''),
+      price_adjustment: Number(row.price_adjustment || 0),
+      price_type: String(row.price_type || 'fixed'),
+      is_default: !!row.is_default,
+      sort_order: Number(row.option_sort_order || 0),
+      is_active: !!row.option_active,
+    });
+  }
+  return Array.from(groupsByKey.values());
+}
+
+async function replaceModifierCatalog(payload) {
+  const groups = Array.isArray(payload?.groups) ? payload.groups : [];
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const keptGroupIds = [];
+    for (let i = 0; i < groups.length; i++) {
+      const g = groups[i] || {};
+      const key = String(g.key || '').trim().toLowerCase();
+      const name = String(g.name || '').trim();
+      if (!key || !name) continue;
+      const groupRes = await client.query(
+        `INSERT INTO modifier_groups (name, key, input_type, sort_order, is_active)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (key)
+         DO UPDATE SET
+           name = EXCLUDED.name,
+           input_type = EXCLUDED.input_type,
+           sort_order = EXCLUDED.sort_order,
+           is_active = EXCLUDED.is_active,
+           updated_at = NOW()
+         RETURNING id`,
+        [
+          name,
+          key,
+          String(g.input_type || 'dropdown'),
+          g.sort_order != null ? Number(g.sort_order) : i,
+          g.is_active !== false,
+        ]
+      );
+      const groupId = Number(groupRes.rows[0].id);
+      keptGroupIds.push(groupId);
+
+      const options = Array.isArray(g.options) ? g.options : [];
+      const keptOptionIds = [];
+      for (let j = 0; j < options.length; j++) {
+        const o = options[j] || {};
+        const value = String(o.value || o.label || '').trim();
+        const label = String(o.label || '').trim();
+        if (!label) continue;
+        const explicitOptionId = o.id != null ? Number(o.id) : null;
+
+        if (explicitOptionId != null && Number.isFinite(explicitOptionId)) {
+          const checkRes = await client.query(
+            `SELECT id FROM modifier_options WHERE id = $1 AND modifier_group_id = $2`,
+            [explicitOptionId, groupId]
+          );
+          if (checkRes.rows.length > 0) {
+            const updateRes = await client.query(
+              `UPDATE modifier_options
+               SET
+                 label = $1,
+                 value = $2,
+                 price_adjustment = $3,
+                 price_type = $4,
+                 is_default = $5,
+                 sort_order = $6,
+                 is_active = $7,
+                 updated_at = NOW()
+               WHERE id = $8
+               RETURNING id`,
+              [
+                label,
+                value,
+                o.price_adjustment != null ? Number(o.price_adjustment) : 0,
+                String(o.price_type || 'fixed'),
+                o.is_default === true,
+                o.sort_order != null ? Number(o.sort_order) : j,
+                o.is_active !== false,
+                explicitOptionId,
+              ]
+            );
+            keptOptionIds.push(Number(updateRes.rows[0].id));
+            continue;
+          }
+        }
+
+        const insertRes = await client.query(
+          `INSERT INTO modifier_options (modifier_group_id, label, value, price_adjustment, price_type, is_default, sort_order, is_active)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           RETURNING id`,
+          [
+            groupId,
+            label,
+            value,
+            o.price_adjustment != null ? Number(o.price_adjustment) : 0,
+            String(o.price_type || 'fixed'),
+            o.is_default === true,
+            o.sort_order != null ? Number(o.sort_order) : j,
+            o.is_active !== false,
+          ]
+        );
+        keptOptionIds.push(Number(insertRes.rows[0].id));
+      }
+
+      if (keptOptionIds.length > 0) {
+        await client.query(
+          `DELETE FROM modifier_options
+           WHERE modifier_group_id = $1
+             AND NOT (id = ANY($2::int[]))`,
+          [groupId, keptOptionIds]
+        );
+      } else {
+        await client.query(`DELETE FROM modifier_options WHERE modifier_group_id = $1`, [groupId]);
+      }
+    }
+
+    if (keptGroupIds.length > 0) {
+      await client.query(
+        `DELETE FROM modifier_groups
+         WHERE NOT (id = ANY($1::int[]))`,
+        [keptGroupIds]
+      );
+    } else {
+      await client.query(`DELETE FROM modifier_groups`);
+    }
+
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
   }
 }
 
@@ -165,6 +517,7 @@ const getProductById = async (req, res) => {
     }
     const product = result.rows[0];
     product.size_options = await getProductSizeOptions(product.id);
+    product.modifier_groups = await getProductModifierGroups(product.id);
     const sm = product.size_mode != null ? String(product.size_mode).trim() : '';
     if (!sm && Array.isArray(product.size_options) && product.size_options.length > 0) {
       product.size_mode = 'predefined';
@@ -173,6 +526,80 @@ const getProductById = async (req, res) => {
   } catch (error) {
     console.error('❌ Get product error:', error);
     res.status(500).json({ message: 'Failed to fetch product' });
+  }
+};
+
+const getProductModifierConfigAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const check = await pool.query('SELECT id FROM products WHERE id = $1', [id]);
+    if (check.rows.length === 0) return res.status(404).json({ message: 'Product not found' });
+    const groups = await getProductModifierGroups(id, { includeInactive: true });
+    res.json({ product_id: Number(id), groups });
+  } catch (error) {
+    console.error('Get product modifier config error:', error);
+    res.status(500).json({ message: 'Failed to fetch product modifier config' });
+  }
+};
+
+const updateProductModifierConfigAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const check = await pool.query('SELECT id FROM products WHERE id = $1', [id]);
+    if (check.rows.length === 0) return res.status(404).json({ message: 'Product not found' });
+    await replaceProductModifierConfig(id, req.body || {});
+    const groups = await getProductModifierGroups(id, { includeInactive: true });
+    res.json({ product_id: Number(id), groups });
+  } catch (error) {
+    console.error('Update product modifier config error:', error);
+    const code = /not found|invalid|required/i.test(String(error.message || '')) ? 400 : 500;
+    res.status(code).json({ message: error.message || 'Failed to update product modifier config' });
+  }
+};
+
+const getModifierCatalogAdmin = async (req, res) => {
+  try {
+    const groups = await getModifierCatalog({ includeInactive: true });
+    res.json({ groups });
+  } catch (error) {
+    console.error('Get modifier catalog error:', error);
+    res.status(500).json({ message: 'Failed to fetch modifier catalog' });
+  }
+};
+
+const updateModifierCatalogAdmin = async (req, res) => {
+  try {
+    await replaceModifierCatalog(req.body || {});
+    const groups = await getModifierCatalog({ includeInactive: true });
+    res.json({ groups });
+  } catch (error) {
+    console.error('Update modifier catalog error:', error);
+    const code = /invalid|required|constraint/i.test(String(error.message || '')) ? 400 : 500;
+    res.status(code).json({ message: error.message || 'Failed to update modifier catalog' });
+  }
+};
+
+const deleteModifierCatalogGroupAdmin = async (req, res) => {
+  try {
+    const rawKey = req.params?.key;
+    const key = String(rawKey || '').trim().toLowerCase();
+    if (!key) {
+      return res.status(400).json({ message: 'Modifier key is required.' });
+    }
+    const result = await pool.query(
+      `DELETE FROM modifier_groups WHERE key = $1 RETURNING id, key, name`,
+      [key]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ message: 'Modifier group not found.' });
+    }
+    return res.json({
+      message: 'Modifier group deleted.',
+      group: result.rows[0],
+    });
+  } catch (error) {
+    console.error('Delete modifier catalog group error:', error);
+    return res.status(500).json({ message: 'Failed to delete modifier group' });
   }
 };
 
@@ -392,6 +819,7 @@ const createProduct = async (req, res) => {
       min_height,
       max_height,
       size_options,
+      graphic_scenario_enabled,
     } = req.body;
     if (!name) return res.status(400).json({ message: 'Product name is required' });
     const slugVal = slug || name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') + '-' + Date.now();
@@ -403,6 +831,13 @@ const createProduct = async (req, res) => {
     const imageUrlFinal = galleryFinal[0] || null;
     const galleryJson = JSON.stringify(galleryFinal);
     const pricingModeVal = normalizeMode(pricing_mode, price_per_sqft != null ? 'area' : 'fixed');
+    const graphicScenarioEnabledVal = graphic_scenario_enabled === true || graphic_scenario_enabled === 'true';
+    if (graphicScenarioEnabledVal && pricingModeVal !== 'fixed') {
+      return res.status(400).json({ message: 'Graphic scenario products must use fixed pricing.' });
+    }
+    const pricePerSqftVal = graphicScenarioEnabledVal
+      ? null
+      : (price_per_sqft != null ? parseFloat(price_per_sqft) : null);
     const sizeModeVal = normalizeMode(size_mode, 'custom');
     const baseUnitVal = String(base_unit || 'inch').trim().toLowerCase() || 'inch';
     const minWidthVal = asNumberOrNull(min_width);
@@ -415,8 +850,8 @@ const createProduct = async (req, res) => {
     }
 
     const result = await pool.query(
-      `INSERT INTO products (name, slug, description, spec, file_setup, installation_guide, faq, category_id, subcategory, price, price_per_sqft, min_charge, material, image_url, is_new, is_active, sku, properties, gallery_images, pricing_mode, size_mode, base_unit, min_width, max_width, min_height, max_height)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb, $20, $21, $22, $23, $24, $25, $26)
+      `INSERT INTO products (name, slug, description, spec, file_setup, installation_guide, faq, category_id, subcategory, price, price_per_sqft, min_charge, material, image_url, is_new, is_active, sku, properties, gallery_images, pricing_mode, size_mode, base_unit, min_width, max_width, min_height, max_height, graphic_scenario_enabled)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb, $20, $21, $22, $23, $24, $25, $26, $27)
        RETURNING *`,
       [
         name,
@@ -429,7 +864,7 @@ const createProduct = async (req, res) => {
         category_id || null,
         subcategory || null,
         price != null ? parseFloat(price) : null,
-        price_per_sqft != null ? parseFloat(price_per_sqft) : null,
+        pricePerSqftVal,
         min_charge != null ? parseFloat(min_charge) : null,
         material || null,
         imageUrlFinal,
@@ -445,6 +880,7 @@ const createProduct = async (req, res) => {
         maxWidthVal,
         minHeightVal,
         maxHeightVal,
+        graphicScenarioEnabledVal,
       ]
     );
     const created = result.rows[0];
@@ -473,9 +909,19 @@ const updateProduct = async (req, res) => {
     const categoryIdVal = req.body.category_id !== undefined ? (req.body.category_id || null) : row.category_id;
     const subcategoryVal = req.body.subcategory !== undefined ? req.body.subcategory : row.subcategory;
     const priceVal = req.body.price !== undefined ? (req.body.price != null ? parseFloat(req.body.price) : null) : row.price;
-    const pricePerSqftVal = req.body.price_per_sqft !== undefined ? (req.body.price_per_sqft != null ? parseFloat(req.body.price_per_sqft) : null) : row.price_per_sqft;
+    let pricePerSqftVal = req.body.price_per_sqft !== undefined ? (req.body.price_per_sqft != null ? parseFloat(req.body.price_per_sqft) : null) : row.price_per_sqft;
     const minChargeVal = req.body.min_charge !== undefined ? (req.body.min_charge != null ? parseFloat(req.body.min_charge) : null) : row.min_charge;
     const pricingModeVal = req.body.pricing_mode !== undefined ? normalizeMode(req.body.pricing_mode, 'fixed') : row.pricing_mode;
+    const graphicScenarioEnabledVal =
+      req.body.graphic_scenario_enabled !== undefined
+        ? req.body.graphic_scenario_enabled === true || req.body.graphic_scenario_enabled === 'true'
+        : !!row.graphic_scenario_enabled;
+    if (graphicScenarioEnabledVal && pricingModeVal !== 'fixed') {
+      return res.status(400).json({ message: 'Graphic scenario products must use fixed pricing.' });
+    }
+    if (graphicScenarioEnabledVal) {
+      pricePerSqftVal = null;
+    }
     const sizeModeVal = req.body.size_mode !== undefined ? normalizeMode(req.body.size_mode, 'custom') : row.size_mode;
     const baseUnitVal = req.body.base_unit !== undefined ? String(req.body.base_unit || 'inch').trim().toLowerCase() : row.base_unit;
     const minWidthVal = req.body.min_width !== undefined ? asNumberOrNull(req.body.min_width) : row.min_width;
@@ -509,8 +955,8 @@ const updateProduct = async (req, res) => {
       return res.status(400).json({ message: 'size_options are required when size_mode is predefined.' });
     }
     const result = await pool.query(
-      `UPDATE products SET name = $1, slug = $2, description = $3, spec = $4, file_setup = $5, installation_guide = $6, faq = $7::jsonb, category_id = $8, subcategory = $9, price = $10, price_per_sqft = $11, min_charge = $12, material = $13, image_url = $14, is_new = $15, is_active = $16, sku = $17, properties = $18::jsonb, gallery_images = $19::jsonb, pricing_mode = $20, size_mode = $21, base_unit = $22, min_width = $23, max_width = $24, min_height = $25, max_height = $26, updated_at = CURRENT_TIMESTAMP WHERE id = $27 RETURNING *`,
-      [nameVal, slugVal, descriptionVal, specVal, fileSetupVal, installationGuideVal, faqVal, categoryIdVal, subcategoryVal, priceVal, pricePerSqftVal, minChargeVal, materialVal, imageUrlVal, isNewVal, isActiveVal, skuVal, propertiesVal, galleryJson, pricingModeVal, sizeModeVal, baseUnitVal, minWidthVal, maxWidthVal, minHeightVal, maxHeightVal, id]
+      `UPDATE products SET name = $1, slug = $2, description = $3, spec = $4, file_setup = $5, installation_guide = $6, faq = $7::jsonb, category_id = $8, subcategory = $9, price = $10, price_per_sqft = $11, min_charge = $12, material = $13, image_url = $14, is_new = $15, is_active = $16, sku = $17, properties = $18::jsonb, gallery_images = $19::jsonb, pricing_mode = $20, size_mode = $21, base_unit = $22, min_width = $23, max_width = $24, min_height = $25, max_height = $26, graphic_scenario_enabled = $27, updated_at = CURRENT_TIMESTAMP WHERE id = $28 RETURNING *`,
+      [nameVal, slugVal, descriptionVal, specVal, fileSetupVal, installationGuideVal, faqVal, categoryIdVal, subcategoryVal, priceVal, pricePerSqftVal, minChargeVal, materialVal, imageUrlVal, isNewVal, isActiveVal, skuVal, propertiesVal, galleryJson, pricingModeVal, sizeModeVal, baseUnitVal, minWidthVal, maxWidthVal, minHeightVal, maxHeightVal, graphicScenarioEnabledVal, id]
     );
     const updated = result.rows[0];
     await replaceProductSizeOptions(id, parsedSizeOptions);
@@ -610,5 +1056,25 @@ const uploadCategoryImage = async (req, res) => {
   }
 };
 
-module.exports = { getAllProducts, getProductById, previewProductPrice, getCategories, getRelatedProducts, createCategory, updateCategory, deleteCategory, createProduct, updateProduct, getAllProductsAdmin, deleteProductAdmin, uploadProductImage, uploadCategoryImage };
+module.exports = {
+  getAllProducts,
+  getProductById,
+  previewProductPrice,
+  getCategories,
+  getRelatedProducts,
+  createCategory,
+  updateCategory,
+  deleteCategory,
+  createProduct,
+  updateProduct,
+  getAllProductsAdmin,
+  deleteProductAdmin,
+  uploadProductImage,
+  uploadCategoryImage,
+  getProductModifierConfigAdmin,
+  updateProductModifierConfigAdmin,
+  getModifierCatalogAdmin,
+  updateModifierCatalogAdmin,
+  deleteModifierCatalogGroupAdmin,
+};
 
