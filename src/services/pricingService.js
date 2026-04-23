@@ -38,6 +38,10 @@ function normalizeModeScope(value) {
   return 'all';
 }
 
+function optionEffectiveValue(option) {
+  return String(option?.value || option?.label || '').trim();
+}
+
 function normalizeShippingMode(value) {
   const s = String(value || '').trim().toLowerCase();
   if (s === 'store_pickup' || s === 'store-pickup' || s === 'store pickup') {
@@ -184,7 +188,7 @@ function resolveSelectedModifiers(product, input) {
     const requestedValue = selectedObj[group.key];
     let option = null;
     if (requestedValue != null && requestedValue !== '') {
-      option = options.find((o) => String(o.value) === String(requestedValue));
+      option = options.find((o) => optionEffectiveValue(o) === String(requestedValue));
       if (!option) {
         throw new Error(`Invalid option for ${group.name}.`);
       }
@@ -210,7 +214,7 @@ function resolveSelectedModifiers(product, input) {
     selected.push({
       group_key: group.key,
       group_name: group.name,
-      option_value: option.value,
+      option_value: optionEffectiveValue(option),
       option_label: option.label,
       price_adjustment: adjustment,
     });

@@ -365,6 +365,14 @@ const getOrderById = async (req, res) => {
 const APPROVE_ARTWORK_BLOCKED_MESSAGE =
   'Order line not found, access denied, or this order is not open for customer artwork upload.';
 
+function lineUsesGraphicScenario(line) {
+  if (!line || typeof line !== 'object') return false;
+  if (line.graphic_scenario_enabled === true) return true;
+  if (line.product_graphic_scenario_enabled === true) return true;
+  const mode = String(line.selection_mode || '').trim().toLowerCase();
+  return mode === 'graphic_only' || mode === 'graphic_frame';
+}
+
 function normalizeGuestArtworkMime(file) {
   const mime = String(file?.mimetype || '').toLowerCase().trim();
   const name = String(file?.originalname || '').toLowerCase().trim();
@@ -394,11 +402,12 @@ const approveOrderItemArtwork = async (req, res) => {
     if (!line) {
       return res.status(404).json({ message: APPROVE_ARTWORK_BLOCKED_MESSAGE });
     }
+    const enforceAspect = !lineUsesGraphicScenario(line);
     const dimensions = await validateArtworkBufferAgainstOrderDimensions(
       req.file.buffer,
       mimeType,
-      line.width_inches,
-      line.height_inches
+      enforceAspect ? line.width_inches : null,
+      enforceAspect ? line.height_inches : null
     );
     const { url } = await saveArtworkBufferToStorage(req.file.buffer, mimeType, dimensions);
     const row = await orderRepository.updateCustomerArtworkForOrderItem(orderId, itemId, userId, url);
@@ -441,11 +450,12 @@ const approveGuestOrderItemArtwork = async (req, res) => {
     if (!line) {
       return res.status(404).json({ message: APPROVE_ARTWORK_BLOCKED_MESSAGE });
     }
+    const enforceAspect = !lineUsesGraphicScenario(line);
     const dimensions = await validateArtworkBufferAgainstOrderDimensions(
       req.file.buffer,
       mimeType,
-      line.width_inches,
-      line.height_inches
+      enforceAspect ? line.width_inches : null,
+      enforceAspect ? line.height_inches : null
     );
     const { url } = await saveArtworkBufferToStorage(req.file.buffer, mimeType, dimensions);
     const row = await orderRepository.updateCustomerArtworkForOrderItemByOrderId(orderId, itemId, url);

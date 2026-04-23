@@ -22,10 +22,12 @@ const SQL = {
             'modifier_total', oi.modifier_total,
            'base_unit_price', oi.base_unit_price,
            'selection_mode', oi.selection_mode,
-           'graphic_scenario_enabled', oi.graphic_scenario_enabled
+           'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+           'product_graphic_scenario_enabled', p.graphic_scenario_enabled
          )) as items
          FROM orders o
          LEFT JOIN order_items oi ON o.id = oi.order_id
+         LEFT JOIN products p ON oi.product_id = p.id
          WHERE o.id = $1
          GROUP BY o.id`,
   ORDERS_FOR_USER_WITH_STATUS: `SELECT o.*, 
@@ -59,7 +61,8 @@ const SQL = {
             'modifier_total', oi.modifier_total,
             'base_unit_price', oi.base_unit_price,
             'selection_mode', oi.selection_mode,
-            'graphic_scenario_enabled', oi.graphic_scenario_enabled
+            'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+            'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
         '[]'::json
@@ -102,7 +105,8 @@ const SQL = {
             'modifier_total', oi.modifier_total,
             'base_unit_price', oi.base_unit_price,
             'selection_mode', oi.selection_mode,
-            'graphic_scenario_enabled', oi.graphic_scenario_enabled
+            'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+            'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
         '[]'::json
@@ -145,7 +149,8 @@ const SQL = {
              'modifier_total', oi.modifier_total,
              'base_unit_price', oi.base_unit_price,
              'selection_mode', oi.selection_mode,
-             'graphic_scenario_enabled', oi.graphic_scenario_enabled
+             'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+             'product_graphic_scenario_enabled', p.graphic_scenario_enabled
            )
          ) FILTER (WHERE oi.id IS NOT NULL),
          '[]'::json
@@ -188,7 +193,8 @@ const SQL = {
             'modifier_total', oi.modifier_total,
             'base_unit_price', oi.base_unit_price,
             'selection_mode', oi.selection_mode,
-            'graphic_scenario_enabled', oi.graphic_scenario_enabled
+            'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+            'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
         '[]'::json
@@ -220,7 +226,8 @@ const SQL = {
             'modifier_total', oi.modifier_total,
             'base_unit_price', oi.base_unit_price,
             'selection_mode', oi.selection_mode,
-            'graphic_scenario_enabled', oi.graphic_scenario_enabled
+            'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+            'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
         '[]'::json
@@ -251,7 +258,8 @@ const SQL = {
             'modifier_total', oi.modifier_total,
             'base_unit_price', oi.base_unit_price,
             'selection_mode', oi.selection_mode,
-            'graphic_scenario_enabled', oi.graphic_scenario_enabled
+            'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+            'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
         '[]'::json
@@ -302,7 +310,8 @@ const SQL = {
              'modifier_total', oi.modifier_total,
              'base_unit_price', oi.base_unit_price,
              'selection_mode', oi.selection_mode,
-             'graphic_scenario_enabled', oi.graphic_scenario_enabled
+             'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+             'product_graphic_scenario_enabled', p.graphic_scenario_enabled
            )
          ) FILTER (WHERE oi.id IS NOT NULL),
          '[]'::json
@@ -355,7 +364,8 @@ const SQL = {
              'modifier_total', oi.modifier_total,
              'base_unit_price', oi.base_unit_price,
              'selection_mode', oi.selection_mode,
-             'graphic_scenario_enabled', oi.graphic_scenario_enabled
+             'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+             'product_graphic_scenario_enabled', p.graphic_scenario_enabled
            )
          ) FILTER (WHERE oi.id IS NOT NULL),
          '[]'::json
@@ -401,16 +411,32 @@ const SQL = {
       AND o.user_id = $3
       AND lower(trim(COALESCE(o.status, ''))) IN ('awaiting_artwork', 'awaiting_customer_approval', 'on_hold')
     RETURNING oi.id, oi.customer_artwork_url, oi.order_id`,
-  SELECT_ORDER_ITEM_FOR_CUSTOMER_ARTWORK: `SELECT oi.id, oi.order_id, oi.width_inches, oi.height_inches
+  SELECT_ORDER_ITEM_FOR_CUSTOMER_ARTWORK: `SELECT
+    oi.id,
+    oi.order_id,
+    oi.width_inches,
+    oi.height_inches,
+    oi.selection_mode,
+    oi.graphic_scenario_enabled,
+    p.graphic_scenario_enabled AS product_graphic_scenario_enabled
     FROM order_items oi
+    LEFT JOIN products p ON p.id = oi.product_id
     INNER JOIN orders o ON o.id = oi.order_id
     WHERE oi.id = $1
       AND oi.order_id = $2
       AND o.user_id = $3
       AND lower(trim(COALESCE(o.status, ''))) IN ('awaiting_artwork', 'awaiting_customer_approval', 'on_hold')`,
   /** Guest / token flow: line belongs to order; caller must verify tracking token first. */
-  SELECT_ORDER_ITEM_ARTWORK_LINE_FOR_ORDER: `SELECT oi.id, oi.order_id, oi.width_inches, oi.height_inches
+  SELECT_ORDER_ITEM_ARTWORK_LINE_FOR_ORDER: `SELECT
+    oi.id,
+    oi.order_id,
+    oi.width_inches,
+    oi.height_inches,
+    oi.selection_mode,
+    oi.graphic_scenario_enabled,
+    p.graphic_scenario_enabled AS product_graphic_scenario_enabled
     FROM order_items oi
+    LEFT JOIN products p ON p.id = oi.product_id
     INNER JOIN orders o ON o.id = oi.order_id
     WHERE oi.id = $1
       AND oi.order_id = $2
