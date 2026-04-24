@@ -95,6 +95,14 @@ async function ensureEmployeeColumns() {
       const sql17 = fs.readFileSync(path.join(migrationsDir, 'addProductDetailTabsContent.sql'), 'utf8');
       await pool.query(sql17);
     }
+    if (fs.existsSync(path.join(migrationsDir, 'addProductModifiersPhase1.sql'))) {
+      const sql18 = fs.readFileSync(path.join(migrationsDir, 'addProductModifiersPhase1.sql'), 'utf8');
+      await pool.query(sql18);
+    }
+    if (fs.existsSync(path.join(migrationsDir, 'allowDuplicateModifierOptionValues.sql'))) {
+      const sql19 = fs.readFileSync(path.join(migrationsDir, 'allowDuplicateModifierOptionValues.sql'), 'utf8');
+      await pool.query(sql19);
+    }
   } catch (err) {
     console.warn('Migrations (optional):', err.message);
   }

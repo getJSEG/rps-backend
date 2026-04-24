@@ -114,6 +114,42 @@ function expandCartItemToOrderLines(item) {
   const product_name = String(item.productName || item.product_name || 'Cart Item').slice(0, 255);
   const image_url = itemImageUrlFromCartItem(item);
   const baseUnit = roundMoney2(item.unitPrice || item.unit_price || 0);
+  const pricingSnapshot =
+    item && typeof item.pricing_snapshot === 'object' && item.pricing_snapshot
+      ? item.pricing_snapshot
+      : {};
+  const selectedModifiers = Array.isArray(item.selected_modifiers)
+    ? item.selected_modifiers
+    : Array.isArray(item.selectedModifiers)
+      ? item.selectedModifiers
+      : Array.isArray(pricingSnapshot.selected_modifiers)
+        ? pricingSnapshot.selected_modifiers
+        : [];
+  const selectionModeRaw =
+    item.selection_mode ??
+    item.selectionMode ??
+    pricingSnapshot.selection_mode ??
+    null;
+  const selectionMode =
+    selectionModeRaw === 'graphic_only' || selectionModeRaw === 'graphic_frame'
+      ? selectionModeRaw
+      : null;
+  const graphicScenarioEnabled =
+    item.graphic_scenario_enabled === true ||
+    item.graphicScenarioEnabled === true ||
+    pricingSnapshot.graphic_scenario_enabled === true;
+  const modifierTotal = roundMoney2(
+    item.modifier_total ??
+      item.modifierTotal ??
+      pricingSnapshot.modifier_total ??
+      0
+  );
+  const baseUnitPrice = roundMoney2(
+    item.base_unit_price ??
+      item.baseUnitPrice ??
+      pricingSnapshot.base_unit_price ??
+      (baseUnit - modifierTotal)
+  );
   const { width_inches, height_inches } = dimensionsFromCartItem(item);
 
   const jobs = item.jobs;
@@ -139,6 +175,11 @@ function expandCartItemToOrderLines(item) {
         image_url,
         width_inches,
         height_inches,
+        selected_modifiers: selectedModifiers,
+        selection_mode: selectionMode,
+        graphic_scenario_enabled: graphicScenarioEnabled,
+        modifier_total: modifierTotal,
+        base_unit_price: baseUnitPrice,
       };
     });
   }
@@ -160,6 +201,11 @@ function expandCartItemToOrderLines(item) {
       image_url,
       width_inches,
       height_inches,
+      selected_modifiers: selectedModifiers,
+      selection_mode: selectionMode,
+      graphic_scenario_enabled: graphicScenarioEnabled,
+      modifier_total: modifierTotal,
+      base_unit_price: baseUnitPrice,
     },
   ];
 }
@@ -319,6 +365,14 @@ const getOrderById = async (req, res) => {
 const APPROVE_ARTWORK_BLOCKED_MESSAGE =
   'Order line not found, access denied, or this order is not open for customer artwork upload.';
 
+function lineUsesGraphicScenario(line) {
+  if (!line || typeof line !== 'object') return false;
+  if (line.graphic_scenario_enabled === true) return true;
+  if (line.product_graphic_scenario_enabled === true) return true;
+  const mode = String(line.selection_mode || '').trim().toLowerCase();
+  return mode === 'graphic_only' || mode === 'graphic_frame';
+}
+
 function normalizeGuestArtworkMime(file) {
   const mime = String(file?.mimetype || '').toLowerCase().trim();
   const name = String(file?.originalname || '').toLowerCase().trim();
@@ -348,11 +402,12 @@ const approveOrderItemArtwork = async (req, res) => {
     if (!line) {
       return res.status(404).json({ message: APPROVE_ARTWORK_BLOCKED_MESSAGE });
     }
+    const enforceAspect = !lineUsesGraphicScenario(line);
     const dimensions = await validateArtworkBufferAgainstOrderDimensions(
       req.file.buffer,
       mimeType,
-      line.width_inches,
-      line.height_inches
+      enforceAspect ? line.width_inches : null,
+      enforceAspect ? line.height_inches : null
     );
     const { url } = await saveArtworkBufferToStorage(req.file.buffer, mimeType, dimensions);
     const row = await orderRepository.updateCustomerArtworkForOrderItem(orderId, itemId, userId, url);
@@ -395,11 +450,12 @@ const approveGuestOrderItemArtwork = async (req, res) => {
     if (!line) {
       return res.status(404).json({ message: APPROVE_ARTWORK_BLOCKED_MESSAGE });
     }
+    const enforceAspect = !lineUsesGraphicScenario(line);
     const dimensions = await validateArtworkBufferAgainstOrderDimensions(
       req.file.buffer,
       mimeType,
-      line.width_inches,
-      line.height_inches
+      enforceAspect ? line.width_inches : null,
+      enforceAspect ? line.height_inches : null
     );
     const { url } = await saveArtworkBufferToStorage(req.file.buffer, mimeType, dimensions);
     const row = await orderRepository.updateCustomerArtworkForOrderItemByOrderId(orderId, itemId, url);
@@ -575,6 +631,21 @@ const createOrderFromCartItem = async (req, res) => {
           totalPrice: totalPriceLine,
           width_inches: cartW,
           height_inches: cartH,
+          selected_modifiers:
+            cartItem.selected_modifiers ??
+            cartItem.selectedModifiers ??
+            cartItem.pricing_snapshot?.selected_modifiers ??
+            [],
+          modifier_total:
+            cartItem.modifier_total ??
+            cartItem.modifierTotal ??
+            cartItem.pricing_snapshot?.modifier_total ??
+            0,
+          base_unit_price:
+            cartItem.base_unit_price ??
+            cartItem.baseUnitPrice ??
+            cartItem.pricing_snapshot?.base_unit_price ??
+            unitPriceLine,
         };
       });
       const totalAmountMulti =
@@ -603,6 +674,21 @@ const createOrderFromCartItem = async (req, res) => {
         itemImageUrl,
         width_inches: cartW,
         height_inches: cartH,
+        selected_modifiers:
+          cartItem.selected_modifiers ??
+          cartItem.selectedModifiers ??
+          cartItem.pricing_snapshot?.selected_modifiers ??
+          [],
+        modifier_total:
+          cartItem.modifier_total ??
+          cartItem.modifierTotal ??
+          cartItem.pricing_snapshot?.modifier_total ??
+          0,
+        base_unit_price:
+          cartItem.base_unit_price ??
+          cartItem.baseUnitPrice ??
+          cartItem.pricing_snapshot?.base_unit_price ??
+          unitPrice,
       });
     }
 

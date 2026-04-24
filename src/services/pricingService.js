@@ -10,6 +10,11 @@ const SIZE_MODE = {
   CUSTOM: 'custom',
 };
 
+const SELECTION_MODE = {
+  GRAPHIC_ONLY: 'graphic_only',
+  GRAPHIC_FRAME: 'graphic_frame',
+};
+
 function asNumber(value) {
   if (value === null || value === undefined || value === '') return null;
   const n = Number(value);
@@ -19,6 +24,22 @@ function asNumber(value) {
 function normalizeMode(value, fallback) {
   const v = String(value || '').trim().toLowerCase();
   return v || fallback;
+}
+
+function normalizeSelectionMode(value) {
+  const v = String(value || '').trim().toLowerCase();
+  if (v === SELECTION_MODE.GRAPHIC_ONLY || v === SELECTION_MODE.GRAPHIC_FRAME) return v;
+  return '';
+}
+
+function normalizeModeScope(value) {
+  const v = String(value || '').trim().toLowerCase();
+  if (v === SELECTION_MODE.GRAPHIC_ONLY || v === SELECTION_MODE.GRAPHIC_FRAME) return v;
+  return 'all';
+}
+
+function optionEffectiveValue(option) {
+  return String(option?.value || option?.label || '').trim();
 }
 
 function normalizeShippingMode(value) {
@@ -68,7 +89,8 @@ async function getProductPricingConfig(productId) {
       p.min_width,
       p.max_width,
       p.min_height,
-      p.max_height
+      p.max_height,
+      p.graphic_scenario_enabled
     FROM products p
     WHERE p.id = $1`,
     [productId]
@@ -82,13 +104,129 @@ async function getProductPricingConfig(productId) {
      ORDER BY is_default DESC, id ASC`,
     [productId]
   );
+  const modifierGroupsResult = await pool.query(
+    `SELECT
+      pm.id AS product_modifier_id,
+      pm.is_required,
+      pm.sort_order AS product_sort_order,
+      pm.mode_scope,
+      mg.id AS modifier_group_id,
+      mg.key AS group_key,
+      mg.name AS group_name,
+      mg.input_type,
+      mo.id AS option_id,
+      mo.label AS option_label,
+      mo.value AS option_value,
+      COALESCE(pmo.price_adjustment_override, mo.price_adjustment, 0) AS option_price_adjustment,
+      mo.price_type AS option_price_type,
+      COALESCE(pmo.is_default, false) OR COALESCE(mo.is_default, false) AS option_is_default,
+      pmo.is_active AS product_option_active,
+      mo.is_active AS option_active
+    FROM product_modifiers pm
+    INNER JOIN modifier_groups mg ON mg.id = pm.modifier_group_id AND mg.is_active = true
+    INNER JOIN product_modifier_options pmo ON pmo.product_modifier_id = pm.id AND pmo.is_active = true
+    INNER JOIN modifier_options mo ON mo.id = pmo.modifier_option_id
+    WHERE pm.product_id = $1
+      AND pm.is_active = true
+    ORDER BY pm.sort_order ASC, mg.sort_order ASC, pmo.is_default DESC, mo.sort_order ASC, mo.id ASC`,
+    [productId]
+  );
+  const groupsByKey = new Map();
+  for (const row of modifierGroupsResult.rows) {
+    if (!row.option_active || !row.product_option_active) continue;
+    const key = String(row.group_key || '').trim();
+    if (!key) continue;
+    if (!groupsByKey.has(key)) {
+      groupsByKey.set(key, {
+        id: Number(row.modifier_group_id),
+        key,
+        name: String(row.group_name || key),
+        input_type: String(row.input_type || 'dropdown'),
+        is_required: !!row.is_required,
+        mode_scope: normalizeModeScope(row.mode_scope),
+        sort_order: Number(row.product_sort_order || 0),
+        options: [],
+      });
+    }
+    groupsByKey.get(key).options.push({
+      id: Number(row.option_id),
+      label: String(row.option_label || ''),
+      value: String(row.option_value || ''),
+      price_adjustment: asNumber(row.option_price_adjustment) ?? 0,
+      price_type: String(row.option_price_type || 'fixed').trim().toLowerCase() || 'fixed',
+      is_default: !!row.option_is_default,
+    });
+  }
+  const modifier_groups = Array.from(groupsByKey.values()).filter((g) => g.options.length > 0);
   return {
     ...product,
     size_options: optionsResult.rows,
+    modifier_groups,
   };
 }
 
+function resolveSelectedModifiers(product, input) {
+  const groups = Array.isArray(product.modifier_groups) ? product.modifier_groups : [];
+  if (groups.length === 0) return { selected: [], total: 0 };
+  const selectionMode = normalizeSelectionMode(input.selection_mode ?? input.selectionMode);
+  const isGraphicScenario = !!product.graphic_scenario_enabled;
+  if (isGraphicScenario && !selectionMode) {
+    throw new Error('Graphic mode selection is required.');
+  }
+  const rawSelected = input.selectedModifiers ?? input.selected_modifiers ?? {};
+  const selectedObj =
+    rawSelected && typeof rawSelected === 'object' && !Array.isArray(rawSelected) ? rawSelected : {};
+  const selected = [];
+  let total = 0;
+  for (const group of groups) {
+    const modeScope = normalizeModeScope(group.mode_scope);
+    if (isGraphicScenario && modeScope !== 'all' && modeScope !== selectionMode) {
+      continue;
+    }
+    const options = Array.isArray(group.options) ? group.options : [];
+    if (options.length === 0) continue;
+    const requestedValue = selectedObj[group.key];
+    let option = null;
+    if (requestedValue != null && requestedValue !== '') {
+      option = options.find((o) => optionEffectiveValue(o) === String(requestedValue));
+      if (!option) {
+        throw new Error(`Invalid option for ${group.name}.`);
+      }
+    } else {
+      // Optional groups must remain unselected when not provided by client.
+      // Required groups may fall back to explicit default only.
+      if (group.is_required) {
+        option = options.find((o) => o.is_default) || null;
+      } else {
+        option = null;
+      }
+      if (!option && group.is_required) {
+        throw new Error(`${group.name} selection is required.`);
+      }
+    }
+    if (!option) continue;
+    const priceType = String(option.price_type || 'fixed').toLowerCase();
+    const adjustment = asNumber(option.price_adjustment) ?? 0;
+    if (priceType !== 'fixed') {
+      throw new Error(`Unsupported price type for ${group.name}.`);
+    }
+    total += adjustment;
+    selected.push({
+      group_key: group.key,
+      group_name: group.name,
+      option_value: optionEffectiveValue(option),
+      option_label: option.label,
+      price_adjustment: adjustment,
+    });
+  }
+  return { selected, total };
+}
+
 function validateAndCalculatePricing(product, input) {
+  const isGraphicScenario = !!product.graphic_scenario_enabled;
+  if (isGraphicScenario && inferPricingMode(product) !== PRICING_MODE.FIXED) {
+    throw new Error('Graphic scenario products must use fixed pricing.');
+  }
   const pricingMode = inferPricingMode(product);
   const sizeMode = normalizeMode(product.size_mode, SIZE_MODE.CUSTOM);
   const baseUnit = String(product.base_unit || 'inch').trim().toLowerCase();
@@ -118,13 +256,16 @@ function validateAndCalculatePricing(product, input) {
     height = Number(selectedOption.height);
   }
 
-  if (sizeMode === SIZE_MODE.CUSTOM) {
+  if (!isGraphicScenario && sizeMode === SIZE_MODE.CUSTOM) {
     if (!(width > 0) || !(height > 0)) {
       throw new Error('Valid width and height (in inches) are required for custom size mode.');
     }
   }
 
-  if (!(width > 0) || !(height > 0)) {
+  if (isGraphicScenario) {
+    width = 1;
+    height = 1;
+  } else if (!(width > 0) || !(height > 0)) {
     throw new Error('Resolved width/height must be greater than zero.');
   }
 
@@ -132,10 +273,12 @@ function validateAndCalculatePricing(product, input) {
   const maxWidth = asNumber(product.max_width);
   const minHeight = asNumber(product.min_height);
   const maxHeight = asNumber(product.max_height);
-  if (minWidth != null && width < minWidth) throw new Error(`Width must be at least ${minWidth} inches.`);
-  if (maxWidth != null && width > maxWidth) throw new Error(`Width must be at most ${maxWidth} inches.`);
-  if (minHeight != null && height < minHeight) throw new Error(`Height must be at least ${minHeight} inches.`);
-  if (maxHeight != null && height > maxHeight) throw new Error(`Height must be at most ${maxHeight} inches.`);
+  if (!isGraphicScenario) {
+    if (minWidth != null && width < minWidth) throw new Error(`Width must be at least ${minWidth} inches.`);
+    if (maxWidth != null && width > maxWidth) throw new Error(`Width must be at most ${maxWidth} inches.`);
+    if (minHeight != null && height < minHeight) throw new Error(`Height must be at least ${minHeight} inches.`);
+    if (maxHeight != null && height > maxHeight) throw new Error(`Height must be at most ${maxHeight} inches.`);
+  }
 
   const areaSqft = (width * height) / 144;
   let rate = null;
@@ -165,6 +308,9 @@ function validateAndCalculatePricing(product, input) {
     throw new Error(`Unsupported pricing mode: ${pricingMode}`);
   }
 
+  const modifierSelection = resolveSelectedModifiers(product, input);
+  computedUnitPrice += modifierSelection.total;
+
   return {
     productId: Number(product.id),
     productName: String(product.name || 'Product'),
@@ -180,6 +326,11 @@ function validateAndCalculatePricing(product, input) {
     sizeSource,
     sizeOptionId: selectedOption ? Number(selectedOption.id) : null,
     sizeOptionLabel: selectedOption ? String(selectedOption.label || '') : null,
+    selectionMode: normalizeSelectionMode(input.selection_mode ?? input.selectionMode) || null,
+    graphicScenarioEnabled: isGraphicScenario,
+    selectedModifiers: modifierSelection.selected,
+    modifierTotal: modifierSelection.total,
+    baseUnitPrice: computedUnitPrice - modifierSelection.total,
     unitPrice: computedUnitPrice,
   };
 }
@@ -238,7 +389,16 @@ function buildCartSnapshot(pricing, input) {
     shipping: shippingMode === 'store_pickup' ? 'store-pickup' : 'blind-drop',
     shippingService,
     storePickupAddressId: shippingMode === 'store_pickup' ? storePickupAddressId : null,
+    selectionMode: pricing.selectionMode,
+    selection_mode: pricing.selectionMode,
+    graphicScenarioEnabled: pricing.graphicScenarioEnabled,
+    graphic_scenario_enabled: pricing.graphicScenarioEnabled,
     unitPrice: pricing.unitPrice,
+    baseUnitPrice: pricing.baseUnitPrice,
+    modifierTotal: pricing.modifierTotal,
+    modifier_total: pricing.modifierTotal,
+    selectedModifiers: pricing.selectedModifiers,
+    selected_modifiers: pricing.selectedModifiers,
     subtotal,
     total: subtotal,
     pricing_snapshot: {
@@ -248,11 +408,18 @@ function buildCartSnapshot(pricing, input) {
       size_source: pricing.sizeSource,
       size_option_id: pricing.sizeOptionId,
       size_option_label: pricing.sizeOptionLabel,
+      selection_mode: pricing.selectionMode,
+      graphic_scenario_enabled: pricing.graphicScenarioEnabled,
       width: pricing.width,
       height: pricing.height,
       area_sqft: pricing.areaSqft,
       rate: pricing.rate,
       unit_price: pricing.unitPrice,
+      base_unit_price: pricing.baseUnitPrice,
+      modifier_total: pricing.modifierTotal,
+      modifierTotal: pricing.modifierTotal,
+      selected_modifiers: pricing.selectedModifiers,
+      selectedModifiers: pricing.selectedModifiers,
       min_applied: pricing.minApplied,
     },
     timestamp: new Date().toISOString(),

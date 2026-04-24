@@ -1,6 +1,26 @@
 const express = require('express');
 const router = express.Router();
-const { getAllProducts, getProductById, previewProductPrice, getCategories, getRelatedProducts, createCategory, updateCategory, deleteCategory, createProduct, updateProduct, getAllProductsAdmin, deleteProductAdmin, uploadProductImage, uploadCategoryImage } = require('../controllers/productController');
+const {
+  getAllProducts,
+  getProductById,
+  previewProductPrice,
+  getCategories,
+  getRelatedProducts,
+  createCategory,
+  updateCategory,
+  deleteCategory,
+  createProduct,
+  updateProduct,
+  getAllProductsAdmin,
+  deleteProductAdmin,
+  uploadProductImage,
+  uploadCategoryImage,
+  getProductModifierConfigAdmin,
+  updateProductModifierConfigAdmin,
+  getModifierCatalogAdmin,
+  updateModifierCatalogAdmin,
+  deleteModifierCatalogGroupAdmin,
+} = require('../controllers/productController');
 const { optionalAuth } = require('../middleware/auth');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const { uploadProductImage: uploadProductImageMw, uploadCategoryImage: uploadCategoryImageMw } = require('../middleware/upload');
@@ -26,7 +46,12 @@ router.post('/admin/upload-category-image', authenticateToken, requireAdmin, (re
   });
 }, uploadCategoryImage);
 router.put('/admin/products/:id', authenticateToken, requireAdmin, updateProduct);
+router.get('/admin/products/:id/modifiers', authenticateToken, requireAdmin, getProductModifierConfigAdmin);
+router.put('/admin/products/:id/modifiers', authenticateToken, requireAdmin, updateProductModifierConfigAdmin);
 router.delete('/admin/products/:id', authenticateToken, requireAdmin, deleteProductAdmin);
+router.get('/admin/modifier-catalog', authenticateToken, requireAdmin, getModifierCatalogAdmin);
+router.put('/admin/modifier-catalog', authenticateToken, requireAdmin, updateModifierCatalogAdmin);
+router.delete('/admin/modifier-catalog/:key', authenticateToken, requireAdmin, deleteModifierCatalogGroupAdmin);
 router.post('/admin/categories', authenticateToken, requireAdmin, createCategory);
 router.put('/admin/categories/:id', authenticateToken, requireAdmin, updateCategory);
 router.delete('/admin/categories/:id', authenticateToken, requireAdmin, deleteCategory);

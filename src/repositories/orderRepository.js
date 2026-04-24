@@ -5,8 +5,8 @@ const SQL = {
          billing_address_id, payment_method, notes, guest_checkout, status)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING *`,
-  INSERT_ORDER_ITEM_WITH_JOB: `INSERT INTO order_items (order_id, product_id, product_name, job_name, quantity, unit_price, total_price, image_url, width_inches, height_inches)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+  INSERT_ORDER_ITEM_WITH_JOB: `INSERT INTO order_items (order_id, product_id, product_name, job_name, quantity, unit_price, total_price, image_url, width_inches, height_inches, selected_modifiers, selection_mode, graphic_scenario_enabled, modifier_total, base_unit_price)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15)`,
   SELECT_ORDER_WITH_ITEMS_AGG: `SELECT o.*, 
          json_agg(json_build_object(
            'id', oi.id,
@@ -17,10 +17,17 @@ const SQL = {
            'total_price', oi.total_price,
            'width_inches', oi.width_inches,
            'height_inches', oi.height_inches,
-           'customer_artwork_url', oi.customer_artwork_url
+            'customer_artwork_url', oi.customer_artwork_url,
+            'selected_modifiers', oi.selected_modifiers,
+            'modifier_total', oi.modifier_total,
+           'base_unit_price', oi.base_unit_price,
+           'selection_mode', oi.selection_mode,
+           'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+           'product_graphic_scenario_enabled', p.graphic_scenario_enabled
          )) as items
          FROM orders o
          LEFT JOIN order_items oi ON o.id = oi.order_id
+         LEFT JOIN products p ON oi.product_id = p.id
          WHERE o.id = $1
          GROUP BY o.id`,
   ORDERS_FOR_USER_WITH_STATUS: `SELECT o.*, 
@@ -49,7 +56,13 @@ const SQL = {
             'image_url', COALESCE(oi.image_url, p.image_url),
             'width_inches', oi.width_inches,
             'height_inches', oi.height_inches,
-            'customer_artwork_url', oi.customer_artwork_url
+            'customer_artwork_url', oi.customer_artwork_url,
+            'selected_modifiers', oi.selected_modifiers,
+            'modifier_total', oi.modifier_total,
+            'base_unit_price', oi.base_unit_price,
+            'selection_mode', oi.selection_mode,
+            'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+            'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
         '[]'::json
@@ -87,7 +100,13 @@ const SQL = {
             'image_url', COALESCE(oi.image_url, p.image_url),
             'width_inches', oi.width_inches,
             'height_inches', oi.height_inches,
-            'customer_artwork_url', oi.customer_artwork_url
+            'customer_artwork_url', oi.customer_artwork_url,
+            'selected_modifiers', oi.selected_modifiers,
+            'modifier_total', oi.modifier_total,
+            'base_unit_price', oi.base_unit_price,
+            'selection_mode', oi.selection_mode,
+            'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+            'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
         '[]'::json
@@ -125,7 +144,13 @@ const SQL = {
              'image_url', COALESCE(oi.image_url, p.image_url),
              'width_inches', oi.width_inches,
              'height_inches', oi.height_inches,
-             'customer_artwork_url', oi.customer_artwork_url
+             'customer_artwork_url', oi.customer_artwork_url,
+             'selected_modifiers', oi.selected_modifiers,
+             'modifier_total', oi.modifier_total,
+             'base_unit_price', oi.base_unit_price,
+             'selection_mode', oi.selection_mode,
+             'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+             'product_graphic_scenario_enabled', p.graphic_scenario_enabled
            )
          ) FILTER (WHERE oi.id IS NOT NULL),
          '[]'::json
@@ -163,7 +188,13 @@ const SQL = {
             'image_url', COALESCE(oi.image_url, p.image_url),
             'width_inches', oi.width_inches,
             'height_inches', oi.height_inches,
-            'customer_artwork_url', oi.customer_artwork_url
+            'customer_artwork_url', oi.customer_artwork_url,
+            'selected_modifiers', oi.selected_modifiers,
+            'modifier_total', oi.modifier_total,
+            'base_unit_price', oi.base_unit_price,
+            'selection_mode', oi.selection_mode,
+            'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+            'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
         '[]'::json
@@ -190,7 +221,13 @@ const SQL = {
             'product_image', COALESCE(oi.image_url, p.image_url),
             'width_inches', oi.width_inches,
             'height_inches', oi.height_inches,
-            'customer_artwork_url', oi.customer_artwork_url
+            'customer_artwork_url', oi.customer_artwork_url,
+            'selected_modifiers', oi.selected_modifiers,
+            'modifier_total', oi.modifier_total,
+            'base_unit_price', oi.base_unit_price,
+            'selection_mode', oi.selection_mode,
+            'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+            'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
         '[]'::json
@@ -216,7 +253,13 @@ const SQL = {
             'product_image', COALESCE(oi.image_url, p.image_url),
             'width_inches', oi.width_inches,
             'height_inches', oi.height_inches,
-            'customer_artwork_url', oi.customer_artwork_url
+            'customer_artwork_url', oi.customer_artwork_url,
+            'selected_modifiers', oi.selected_modifiers,
+            'modifier_total', oi.modifier_total,
+            'base_unit_price', oi.base_unit_price,
+            'selection_mode', oi.selection_mode,
+            'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+            'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
         '[]'::json
@@ -262,7 +305,13 @@ const SQL = {
              'product_sku', p.sku,
              'width_inches', oi.width_inches,
              'height_inches', oi.height_inches,
-             'customer_artwork_url', oi.customer_artwork_url
+             'customer_artwork_url', oi.customer_artwork_url,
+             'selected_modifiers', oi.selected_modifiers,
+             'modifier_total', oi.modifier_total,
+             'base_unit_price', oi.base_unit_price,
+             'selection_mode', oi.selection_mode,
+             'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+             'product_graphic_scenario_enabled', p.graphic_scenario_enabled
            )
          ) FILTER (WHERE oi.id IS NOT NULL),
          '[]'::json
@@ -310,7 +359,13 @@ const SQL = {
              'product_sku', p.sku,
              'width_inches', oi.width_inches,
              'height_inches', oi.height_inches,
-             'customer_artwork_url', oi.customer_artwork_url
+             'customer_artwork_url', oi.customer_artwork_url,
+             'selected_modifiers', oi.selected_modifiers,
+             'modifier_total', oi.modifier_total,
+             'base_unit_price', oi.base_unit_price,
+             'selection_mode', oi.selection_mode,
+             'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+             'product_graphic_scenario_enabled', p.graphic_scenario_enabled
            )
          ) FILTER (WHERE oi.id IS NOT NULL),
          '[]'::json
@@ -337,10 +392,10 @@ const SQL = {
   INSERT_ORDER_ADMIN_CART: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, notes)
          VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING *`,
-  INSERT_ORDER_ITEM_ADMIN_WITH_JOB: `INSERT INTO order_items (order_id, product_id, product_name, job_name, quantity, unit_price, total_price, image_url, width_inches, height_inches)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-  INSERT_ORDER_ITEM_ADMIN_NO_JOB: `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price, image_url, width_inches, height_inches)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+  INSERT_ORDER_ITEM_ADMIN_WITH_JOB: `INSERT INTO order_items (order_id, product_id, product_name, job_name, quantity, unit_price, total_price, image_url, width_inches, height_inches, selected_modifiers, selection_mode, graphic_scenario_enabled, modifier_total, base_unit_price)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15)`,
+  INSERT_ORDER_ITEM_ADMIN_NO_JOB: `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price, image_url, width_inches, height_inches, selected_modifiers, selection_mode, graphic_scenario_enabled, modifier_total, base_unit_price)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14)`,
   SELECT_ORDER_BY_ID: `SELECT o.* FROM orders o WHERE o.id = $1`,
   INSERT_ORDER_STRIPE_PENDING: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, payment_status, notes, guest_checkout, guest_tracking_token_hash, guest_tracking_token_created_at, shipping_address_id, billing_address_id, shipping_method, shipping_charge, shipping_mode, store_pickup_address_id, subtotal_amount, tax_id, tax_name, tax_percentage, tax_amount)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
@@ -356,16 +411,32 @@ const SQL = {
       AND o.user_id = $3
       AND lower(trim(COALESCE(o.status, ''))) IN ('awaiting_artwork', 'awaiting_customer_approval', 'on_hold')
     RETURNING oi.id, oi.customer_artwork_url, oi.order_id`,
-  SELECT_ORDER_ITEM_FOR_CUSTOMER_ARTWORK: `SELECT oi.id, oi.order_id, oi.width_inches, oi.height_inches
+  SELECT_ORDER_ITEM_FOR_CUSTOMER_ARTWORK: `SELECT
+    oi.id,
+    oi.order_id,
+    oi.width_inches,
+    oi.height_inches,
+    oi.selection_mode,
+    oi.graphic_scenario_enabled,
+    p.graphic_scenario_enabled AS product_graphic_scenario_enabled
     FROM order_items oi
+    LEFT JOIN products p ON p.id = oi.product_id
     INNER JOIN orders o ON o.id = oi.order_id
     WHERE oi.id = $1
       AND oi.order_id = $2
       AND o.user_id = $3
       AND lower(trim(COALESCE(o.status, ''))) IN ('awaiting_artwork', 'awaiting_customer_approval', 'on_hold')`,
   /** Guest / token flow: line belongs to order; caller must verify tracking token first. */
-  SELECT_ORDER_ITEM_ARTWORK_LINE_FOR_ORDER: `SELECT oi.id, oi.order_id, oi.width_inches, oi.height_inches
+  SELECT_ORDER_ITEM_ARTWORK_LINE_FOR_ORDER: `SELECT
+    oi.id,
+    oi.order_id,
+    oi.width_inches,
+    oi.height_inches,
+    oi.selection_mode,
+    oi.graphic_scenario_enabled,
+    p.graphic_scenario_enabled AS product_graphic_scenario_enabled
     FROM order_items oi
+    LEFT JOIN products p ON p.id = oi.product_id
     INNER JOIN orders o ON o.id = oi.order_id
     WHERE oi.id = $1
       AND oi.order_id = $2
@@ -456,6 +527,11 @@ async function createOrderWithItems({
         itemImageUrlFromBody(item),
         item.width_inches ?? null,
         item.height_inches ?? null,
+        JSON.stringify(item.selected_modifiers ?? item.selectedModifiers ?? []),
+        item.selection_mode ?? item.selectionMode ?? null,
+        item.graphic_scenario_enabled === true || item.graphicScenarioEnabled === true,
+        item.modifier_total ?? item.modifierTotal ?? 0,
+        item.base_unit_price ?? item.baseUnitPrice ?? item.unit_price ?? unit,
       ]);
     }
     await client.query('COMMIT');
@@ -636,6 +712,11 @@ async function insertAdminCartOrderAndItems(client, useJobName, baseParams, line
           itemImageUrl,
           line.width_inches ?? null,
           line.height_inches ?? null,
+          JSON.stringify(line.selected_modifiers ?? line.selectedModifiers ?? []),
+          line.selection_mode ?? line.selectionMode ?? null,
+          line.graphic_scenario_enabled === true || line.graphicScenarioEnabled === true,
+          line.modifier_total ?? line.modifierTotal ?? 0,
+          line.base_unit_price ?? line.baseUnitPrice ?? line.unitPrice ?? 0,
         ]);
       } else {
         await client.query(SQL.INSERT_ORDER_ITEM_ADMIN_NO_JOB, [
@@ -648,6 +729,11 @@ async function insertAdminCartOrderAndItems(client, useJobName, baseParams, line
           itemImageUrl,
           line.width_inches ?? null,
           line.height_inches ?? null,
+          JSON.stringify(line.selected_modifiers ?? line.selectedModifiers ?? []),
+          line.selection_mode ?? line.selectionMode ?? null,
+          line.graphic_scenario_enabled === true || line.graphicScenarioEnabled === true,
+          line.modifier_total ?? line.modifierTotal ?? 0,
+          line.base_unit_price ?? line.baseUnitPrice ?? line.unitPrice ?? 0,
         ]);
       }
     }
@@ -848,6 +934,11 @@ async function createPendingStripeOrderWithItems({
         oi.image_url,
         oi.width_inches ?? null,
         oi.height_inches ?? null,
+        JSON.stringify(oi.selected_modifiers ?? oi.selectedModifiers ?? []),
+        oi.selection_mode ?? oi.selectionMode ?? null,
+        oi.graphic_scenario_enabled === true || oi.graphicScenarioEnabled === true,
+        oi.modifier_total ?? oi.modifierTotal ?? 0,
+        oi.base_unit_price ?? oi.baseUnitPrice ?? oi.unit_price ?? 0,
       ]);
     }
     await client.query('COMMIT');
