@@ -165,7 +165,7 @@ async function getProductPricingConfig(productId) {
   };
 }
 
-function resolveSelectedModifiers(product, input) {
+function resolveSelectedModifiers(product, input, baseUnitPrice) {
   const groups = Array.isArray(product.modifier_groups) ? product.modifier_groups : [];
   if (groups.length === 0) return { selected: [], total: 0 };
   const selectionMode = normalizeSelectionMode(input.selection_mode ?? input.selectionMode);
@@ -177,7 +177,8 @@ function resolveSelectedModifiers(product, input) {
   const selectedObj =
     rawSelected && typeof rawSelected === 'object' && !Array.isArray(rawSelected) ? rawSelected : {};
   const selected = [];
-  let total = 0;
+  let fixedTotal = 0;
+  let percentTotal = 0;
   for (const group of groups) {
     const modeScope = normalizeModeScope(group.mode_scope);
     if (isGraphicScenario && modeScope !== 'all' && modeScope !== selectionMode) {
@@ -207,18 +208,25 @@ function resolveSelectedModifiers(product, input) {
     if (!option) continue;
     const priceType = String(option.price_type || 'fixed').toLowerCase();
     const adjustment = asNumber(option.price_adjustment) ?? 0;
-    if (priceType !== 'fixed') {
+    if (priceType !== 'fixed' && priceType !== 'percent') {
       throw new Error(`Unsupported price type for ${group.name}.`);
     }
-    total += adjustment;
+    if (priceType === 'percent') {
+      percentTotal += adjustment;
+    } else {
+      fixedTotal += adjustment;
+    }
     selected.push({
       group_key: group.key,
       group_name: group.name,
       option_value: optionEffectiveValue(option),
       option_label: option.label,
       price_adjustment: adjustment,
+      price_type: priceType,
     });
   }
+  const percentAmount = (asNumber(baseUnitPrice) ?? 0) * (percentTotal / 100);
+  const total = fixedTotal + percentAmount;
   return { selected, total };
 }
 
@@ -308,7 +316,7 @@ function validateAndCalculatePricing(product, input) {
     throw new Error(`Unsupported pricing mode: ${pricingMode}`);
   }
 
-  const modifierSelection = resolveSelectedModifiers(product, input);
+  const modifierSelection = resolveSelectedModifiers(product, input, computedUnitPrice);
   computedUnitPrice += modifierSelection.total;
 
   return {
