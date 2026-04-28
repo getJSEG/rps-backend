@@ -38,6 +38,7 @@ const VALID_ORDER_STATUSES = [
   'cancellation_requested',
   'on_hold',
   'awaiting_customer_approval',
+  'processing',
   'printing',
   'trimming',
   'shipped',
@@ -414,7 +415,7 @@ const approveOrderItemArtwork = async (req, res) => {
     if (!row) {
       return res.status(404).json({ message: APPROVE_ARTWORK_BLOCKED_MESSAGE });
     }
-    const advanced = await orderRepository.maybeAdvanceOrderToPrintingAfterArtwork(orderId);
+    const advanced = await orderRepository.maybeAdvanceOrderToProcessingAfterArtwork(orderId);
     return res.status(200).json({
       orderItemId: row.id,
       customerArtworkUrl: row.customer_artwork_url,
@@ -462,7 +463,7 @@ const approveGuestOrderItemArtwork = async (req, res) => {
     if (!row) {
       return res.status(404).json({ message: APPROVE_ARTWORK_BLOCKED_MESSAGE });
     }
-    const advanced = await orderRepository.maybeAdvanceOrderToPrintingAfterArtwork(orderId);
+    const advanced = await orderRepository.maybeAdvanceOrderToProcessingAfterArtwork(orderId);
     return res.status(200).json({
       orderItemId: row.id,
       customerArtworkUrl: row.customer_artwork_url,

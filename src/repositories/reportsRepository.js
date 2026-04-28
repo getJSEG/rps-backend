@@ -8,7 +8,7 @@ const COMPLETED_FOR_REVENUE = `${NORMALIZED_STATUS} IN ('completed', 'complete',
 const PAID_OR_COMPLETED_CLAUSE = `
   (
     COALESCE(o.payment_status, '') = 'paid'
-    OR ${NORMALIZED_STATUS} IN ('printing', 'trimming', 'shipped', 'completed')
+    OR ${NORMALIZED_STATUS} IN ('processing', 'printing', 'trimming', 'shipped', 'completed')
   )
 `;
 
@@ -76,7 +76,7 @@ const ORDERS_OVERVIEW_QUERY = `
         'awaiting_customer_approval'
       )
     )::int AS pending,
-    COUNT(*) FILTER (WHERE ${NORMALIZED_STATUS} IN ('printing', 'trimming', 'reprint'))::int AS processing,
+    COUNT(*) FILTER (WHERE ${NORMALIZED_STATUS} IN ('processing', 'printing', 'trimming', 'reprint'))::int AS processing,
     COUNT(*) FILTER (WHERE ${NORMALIZED_STATUS} = 'shipped')::int AS shipped,
     COUNT(*) FILTER (WHERE ${NORMALIZED_STATUS} = 'completed')::int AS completed
   FROM orders o

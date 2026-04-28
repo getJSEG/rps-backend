@@ -1043,11 +1043,11 @@ async function allOrderLinesHaveCustomerArtwork(orderId) {
 }
 
 /**
- * When every line has artwork and order is still in artwork-waiting phase, set status to printing.
+ * When every line has artwork and order is still in artwork-waiting phase, set status to processing.
  * @param {number|string} orderId
  * @returns {Promise<object|null>} updated order row if status changed
  */
-async function maybeAdvanceOrderToPrintingAfterArtwork(orderId) {
+async function maybeAdvanceOrderToProcessingAfterArtwork(orderId) {
   const id = parseInt(String(orderId), 10);
   if (!Number.isFinite(id) || id <= 0) return null;
   const hasAll = await allOrderLinesHaveCustomerArtwork(id);
@@ -1061,7 +1061,7 @@ async function maybeAdvanceOrderToPrintingAfterArtwork(orderId) {
   if (st !== 'awaiting_artwork' && st !== 'awaiting_customer_approval') {
     return null;
   }
-  return updateOrderStatusById(id, 'printing');
+  return updateOrderStatusById(id, 'processing');
 }
 
 async function markOrderRefunded({
@@ -1112,7 +1112,7 @@ module.exports = {
   selectOrderItemArtworkLineForOrder,
   updateCustomerArtworkForOrderItemByOrderId,
   allOrderLinesHaveCustomerArtwork,
-  maybeAdvanceOrderToPrintingAfterArtwork,
+  maybeAdvanceOrderToProcessingAfterArtwork,
   markOrderRefunded,
   verifyAddressBelongsToUser,
   verifyStorePickupAddressExists,
