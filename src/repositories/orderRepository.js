@@ -409,7 +409,7 @@ const SQL = {
       AND oi.order_id = $2
       AND o.id = oi.order_id
       AND o.user_id = $3
-      AND lower(trim(COALESCE(o.status, ''))) IN ('awaiting_artwork', 'awaiting_customer_approval', 'on_hold')
+      AND lower(trim(COALESCE(o.status, ''))) IN ('awaiting_artwork', 'awaiting_customer_approval', 'on_hold', 'processing')
     RETURNING oi.id, oi.customer_artwork_url, oi.order_id`,
   SELECT_ORDER_ITEM_FOR_CUSTOMER_ARTWORK: `SELECT
     oi.id,
@@ -425,7 +425,7 @@ const SQL = {
     WHERE oi.id = $1
       AND oi.order_id = $2
       AND o.user_id = $3
-      AND lower(trim(COALESCE(o.status, ''))) IN ('awaiting_artwork', 'awaiting_customer_approval', 'on_hold')`,
+      AND lower(trim(COALESCE(o.status, ''))) IN ('awaiting_artwork', 'awaiting_customer_approval', 'on_hold', 'processing')`,
   /** Guest / token flow: line belongs to order; caller must verify tracking token first. */
   SELECT_ORDER_ITEM_ARTWORK_LINE_FOR_ORDER: `SELECT
     oi.id,
@@ -440,14 +440,14 @@ const SQL = {
     INNER JOIN orders o ON o.id = oi.order_id
     WHERE oi.id = $1
       AND oi.order_id = $2
-      AND lower(trim(COALESCE(o.status, ''))) IN ('awaiting_artwork', 'awaiting_customer_approval', 'on_hold')`,
+      AND lower(trim(COALESCE(o.status, ''))) IN ('awaiting_artwork', 'awaiting_customer_approval', 'on_hold', 'processing')`,
   UPDATE_CUSTOMER_ARTWORK_ON_ORDER_ITEM_BY_ORDER: `UPDATE order_items oi
     SET customer_artwork_url = $3
     FROM orders o
     WHERE oi.id = $1
       AND oi.order_id = $2
       AND o.id = oi.order_id
-      AND lower(trim(COALESCE(o.status, ''))) IN ('awaiting_artwork', 'awaiting_customer_approval', 'on_hold')
+      AND lower(trim(COALESCE(o.status, ''))) IN ('awaiting_artwork', 'awaiting_customer_approval', 'on_hold', 'processing')
     RETURNING oi.id, oi.customer_artwork_url, oi.order_id`,
   UPDATE_ORDER_REFUNDED: `UPDATE orders
       SET status = $1,
@@ -1058,6 +1058,10 @@ async function maybeAdvanceOrderToProcessingAfterArtwork(orderId) {
     .toLowerCase()
     .trim()
     .replace(/\s+/g, '_');
+  if (st === 'processing') {
+    /** Already processing — all artwork is present, signal the frontend to redirect. */
+    return { status: 'processing' };
+  }
   if (st !== 'awaiting_artwork' && st !== 'awaiting_customer_approval') {
     return null;
   }
