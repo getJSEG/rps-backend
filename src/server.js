@@ -103,6 +103,34 @@ async function ensureEmployeeColumns() {
       const sql19 = fs.readFileSync(path.join(migrationsDir, 'allowDuplicateModifierOptionValues.sql'), 'utf8');
       await pool.query(sql19);
     }
+    if (fs.existsSync(path.join(migrationsDir, 'zzAddGraphicScenarioModeScope.sql'))) {
+      const sql20 = fs.readFileSync(path.join(migrationsDir, 'zzAddGraphicScenarioModeScope.sql'), 'utf8');
+      await pool.query(sql20);
+    }
+    if (fs.existsSync(path.join(migrationsDir, 'zzAddOrderItemGraphicSelection.sql'))) {
+      const sql21 = fs.readFileSync(path.join(migrationsDir, 'zzAddOrderItemGraphicSelection.sql'), 'utf8');
+      await pool.query(sql21);
+    }
+    if (fs.existsSync(path.join(migrationsDir, 'addProductPurchaseOptions.sql'))) {
+      const sql22 = fs.readFileSync(path.join(migrationsDir, 'addProductPurchaseOptions.sql'), 'utf8');
+      await pool.query(sql22);
+    }
+    if (fs.existsSync(path.join(migrationsDir, 'addOrderItemPurchaseOption.sql'))) {
+      const sql23 = fs.readFileSync(path.join(migrationsDir, 'addOrderItemPurchaseOption.sql'), 'utf8');
+      await pool.query(sql23);
+    }
+    if (fs.existsSync(path.join(migrationsDir, 'addHardwareTemplates.sql'))) {
+      const sql24 = fs.readFileSync(path.join(migrationsDir, 'addHardwareTemplates.sql'), 'utf8');
+      await pool.query(sql24);
+    }
+    if (fs.existsSync(path.join(migrationsDir, 'addHardwareTemplateComputedPrices.sql'))) {
+      const sql25 = fs.readFileSync(path.join(migrationsDir, 'addHardwareTemplateComputedPrices.sql'), 'utf8');
+      await pool.query(sql25);
+    }
+    if (fs.existsSync(path.join(migrationsDir, 'addProductWeightAndShippingDims.sql'))) {
+      const sql26 = fs.readFileSync(path.join(migrationsDir, 'addProductWeightAndShippingDims.sql'), 'utf8');
+      await pool.query(sql26);
+    }
   } catch (err) {
     console.warn('Migrations (optional):', err.message);
   }

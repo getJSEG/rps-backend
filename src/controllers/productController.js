@@ -30,10 +30,10 @@ function normalizeMode(value, fallback) {
   return v || fallback;
 }
 
+// Accept any non-empty string as a mode scope (supports dynamic purchase option keys)
 function normalizeModeScope(value) {
   const v = String(value || '').trim().toLowerCase();
-  if (v === 'graphic_only' || v === 'graphic_frame') return v;
-  return 'all';
+  return v || 'all';
 }
 
 function parseSizeOptionsInput(value) {
@@ -72,6 +72,60 @@ async function replaceProductSizeOptions(productId, options) {
       `INSERT INTO product_size_options (product_id, label, width, height, unit_price, is_default)
        VALUES ($1, $2, $3, $4, $5, $6)`,
       [productId, opt.label, opt.width, opt.height, opt.unit_price, isDefault]
+    );
+  }
+}
+
+function parsePurchaseOptionsInput(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => ({
+      label: String(item?.label || '').trim(),
+      option_key: String(item?.option_key || item?.key || '').trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, ''),
+      pricing_mode: String(item?.pricing_mode || 'fixed').trim().toLowerCase() === 'area' ? 'area' : 'fixed',
+      unit_price: asNumberOrNull(item?.unit_price ?? item?.unitPrice),
+      price_per_sqft: asNumberOrNull(item?.price_per_sqft ?? item?.pricePerSqft),
+      min_charge: asNumberOrNull(item?.min_charge ?? item?.minCharge),
+      sort_order: item?.sort_order != null ? Number(item.sort_order) : 0,
+      is_default: item?.is_default === true || item?.isDefault === true,
+      is_active: item?.is_active !== false,
+    }))
+    .filter((item) => item.label && item.option_key);
+}
+
+async function getProductPurchaseOptions(productId) {
+  const result = await pool.query(
+    `SELECT id, product_id, label, option_key, pricing_mode, unit_price, price_per_sqft, min_charge, sort_order, is_default, is_active
+     FROM product_purchase_options
+     WHERE product_id = $1
+     ORDER BY sort_order ASC, id ASC`,
+    [productId]
+  );
+  return result.rows;
+}
+
+async function replaceProductPurchaseOptions(productId, options) {
+  await pool.query('DELETE FROM product_purchase_options WHERE product_id = $1', [productId]);
+  if (!Array.isArray(options) || options.length === 0) return;
+  const hasDefault = options.some((o) => o.is_default);
+  for (let i = 0; i < options.length; i++) {
+    const opt = options[i];
+    const isDefault = hasDefault ? !!opt.is_default : i === 0;
+    await pool.query(
+      `INSERT INTO product_purchase_options (product_id, label, option_key, pricing_mode, unit_price, price_per_sqft, min_charge, sort_order, is_default, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [
+        productId,
+        opt.label,
+        opt.option_key,
+        opt.pricing_mode || 'fixed',
+        opt.unit_price,
+        opt.price_per_sqft,
+        opt.min_charge,
+        i,
+        isDefault,
+        opt.is_active !== false,
+      ]
     );
   }
 }
@@ -517,6 +571,7 @@ const getProductById = async (req, res) => {
     }
     const product = result.rows[0];
     product.size_options = await getProductSizeOptions(product.id);
+    product.purchase_options = await getProductPurchaseOptions(product.id);
     product.modifier_groups = await getProductModifierGroups(product.id);
     const sm = product.size_mode != null ? String(product.size_mode).trim() : '';
     if (!sm && Array.isArray(product.size_options) && product.size_options.length > 0) {
@@ -600,6 +655,319 @@ const deleteModifierCatalogGroupAdmin = async (req, res) => {
   } catch (error) {
     console.error('Delete modifier catalog group error:', error);
     return res.status(500).json({ message: 'Failed to delete modifier group' });
+  }
+};
+
+const getProductPurchaseOptionsAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const check = await pool.query('SELECT id FROM products WHERE id = $1', [id]);
+    if (check.rows.length === 0) return res.status(404).json({ message: 'Product not found' });
+    const options = await getProductPurchaseOptions(id);
+    res.json({ product_id: Number(id), purchase_options: options });
+  } catch (error) {
+    console.error('Get product purchase options error:', error);
+    res.status(500).json({ message: 'Failed to fetch product purchase options' });
+  }
+};
+
+const updateProductPurchaseOptionsAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const check = await pool.query('SELECT id FROM products WHERE id = $1', [id]);
+    if (check.rows.length === 0) return res.status(404).json({ message: 'Product not found' });
+    const parsed = parsePurchaseOptionsInput(req.body?.purchase_options ?? []);
+    await replaceProductPurchaseOptions(id, parsed);
+    const options = await getProductPurchaseOptions(id);
+    res.json({ product_id: Number(id), purchase_options: options });
+  } catch (error) {
+    console.error('Update product purchase options error:', error);
+    const code = /invalid|required/i.test(String(error.message || '')) ? 400 : 500;
+    res.status(code).json({ message: error.message || 'Failed to update product purchase options' });
+  }
+};
+
+function normalizeHardwareOptionKey(value, fallbackIndex) {
+  const raw = String(value || '').trim().toLowerCase();
+  const normalized = raw.replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+  if (normalized) return normalized;
+  return `option_${fallbackIndex + 1}`;
+}
+
+function parseHardwareTemplatePayload(body) {
+  const name = String(body?.name || '').trim();
+  const rawOptions = Array.isArray(body?.options) ? body.options : [];
+  const options = rawOptions
+    .map((opt, index) => ({
+      label: String(opt?.label || '').trim(),
+      option_key: normalizeHardwareOptionKey(opt?.option_key || opt?.label, index),
+      unit_price: asNumberOrNull(opt?.unit_price ?? opt?.unitPrice) ?? 0,
+      is_default: opt?.is_default === true || opt?.isDefault === true,
+      sort_order: index,
+      modifiers: Array.isArray(opt?.modifiers) ? opt.modifiers : [],
+    }))
+    .filter((opt) => opt.label);
+
+  if (!name) throw new Error('Template name is required.');
+  if (options.length !== 2) throw new Error('Hardware template must contain exactly 2 options.');
+  if (!options.some((opt) => opt.is_default)) {
+    options[0].is_default = true;
+  }
+
+  const defaultCount = options.filter((opt) => opt.is_default).length;
+  if (defaultCount !== 1) {
+    throw new Error('Exactly one option must be default.');
+  }
+
+  const keySet = new Set();
+  for (const opt of options) {
+    if (opt.unit_price < 0) throw new Error('Option price must be zero or greater.');
+    if (keySet.has(opt.option_key)) throw new Error('Option keys must be unique.');
+    keySet.add(opt.option_key);
+  }
+
+  return { name, options };
+}
+
+async function computeHardwareOptionPricing(client, baseUnitPrice, modifierGroupIds) {
+  const base = asNumberOrNull(baseUnitPrice) ?? 0;
+  if (!Array.isArray(modifierGroupIds) || modifierGroupIds.length === 0) {
+    return { base_unit_price: base, modifier_total: 0, computed_unit_price: base };
+  }
+
+  let modifierTotal = 0;
+  const uniqueGroupIds = Array.from(
+    new Set(
+      modifierGroupIds
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id))
+    )
+  );
+
+  for (const groupId of uniqueGroupIds) {
+    const optRes = await client.query(
+      `SELECT price_adjustment, price_type
+       FROM modifier_options
+       WHERE modifier_group_id = $1
+         AND is_active = true
+       ORDER BY is_default DESC, sort_order ASC, id ASC
+       LIMIT 1`,
+      [groupId]
+    );
+    if (optRes.rows.length === 0) continue;
+    const row = optRes.rows[0];
+    const adjustment = asNumberOrNull(row.price_adjustment) ?? 0;
+    const priceType = String(row.price_type || 'percent').trim().toLowerCase();
+    if (priceType === 'fixed') {
+      modifierTotal += adjustment;
+    } else {
+      modifierTotal += base * (adjustment / 100);
+    }
+  }
+
+  return {
+    base_unit_price: base,
+    modifier_total: modifierTotal,
+    computed_unit_price: base + modifierTotal,
+  };
+}
+
+async function getHardwareTemplatesNested(client) {
+  const templatesRes = await client.query(
+    `SELECT id, name, is_active, created_at, updated_at
+     FROM hardware_templates
+     ORDER BY updated_at DESC, id DESC`
+  );
+  if (templatesRes.rows.length === 0) return [];
+
+  const optionsRes = await client.query(
+    `SELECT id, hardware_template_id, label, option_key, unit_price, base_unit_price, modifier_total, computed_unit_price, is_default, sort_order, is_active
+     FROM hardware_template_options
+     ORDER BY hardware_template_id ASC, sort_order ASC, id ASC`
+  );
+
+  const templateIds = templatesRes.rows.map((t) => Number(t.id));
+  const optionIds = optionsRes.rows.map((o) => Number(o.id));
+
+  let modifiersRes = { rows: [] };
+  if (optionIds.length > 0) {
+    modifiersRes = await client.query(
+      `SELECT
+         htom.hardware_template_option_id,
+         htom.is_required,
+         htom.sort_order,
+         mg.id AS modifier_group_id,
+         mg.key AS modifier_key,
+         mg.name AS modifier_name
+       FROM hardware_template_option_modifiers htom
+       INNER JOIN modifier_groups mg ON mg.id = htom.modifier_group_id
+       WHERE htom.hardware_template_option_id = ANY($1::int[])
+         AND htom.is_active = true
+         AND mg.is_active = true
+       ORDER BY htom.hardware_template_option_id ASC, htom.sort_order ASC, mg.sort_order ASC, mg.id ASC`,
+      [optionIds]
+    );
+  }
+
+  const modsByOptionId = new Map();
+  for (const row of modifiersRes.rows) {
+    const optionId = Number(row.hardware_template_option_id);
+    if (!modsByOptionId.has(optionId)) modsByOptionId.set(optionId, []);
+    modsByOptionId.get(optionId).push({
+      id: Number(row.modifier_group_id),
+      key: String(row.modifier_key || ''),
+      name: String(row.modifier_name || ''),
+      is_required: !!row.is_required,
+      sort_order: Number(row.sort_order || 0),
+    });
+  }
+
+  const optionsByTemplateId = new Map();
+  for (const row of optionsRes.rows) {
+    const templateId = Number(row.hardware_template_id);
+    if (!templateIds.includes(templateId)) continue;
+    if (!optionsByTemplateId.has(templateId)) optionsByTemplateId.set(templateId, []);
+    optionsByTemplateId.get(templateId).push({
+      id: Number(row.id),
+      label: String(row.label || ''),
+      option_key: String(row.option_key || ''),
+      unit_price: Number(row.unit_price || 0),
+      base_unit_price: asNumberOrNull(row.base_unit_price) ?? asNumberOrNull(row.unit_price) ?? 0,
+      modifier_total: asNumberOrNull(row.modifier_total) ?? 0,
+      computed_unit_price: asNumberOrNull(row.computed_unit_price) ?? asNumberOrNull(row.unit_price) ?? 0,
+      is_default: !!row.is_default,
+      sort_order: Number(row.sort_order || 0),
+      is_active: !!row.is_active,
+      modifiers: modsByOptionId.get(Number(row.id)) || [],
+    });
+  }
+
+  return templatesRes.rows.map((t) => ({
+    id: Number(t.id),
+    name: String(t.name || ''),
+    is_active: !!t.is_active,
+    created_at: t.created_at,
+    updated_at: t.updated_at,
+    options: optionsByTemplateId.get(Number(t.id)) || [],
+  }));
+}
+
+const getHardwareTemplatesAdmin = async (_req, res) => {
+  try {
+    const templates = await getHardwareTemplatesNested(pool);
+    res.json({ templates });
+  } catch (error) {
+    console.error('Get hardware templates error:', error);
+    res.status(500).json({ message: 'Failed to fetch hardware templates' });
+  }
+};
+
+const upsertHardwareTemplateAdmin = async (req, res) => {
+  const idRaw = req.params?.id;
+  const templateId = idRaw != null && idRaw !== '' ? parseInt(String(idRaw), 10) : null;
+  const client = await pool.connect();
+  try {
+    const { name, options } = parseHardwareTemplatePayload(req.body || {});
+    await client.query('BEGIN');
+
+    let activeTemplateId = templateId;
+    if (activeTemplateId) {
+      const check = await client.query('SELECT id FROM hardware_templates WHERE id = $1', [activeTemplateId]);
+      if (check.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ message: 'Hardware template not found.' });
+      }
+      await client.query(
+        `UPDATE hardware_templates
+         SET name = $1, updated_at = NOW()
+         WHERE id = $2`,
+        [name, activeTemplateId]
+      );
+      await client.query('DELETE FROM hardware_template_option_modifiers WHERE hardware_template_option_id IN (SELECT id FROM hardware_template_options WHERE hardware_template_id = $1)', [activeTemplateId]);
+      await client.query('DELETE FROM hardware_template_options WHERE hardware_template_id = $1', [activeTemplateId]);
+    } else {
+      const insertTemplate = await client.query(
+        `INSERT INTO hardware_templates (name, is_active)
+         VALUES ($1, true)
+         RETURNING id`,
+        [name]
+      );
+      activeTemplateId = Number(insertTemplate.rows[0].id);
+    }
+
+    for (let i = 0; i < options.length; i++) {
+      const opt = options[i];
+      const optionRes = await client.query(
+        `INSERT INTO hardware_template_options (hardware_template_id, label, option_key, unit_price, base_unit_price, modifier_total, computed_unit_price, is_default, sort_order, is_active)
+         VALUES ($1, $2, $3, $4, $5, 0, $4, $6, $7, true)
+         RETURNING id`,
+        [activeTemplateId, opt.label, opt.option_key, opt.unit_price, opt.unit_price, !!opt.is_default, i]
+      );
+      const hardwareTemplateOptionId = Number(optionRes.rows[0].id);
+
+      const modifierRows = [];
+      for (const m of opt.modifiers) {
+        const key = String(m?.key || m?.modifier_key || '').trim().toLowerCase();
+        if (!key) continue;
+        modifierRows.push({
+          key,
+          is_required: m?.is_required === true,
+        });
+      }
+
+      for (let j = 0; j < modifierRows.length; j++) {
+        const m = modifierRows[j];
+        const groupRes = await client.query(
+          `SELECT id FROM modifier_groups WHERE key = $1 AND is_active = true`,
+          [m.key]
+        );
+        if (groupRes.rows.length === 0) continue;
+        const modifierGroupId = Number(groupRes.rows[0].id);
+        m.modifier_group_id = modifierGroupId;
+        await client.query(
+          `INSERT INTO hardware_template_option_modifiers (hardware_template_option_id, modifier_group_id, is_required, sort_order, is_active)
+           VALUES ($1, $2, $3, $4, true)`,
+          [hardwareTemplateOptionId, modifierGroupId, m.is_required, j]
+        );
+      }
+
+      const computed = await computeHardwareOptionPricing(
+        client,
+        opt.unit_price,
+        modifierRows.map((m) => m.modifier_group_id).filter((id) => id != null)
+      );
+      await client.query(
+        `UPDATE hardware_template_options
+         SET base_unit_price = $1, modifier_total = $2, computed_unit_price = $3, updated_at = NOW()
+         WHERE id = $4`,
+        [computed.base_unit_price, computed.modifier_total, computed.computed_unit_price, hardwareTemplateOptionId]
+      );
+    }
+
+    await client.query('COMMIT');
+    const templates = await getHardwareTemplatesNested(pool);
+    const saved = templates.find((t) => Number(t.id) === Number(activeTemplateId)) || null;
+    res.json({ template: saved, templates });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Upsert hardware template error:', error);
+    const code = /required|exactly|must|unique/i.test(String(error.message || '')) ? 400 : 500;
+    res.status(code).json({ message: error.message || 'Failed to save hardware template' });
+  } finally {
+    client.release();
+  }
+};
+
+const deleteHardwareTemplateAdmin = async (req, res) => {
+  try {
+    const id = parseInt(String(req.params?.id || ''), 10);
+    if (Number.isNaN(id)) return res.status(400).json({ message: 'Invalid template id.' });
+    const deleted = await pool.query('DELETE FROM hardware_templates WHERE id = $1 RETURNING id, name', [id]);
+    if (deleted.rowCount === 0) return res.status(404).json({ message: 'Hardware template not found.' });
+    res.json({ message: 'Hardware template deleted.', template: deleted.rows[0] });
+  } catch (error) {
+    console.error('Delete hardware template error:', error);
+    res.status(500).json({ message: 'Failed to delete hardware template' });
   }
 };
 
@@ -820,6 +1188,14 @@ const createProduct = async (req, res) => {
       max_height,
       size_options,
       graphic_scenario_enabled,
+      hardware_template_id,
+      purchase_options,
+      weight,
+      length,
+      shipping_length,
+      shipping_width,
+      shipping_height,
+      shipping_weight,
     } = req.body;
     if (!name) return res.status(400).json({ message: 'Product name is required' });
     const slugVal = slug || name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') + '-' + Date.now();
@@ -832,6 +1208,19 @@ const createProduct = async (req, res) => {
     const galleryJson = JSON.stringify(galleryFinal);
     const pricingModeVal = normalizeMode(pricing_mode, price_per_sqft != null ? 'area' : 'fixed');
     const graphicScenarioEnabledVal = graphic_scenario_enabled === true || graphic_scenario_enabled === 'true';
+    const hardwareTemplateIdVal =
+      hardware_template_id === undefined || hardware_template_id === null || hardware_template_id === ''
+        ? null
+        : parseInt(String(hardware_template_id), 10);
+    if (hardwareTemplateIdVal != null) {
+      if (!Number.isFinite(hardwareTemplateIdVal)) {
+        return res.status(400).json({ message: 'Invalid hardware_template_id.' });
+      }
+      const hwCheck = await pool.query('SELECT id FROM hardware_templates WHERE id = $1', [hardwareTemplateIdVal]);
+      if (hwCheck.rows.length === 0) {
+        return res.status(400).json({ message: 'Selected hardware template does not exist.' });
+      }
+    }
     if (graphicScenarioEnabledVal && pricingModeVal !== 'fixed') {
       return res.status(400).json({ message: 'Graphic scenario products must use fixed pricing.' });
     }
@@ -844,14 +1233,20 @@ const createProduct = async (req, res) => {
     const maxWidthVal = asNumberOrNull(max_width);
     const minHeightVal = asNumberOrNull(min_height);
     const maxHeightVal = asNumberOrNull(max_height);
+    const weightVal = asNumberOrNull(weight);
+    const lengthVal = asNumberOrNull(length);
+    const shippingLengthVal = asNumberOrNull(shipping_length);
+    const shippingWidthVal = asNumberOrNull(shipping_width);
+    const shippingHeightVal = asNumberOrNull(shipping_height);
+    const shippingWeightVal = asNumberOrNull(shipping_weight);
     const parsedSizeOptions = parseSizeOptionsInput(size_options);
     if (sizeModeVal === 'predefined' && parsedSizeOptions.length === 0) {
       return res.status(400).json({ message: 'size_options are required when size_mode is predefined.' });
     }
 
     const result = await pool.query(
-      `INSERT INTO products (name, slug, description, spec, file_setup, installation_guide, faq, category_id, subcategory, price, price_per_sqft, min_charge, material, image_url, is_new, is_active, sku, properties, gallery_images, pricing_mode, size_mode, base_unit, min_width, max_width, min_height, max_height, graphic_scenario_enabled)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb, $20, $21, $22, $23, $24, $25, $26, $27)
+      `INSERT INTO products (name, slug, description, spec, file_setup, installation_guide, faq, category_id, subcategory, price, price_per_sqft, min_charge, material, image_url, is_new, is_active, sku, properties, gallery_images, pricing_mode, size_mode, base_unit, min_width, max_width, min_height, max_height, graphic_scenario_enabled, hardware_template_id, weight, length, shipping_length, shipping_width, shipping_height, shipping_weight)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34)
        RETURNING *`,
       [
         name,
@@ -881,11 +1276,21 @@ const createProduct = async (req, res) => {
         minHeightVal,
         maxHeightVal,
         graphicScenarioEnabledVal,
+        hardwareTemplateIdVal,
+        weightVal,
+        lengthVal,
+        shippingLengthVal,
+        shippingWidthVal,
+        shippingHeightVal,
+        shippingWeightVal,
       ]
     );
     const created = result.rows[0];
     await replaceProductSizeOptions(created.id, parsedSizeOptions);
+    const parsedPurchaseOptions = parsePurchaseOptionsInput(purchase_options);
+    await replaceProductPurchaseOptions(created.id, parsedPurchaseOptions);
     created.size_options = await getProductSizeOptions(created.id);
+    created.purchase_options = await getProductPurchaseOptions(created.id);
     res.status(201).json({ product: created });
   } catch (error) {
     if (error.code === '23505') return res.status(400).json({ message: 'Product slug already exists' });
@@ -916,6 +1321,21 @@ const updateProduct = async (req, res) => {
       req.body.graphic_scenario_enabled !== undefined
         ? req.body.graphic_scenario_enabled === true || req.body.graphic_scenario_enabled === 'true'
         : !!row.graphic_scenario_enabled;
+    const hardwareTemplateIdVal =
+      req.body.hardware_template_id !== undefined
+        ? (req.body.hardware_template_id === null || req.body.hardware_template_id === ''
+            ? null
+            : parseInt(String(req.body.hardware_template_id), 10))
+        : row.hardware_template_id;
+    if (hardwareTemplateIdVal != null) {
+      if (!Number.isFinite(hardwareTemplateIdVal)) {
+        return res.status(400).json({ message: 'Invalid hardware_template_id.' });
+      }
+      const hwCheck = await pool.query('SELECT id FROM hardware_templates WHERE id = $1', [hardwareTemplateIdVal]);
+      if (hwCheck.rows.length === 0) {
+        return res.status(400).json({ message: 'Selected hardware template does not exist.' });
+      }
+    }
     if (graphicScenarioEnabledVal && pricingModeVal !== 'fixed') {
       return res.status(400).json({ message: 'Graphic scenario products must use fixed pricing.' });
     }
@@ -942,6 +1362,16 @@ const updateProduct = async (req, res) => {
     const isNewVal = req.body.is_new !== undefined ? (req.body.is_new === true || req.body.is_new === 'true') : row.is_new;
     const isActiveVal = req.body.is_active !== undefined ? (req.body.is_active !== false && req.body.is_active !== 'false') : row.is_active;
     const skuVal = req.body.sku !== undefined ? req.body.sku : row.sku;
+    const weightVal = req.body.weight !== undefined ? asNumberOrNull(req.body.weight) : row.weight;
+    const lengthVal = req.body.length !== undefined ? asNumberOrNull(req.body.length) : row.length;
+    const shippingLengthVal =
+      req.body.shipping_length !== undefined ? asNumberOrNull(req.body.shipping_length) : row.shipping_length;
+    const shippingWidthVal =
+      req.body.shipping_width !== undefined ? asNumberOrNull(req.body.shipping_width) : row.shipping_width;
+    const shippingHeightVal =
+      req.body.shipping_height !== undefined ? asNumberOrNull(req.body.shipping_height) : row.shipping_height;
+    const shippingWeightVal =
+      req.body.shipping_weight !== undefined ? asNumberOrNull(req.body.shipping_weight) : row.shipping_weight;
     const propertiesVal = req.body.properties !== undefined
       ? (Array.isArray(req.body.properties) ? JSON.stringify(req.body.properties) : (typeof req.body.properties === 'string' ? req.body.properties : (row.properties ? JSON.stringify(row.properties) : '[]')))
       : (row.properties ? JSON.stringify(row.properties) : '[]');
@@ -954,13 +1384,20 @@ const updateProduct = async (req, res) => {
     if (sizeModeVal === 'predefined' && parsedSizeOptions.length === 0) {
       return res.status(400).json({ message: 'size_options are required when size_mode is predefined.' });
     }
+    const parsedPurchaseOptions = req.body.purchase_options !== undefined
+      ? parsePurchaseOptionsInput(req.body.purchase_options)
+      : null;
     const result = await pool.query(
-      `UPDATE products SET name = $1, slug = $2, description = $3, spec = $4, file_setup = $5, installation_guide = $6, faq = $7::jsonb, category_id = $8, subcategory = $9, price = $10, price_per_sqft = $11, min_charge = $12, material = $13, image_url = $14, is_new = $15, is_active = $16, sku = $17, properties = $18::jsonb, gallery_images = $19::jsonb, pricing_mode = $20, size_mode = $21, base_unit = $22, min_width = $23, max_width = $24, min_height = $25, max_height = $26, graphic_scenario_enabled = $27, updated_at = CURRENT_TIMESTAMP WHERE id = $28 RETURNING *`,
-      [nameVal, slugVal, descriptionVal, specVal, fileSetupVal, installationGuideVal, faqVal, categoryIdVal, subcategoryVal, priceVal, pricePerSqftVal, minChargeVal, materialVal, imageUrlVal, isNewVal, isActiveVal, skuVal, propertiesVal, galleryJson, pricingModeVal, sizeModeVal, baseUnitVal, minWidthVal, maxWidthVal, minHeightVal, maxHeightVal, graphicScenarioEnabledVal, id]
+      `UPDATE products SET name = $1, slug = $2, description = $3, spec = $4, file_setup = $5, installation_guide = $6, faq = $7::jsonb, category_id = $8, subcategory = $9, price = $10, price_per_sqft = $11, min_charge = $12, material = $13, image_url = $14, is_new = $15, is_active = $16, sku = $17, properties = $18::jsonb, gallery_images = $19::jsonb, pricing_mode = $20, size_mode = $21, base_unit = $22, min_width = $23, max_width = $24, min_height = $25, max_height = $26, graphic_scenario_enabled = $27, hardware_template_id = $28, weight = $29, length = $30, shipping_length = $31, shipping_width = $32, shipping_height = $33, shipping_weight = $34, updated_at = CURRENT_TIMESTAMP WHERE id = $35 RETURNING *`,
+      [nameVal, slugVal, descriptionVal, specVal, fileSetupVal, installationGuideVal, faqVal, categoryIdVal, subcategoryVal, priceVal, pricePerSqftVal, minChargeVal, materialVal, imageUrlVal, isNewVal, isActiveVal, skuVal, propertiesVal, galleryJson, pricingModeVal, sizeModeVal, baseUnitVal, minWidthVal, maxWidthVal, minHeightVal, maxHeightVal, graphicScenarioEnabledVal, hardwareTemplateIdVal, weightVal, lengthVal, shippingLengthVal, shippingWidthVal, shippingHeightVal, shippingWeightVal, id]
     );
     const updated = result.rows[0];
     await replaceProductSizeOptions(id, parsedSizeOptions);
+    if (parsedPurchaseOptions !== null) {
+      await replaceProductPurchaseOptions(id, parsedPurchaseOptions);
+    }
     updated.size_options = await getProductSizeOptions(id);
+    updated.purchase_options = await getProductPurchaseOptions(id);
     res.json({ product: updated });
   } catch (error) {
     if (error.code === '23505') return res.status(400).json({ message: 'Product slug already exists' });
@@ -1076,5 +1513,10 @@ module.exports = {
   getModifierCatalogAdmin,
   updateModifierCatalogAdmin,
   deleteModifierCatalogGroupAdmin,
+  getProductPurchaseOptionsAdmin,
+  updateProductPurchaseOptionsAdmin,
+  getHardwareTemplatesAdmin,
+  upsertHardwareTemplateAdmin,
+  deleteHardwareTemplateAdmin,
 };
 

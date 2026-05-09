@@ -4,6 +4,7 @@ const {
   validateArtworkBufferAgainstOrderDimensions,
 } = require('./artworkController');
 const cartRepository = require('../repositories/cartRepository');
+const pool = require('../config/database');
 const storePickupAddressRepository = require('../repositories/storePickupAddressRepository');
 const { computeShippingFromCartItems, computeTaxAndTotal } = require('../services/orderTotalsService');
 const crypto = require('crypto');
@@ -139,6 +140,16 @@ function expandCartItemToOrderLines(item) {
     item.graphic_scenario_enabled === true ||
     item.graphicScenarioEnabled === true ||
     pricingSnapshot.graphic_scenario_enabled === true;
+  const purchaseOptionKey =
+    item.purchase_option_key ??
+    item.purchaseOptionKey ??
+    pricingSnapshot.purchase_option_key ??
+    null;
+  const purchaseOptionLabel =
+    item.purchase_option_label ??
+    item.purchaseOptionLabel ??
+    pricingSnapshot.purchase_option_label ??
+    null;
   const modifierTotal = roundMoney2(
     item.modifier_total ??
       item.modifierTotal ??
@@ -181,6 +192,8 @@ function expandCartItemToOrderLines(item) {
         graphic_scenario_enabled: graphicScenarioEnabled,
         modifier_total: modifierTotal,
         base_unit_price: baseUnitPrice,
+        purchase_option_key: purchaseOptionKey,
+        purchase_option_label: purchaseOptionLabel,
       };
     });
   }
@@ -207,6 +220,8 @@ function expandCartItemToOrderLines(item) {
       graphic_scenario_enabled: graphicScenarioEnabled,
       modifier_total: modifierTotal,
       base_unit_price: baseUnitPrice,
+      purchase_option_key: purchaseOptionKey,
+      purchase_option_label: purchaseOptionLabel,
     },
   ];
 }
@@ -233,10 +248,46 @@ async function clearBuyerCartAfterCheckout(req, userId) {
 }
 
 async function loadServerCartForCheckout(req, userId) {
-  if (userId) return cartRepository.findCartItemsByUserId(userId);
-  const sid = readGuestSessionIdFromReq(req);
-  if (!sid) return [];
-  return cartRepository.findCartItemsByGuestSession(sid);
+  const items = userId
+    ? await cartRepository.findCartItemsByUserId(userId)
+    : await cartRepository.findCartItemsByGuestSession(readGuestSessionIdFromReq(req) ?? '');
+  return enrichCartItemsWithPurchaseOptionLabels(items);
+}
+
+/**
+ * For cart items that have a purchase_option_key but no purchase_option_label
+ * (e.g. items added before the label was persisted), look up the label from
+ * product_purchase_options so the order item always stores a human-readable name.
+ */
+async function enrichCartItemsWithPurchaseOptionLabels(items) {
+  if (!Array.isArray(items) || items.length === 0) return items;
+  return Promise.all(
+    items.map(async (item) => {
+      const key = item.purchase_option_key ?? item.purchaseOptionKey ?? item.pricing_snapshot?.purchase_option_key ?? null;
+      const existingLabel = item.purchase_option_label ?? item.purchaseOptionLabel ?? item.pricing_snapshot?.purchase_option_label ?? null;
+      if (!key || existingLabel) return item;
+      const productId = item.productId ?? item.product_id ?? null;
+      if (!productId) return item;
+      try {
+        const r = await pool.query(
+          'SELECT label FROM product_purchase_options WHERE product_id = $1 AND lower(option_key) = lower($2) AND is_active = true LIMIT 1',
+          [productId, String(key).trim()]
+        );
+        const label = r.rows[0]?.label ?? null;
+        if (!label) return item;
+        return {
+          ...item,
+          purchase_option_label: label,
+          purchaseOptionLabel: label,
+          pricing_snapshot: item.pricing_snapshot
+            ? { ...item.pricing_snapshot, purchase_option_label: label }
+            : item.pricing_snapshot,
+        };
+      } catch {
+        return item;
+      }
+    })
+  );
 }
 
 /** @returns {{ snapshot: object } | { error: string }} */
