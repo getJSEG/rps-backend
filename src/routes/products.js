@@ -20,6 +20,11 @@ const {
   getModifierCatalogAdmin,
   updateModifierCatalogAdmin,
   deleteModifierCatalogGroupAdmin,
+  getProductPurchaseOptionsAdmin,
+  updateProductPurchaseOptionsAdmin,
+  getHardwareTemplatesAdmin,
+  upsertHardwareTemplateAdmin,
+  deleteHardwareTemplateAdmin,
 } = require('../controllers/productController');
 const { optionalAuth } = require('../middleware/auth');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
@@ -48,6 +53,12 @@ router.post('/admin/upload-category-image', authenticateToken, requireAdmin, (re
 router.put('/admin/products/:id', authenticateToken, requireAdmin, updateProduct);
 router.get('/admin/products/:id/modifiers', authenticateToken, requireAdmin, getProductModifierConfigAdmin);
 router.put('/admin/products/:id/modifiers', authenticateToken, requireAdmin, updateProductModifierConfigAdmin);
+router.get('/admin/products/:id/purchase-options', authenticateToken, requireAdmin, getProductPurchaseOptionsAdmin);
+router.put('/admin/products/:id/purchase-options', authenticateToken, requireAdmin, updateProductPurchaseOptionsAdmin);
+router.get('/admin/hardware-templates', authenticateToken, requireAdmin, getHardwareTemplatesAdmin);
+router.post('/admin/hardware-templates', authenticateToken, requireAdmin, upsertHardwareTemplateAdmin);
+router.put('/admin/hardware-templates/:id', authenticateToken, requireAdmin, upsertHardwareTemplateAdmin);
+router.delete('/admin/hardware-templates/:id', authenticateToken, requireAdmin, deleteHardwareTemplateAdmin);
 router.delete('/admin/products/:id', authenticateToken, requireAdmin, deleteProductAdmin);
 router.get('/admin/modifier-catalog', authenticateToken, requireAdmin, getModifierCatalogAdmin);
 router.put('/admin/modifier-catalog', authenticateToken, requireAdmin, updateModifierCatalogAdmin);

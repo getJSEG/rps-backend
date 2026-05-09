@@ -5,8 +5,8 @@ const SQL = {
          billing_address_id, payment_method, notes, guest_checkout, status)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING *`,
-  INSERT_ORDER_ITEM_WITH_JOB: `INSERT INTO order_items (order_id, product_id, product_name, job_name, quantity, unit_price, total_price, image_url, width_inches, height_inches, selected_modifiers, selection_mode, graphic_scenario_enabled, modifier_total, base_unit_price)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15)`,
+  INSERT_ORDER_ITEM_WITH_JOB: `INSERT INTO order_items (order_id, product_id, product_name, job_name, quantity, unit_price, total_price, image_url, width_inches, height_inches, selected_modifiers, selection_mode, graphic_scenario_enabled, modifier_total, base_unit_price, purchase_option_key, purchase_option_label)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15, $16, $17)`,
   SELECT_ORDER_WITH_ITEMS_AGG: `SELECT o.*, 
          json_agg(json_build_object(
            'id', oi.id,
@@ -23,6 +23,8 @@ const SQL = {
            'base_unit_price', oi.base_unit_price,
            'selection_mode', oi.selection_mode,
            'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+           'purchase_option_key', oi.purchase_option_key,
+           'purchase_option_label', oi.purchase_option_label,
            'product_graphic_scenario_enabled', p.graphic_scenario_enabled
          )) as items
          FROM orders o
@@ -62,6 +64,8 @@ const SQL = {
             'base_unit_price', oi.base_unit_price,
             'selection_mode', oi.selection_mode,
             'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+            'purchase_option_key', oi.purchase_option_key,
+            'purchase_option_label', oi.purchase_option_label,
             'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
@@ -106,6 +110,8 @@ const SQL = {
             'base_unit_price', oi.base_unit_price,
             'selection_mode', oi.selection_mode,
             'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+            'purchase_option_key', oi.purchase_option_key,
+            'purchase_option_label', oi.purchase_option_label,
             'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
@@ -150,6 +156,8 @@ const SQL = {
              'base_unit_price', oi.base_unit_price,
              'selection_mode', oi.selection_mode,
              'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+             'purchase_option_key', oi.purchase_option_key,
+             'purchase_option_label', oi.purchase_option_label,
              'product_graphic_scenario_enabled', p.graphic_scenario_enabled
            )
          ) FILTER (WHERE oi.id IS NOT NULL),
@@ -194,6 +202,8 @@ const SQL = {
             'base_unit_price', oi.base_unit_price,
             'selection_mode', oi.selection_mode,
             'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+            'purchase_option_key', oi.purchase_option_key,
+            'purchase_option_label', oi.purchase_option_label,
             'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
@@ -227,6 +237,8 @@ const SQL = {
             'base_unit_price', oi.base_unit_price,
             'selection_mode', oi.selection_mode,
             'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+            'purchase_option_key', oi.purchase_option_key,
+            'purchase_option_label', oi.purchase_option_label,
             'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
@@ -259,6 +271,8 @@ const SQL = {
             'base_unit_price', oi.base_unit_price,
             'selection_mode', oi.selection_mode,
             'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+            'purchase_option_key', oi.purchase_option_key,
+            'purchase_option_label', oi.purchase_option_label,
             'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
@@ -311,6 +325,8 @@ const SQL = {
              'base_unit_price', oi.base_unit_price,
              'selection_mode', oi.selection_mode,
              'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+             'purchase_option_key', oi.purchase_option_key,
+             'purchase_option_label', oi.purchase_option_label,
              'product_graphic_scenario_enabled', p.graphic_scenario_enabled
            )
          ) FILTER (WHERE oi.id IS NOT NULL),
@@ -365,6 +381,8 @@ const SQL = {
              'base_unit_price', oi.base_unit_price,
              'selection_mode', oi.selection_mode,
              'graphic_scenario_enabled', oi.graphic_scenario_enabled,
+             'purchase_option_key', oi.purchase_option_key,
+             'purchase_option_label', oi.purchase_option_label,
              'product_graphic_scenario_enabled', p.graphic_scenario_enabled
            )
          ) FILTER (WHERE oi.id IS NOT NULL),
@@ -392,10 +410,10 @@ const SQL = {
   INSERT_ORDER_ADMIN_CART: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, notes)
          VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING *`,
-  INSERT_ORDER_ITEM_ADMIN_WITH_JOB: `INSERT INTO order_items (order_id, product_id, product_name, job_name, quantity, unit_price, total_price, image_url, width_inches, height_inches, selected_modifiers, selection_mode, graphic_scenario_enabled, modifier_total, base_unit_price)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15)`,
-  INSERT_ORDER_ITEM_ADMIN_NO_JOB: `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price, image_url, width_inches, height_inches, selected_modifiers, selection_mode, graphic_scenario_enabled, modifier_total, base_unit_price)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14)`,
+  INSERT_ORDER_ITEM_ADMIN_WITH_JOB: `INSERT INTO order_items (order_id, product_id, product_name, job_name, quantity, unit_price, total_price, image_url, width_inches, height_inches, selected_modifiers, selection_mode, graphic_scenario_enabled, modifier_total, base_unit_price, purchase_option_key, purchase_option_label)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15, $16, $17)`,
+  INSERT_ORDER_ITEM_ADMIN_NO_JOB: `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price, image_url, width_inches, height_inches, selected_modifiers, selection_mode, graphic_scenario_enabled, modifier_total, base_unit_price, purchase_option_key, purchase_option_label)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16)`,
   SELECT_ORDER_BY_ID: `SELECT o.* FROM orders o WHERE o.id = $1`,
   INSERT_ORDER_STRIPE_PENDING: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, payment_status, notes, guest_checkout, guest_tracking_token_hash, guest_tracking_token_created_at, shipping_address_id, billing_address_id, shipping_method, shipping_charge, shipping_mode, store_pickup_address_id, subtotal_amount, tax_id, tax_name, tax_percentage, tax_amount)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
@@ -532,6 +550,8 @@ async function createOrderWithItems({
         item.graphic_scenario_enabled === true || item.graphicScenarioEnabled === true,
         item.modifier_total ?? item.modifierTotal ?? 0,
         item.base_unit_price ?? item.baseUnitPrice ?? item.unit_price ?? unit,
+        item.purchase_option_key ?? item.purchaseOptionKey ?? null,
+        item.purchase_option_label ?? item.purchaseOptionLabel ?? null,
       ]);
     }
     await client.query('COMMIT');
@@ -717,6 +737,8 @@ async function insertAdminCartOrderAndItems(client, useJobName, baseParams, line
           line.graphic_scenario_enabled === true || line.graphicScenarioEnabled === true,
           line.modifier_total ?? line.modifierTotal ?? 0,
           line.base_unit_price ?? line.baseUnitPrice ?? line.unitPrice ?? 0,
+          line.purchase_option_key ?? line.purchaseOptionKey ?? null,
+          line.purchase_option_label ?? line.purchaseOptionLabel ?? null,
         ]);
       } else {
         await client.query(SQL.INSERT_ORDER_ITEM_ADMIN_NO_JOB, [
@@ -734,6 +756,8 @@ async function insertAdminCartOrderAndItems(client, useJobName, baseParams, line
           line.graphic_scenario_enabled === true || line.graphicScenarioEnabled === true,
           line.modifier_total ?? line.modifierTotal ?? 0,
           line.base_unit_price ?? line.baseUnitPrice ?? line.unitPrice ?? 0,
+          line.purchase_option_key ?? line.purchaseOptionKey ?? null,
+          line.purchase_option_label ?? line.purchaseOptionLabel ?? null,
         ]);
       }
     }
@@ -939,6 +963,8 @@ async function createPendingStripeOrderWithItems({
         oi.graphic_scenario_enabled === true || oi.graphicScenarioEnabled === true,
         oi.modifier_total ?? oi.modifierTotal ?? 0,
         oi.base_unit_price ?? oi.baseUnitPrice ?? oi.unit_price ?? 0,
+        oi.purchase_option_key ?? oi.purchaseOptionKey ?? null,
+        oi.purchase_option_label ?? oi.purchaseOptionLabel ?? null,
       ]);
     }
     await client.query('COMMIT');

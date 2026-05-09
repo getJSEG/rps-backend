@@ -32,10 +32,10 @@ function normalizeSelectionMode(value) {
   return '';
 }
 
+// Accept any non-empty string as a mode scope (not just the two legacy hardcoded values)
 function normalizeModeScope(value) {
   const v = String(value || '').trim().toLowerCase();
-  if (v === SELECTION_MODE.GRAPHIC_ONLY || v === SELECTION_MODE.GRAPHIC_FRAME) return v;
-  return 'all';
+  return v || 'all';
 }
 
 function optionEffectiveValue(option) {
@@ -97,6 +97,7 @@ async function getProductPricingConfig(productId) {
   );
   if (productResult.rows.length === 0) return null;
   const product = productResult.rows[0];
+
   const optionsResult = await pool.query(
     `SELECT id, label, width, height, unit_price, is_default
      FROM product_size_options
@@ -104,6 +105,16 @@ async function getProductPricingConfig(productId) {
      ORDER BY is_default DESC, id ASC`,
     [productId]
   );
+
+  // Load purchase options (the new dynamic option system)
+  const purchaseOptionsResult = await pool.query(
+    `SELECT id, label, option_key, pricing_mode, unit_price, price_per_sqft, min_charge, sort_order, is_default
+     FROM product_purchase_options
+     WHERE product_id = $1 AND is_active = true
+     ORDER BY sort_order ASC, id ASC`,
+    [productId]
+  );
+
   const modifierGroupsResult = await pool.query(
     `SELECT
       pm.id AS product_modifier_id,
@@ -161,18 +172,31 @@ async function getProductPricingConfig(productId) {
   return {
     ...product,
     size_options: optionsResult.rows,
+    purchase_options: purchaseOptionsResult.rows,
     modifier_groups,
   };
 }
 
-function resolveSelectedModifiers(product, input, baseUnitPrice) {
+function resolveSelectedModifiers(product, input, baseUnitPrice, activePurchaseOptionKey) {
   const groups = Array.isArray(product.modifier_groups) ? product.modifier_groups : [];
   if (groups.length === 0) return { selected: [], total: 0 };
-  const selectionMode = normalizeSelectionMode(input.selection_mode ?? input.selectionMode);
+
+  const hasPurchaseOptions = Array.isArray(product.purchase_options) && product.purchase_options.length > 0;
   const isGraphicScenario = !!product.graphic_scenario_enabled;
-  if (isGraphicScenario && !selectionMode) {
-    throw new Error('Graphic mode selection is required.');
+
+  // Determine the effective scope key for filtering modifiers
+  let effectiveScopeKey = null;
+  if (hasPurchaseOptions && activePurchaseOptionKey) {
+    effectiveScopeKey = String(activePurchaseOptionKey).trim().toLowerCase();
+  } else if (isGraphicScenario) {
+    // Legacy: use selection_mode
+    const selectionMode = normalizeSelectionMode(input.selection_mode ?? input.selectionMode);
+    if (!selectionMode) {
+      throw new Error('Graphic mode selection is required.');
+    }
+    effectiveScopeKey = selectionMode;
   }
+
   const rawSelected = input.selectedModifiers ?? input.selected_modifiers ?? {};
   const selectedObj =
     rawSelected && typeof rawSelected === 'object' && !Array.isArray(rawSelected) ? rawSelected : {};
@@ -181,7 +205,8 @@ function resolveSelectedModifiers(product, input, baseUnitPrice) {
   let percentTotal = 0;
   for (const group of groups) {
     const modeScope = normalizeModeScope(group.mode_scope);
-    if (isGraphicScenario && modeScope !== 'all' && modeScope !== selectionMode) {
+    // Filter by scope when an effectiveScopeKey is set
+    if (effectiveScopeKey && modeScope !== 'all' && modeScope !== effectiveScopeKey) {
       continue;
     }
     const options = Array.isArray(group.options) ? group.options : [];
@@ -194,8 +219,6 @@ function resolveSelectedModifiers(product, input, baseUnitPrice) {
         throw new Error(`Invalid option for ${group.name}.`);
       }
     } else {
-      // Optional groups must remain unselected when not provided by client.
-      // Required groups may fall back to explicit default only.
       if (group.is_required) {
         option = options.find((o) => o.is_default) || null;
       } else {
@@ -231,7 +254,115 @@ function resolveSelectedModifiers(product, input, baseUnitPrice) {
 }
 
 function validateAndCalculatePricing(product, input) {
+  const hasPurchaseOptions = Array.isArray(product.purchase_options) && product.purchase_options.length > 0;
   const isGraphicScenario = !!product.graphic_scenario_enabled;
+
+  // ── Purchase Options flow ────────────────────────────────────────────
+  if (hasPurchaseOptions) {
+    const purchaseOptions = product.purchase_options;
+    const requestedKey = String(input.purchase_option_key ?? input.purchaseOptionKey ?? '').trim().toLowerCase();
+    let selectedPurchaseOption = null;
+
+    if (requestedKey) {
+      selectedPurchaseOption = purchaseOptions.find(
+        (o) => String(o.option_key || '').trim().toLowerCase() === requestedKey
+      );
+      if (!selectedPurchaseOption) {
+        throw new Error(`Invalid purchase option: ${requestedKey}`);
+      }
+    } else {
+      selectedPurchaseOption = purchaseOptions.find((o) => !!o.is_default) || purchaseOptions[0];
+      if (!selectedPurchaseOption) {
+        throw new Error('No purchase option available for this product.');
+      }
+    }
+
+    const activePurchaseOptionKey = String(selectedPurchaseOption.option_key || '').trim().toLowerCase();
+    const optionPricingMode = normalizeMode(selectedPurchaseOption.pricing_mode, PRICING_MODE.FIXED);
+    const baseUnit = String(product.base_unit || 'inch').trim().toLowerCase();
+    if (baseUnit !== 'inch') {
+      throw new Error('Only inch input is supported for pricing at this time.');
+    }
+
+    // Dimensions — only needed for area pricing options
+    let width = 1;
+    let height = 1;
+    let areaSqft = 1 / 144;
+    let sizeSource = SIZE_MODE.CUSTOM;
+    let selectedSizeOption = null;
+
+    if (optionPricingMode === PRICING_MODE.AREA) {
+      const widthRaw = asNumber(input.width ?? input.width_inches ?? input.widthInches);
+      const heightRaw = asNumber(input.height ?? input.height_inches ?? input.heightInches);
+      if (!(widthRaw > 0) || !(heightRaw > 0)) {
+        throw new Error('Valid width and height (in inches) are required for this option.');
+      }
+      width = widthRaw;
+      height = heightRaw;
+      areaSqft = (width * height) / 144;
+    } else {
+      // Fixed pricing per option — no dimensions required (like graphic scenario)
+      // But still accept dimensions if provided for display purposes
+      const widthRaw = asNumber(input.width ?? input.width_inches ?? input.widthInches);
+      const heightRaw = asNumber(input.height ?? input.height_inches ?? input.heightInches);
+      if (widthRaw > 0 && heightRaw > 0) {
+        width = widthRaw;
+        height = heightRaw;
+        areaSqft = (width * height) / 144;
+      }
+    }
+
+    let computedUnitPrice = null;
+    let rate = null;
+    let minApplied = false;
+
+    if (optionPricingMode === PRICING_MODE.FIXED) {
+      const optionPrice = asNumber(selectedPurchaseOption.unit_price);
+      if (optionPrice == null) throw new Error('Selected option has no unit price configured.');
+      computedUnitPrice = optionPrice;
+    } else if (optionPricingMode === PRICING_MODE.AREA) {
+      rate = asNumber(selectedPurchaseOption.price_per_sqft);
+      const minCharge = asNumber(selectedPurchaseOption.min_charge) ?? 0;
+      if (rate == null) throw new Error('Selected option has no area price rate configured.');
+      computedUnitPrice = areaSqft * rate;
+      if (computedUnitPrice < minCharge) {
+        computedUnitPrice = minCharge;
+        minApplied = true;
+      }
+    } else {
+      throw new Error(`Unsupported pricing mode for option: ${optionPricingMode}`);
+    }
+
+    const modifierSelection = resolveSelectedModifiers(product, input, computedUnitPrice, activePurchaseOptionKey);
+    computedUnitPrice += modifierSelection.total;
+
+    return {
+      productId: Number(product.id),
+      productName: String(product.name || 'Product'),
+      productImage: product.image_url || null,
+      pricing_mode: optionPricingMode,
+      size_mode: SIZE_MODE.CUSTOM,
+      base_unit: baseUnit,
+      width,
+      height,
+      areaSqft,
+      rate,
+      minApplied,
+      sizeSource,
+      sizeOptionId: selectedSizeOption ? Number(selectedSizeOption.id) : null,
+      sizeOptionLabel: selectedSizeOption ? String(selectedSizeOption.label || '') : null,
+      selectionMode: null,
+      graphicScenarioEnabled: isGraphicScenario,
+      purchaseOptionKey: activePurchaseOptionKey,
+      purchaseOptionLabel: String(selectedPurchaseOption.label || ''),
+      selectedModifiers: modifierSelection.selected,
+      modifierTotal: modifierSelection.total,
+      baseUnitPrice: computedUnitPrice - modifierSelection.total,
+      unitPrice: computedUnitPrice,
+    };
+  }
+
+  // ── Legacy flow (graphic_scenario_enabled or plain products) ─────────
   if (isGraphicScenario && inferPricingMode(product) !== PRICING_MODE.FIXED) {
     throw new Error('Graphic scenario products must use fixed pricing.');
   }
@@ -316,7 +447,8 @@ function validateAndCalculatePricing(product, input) {
     throw new Error(`Unsupported pricing mode: ${pricingMode}`);
   }
 
-  const modifierSelection = resolveSelectedModifiers(product, input, computedUnitPrice);
+  const selectionMode = normalizeSelectionMode(input.selection_mode ?? input.selectionMode);
+  const modifierSelection = resolveSelectedModifiers(product, input, computedUnitPrice, null);
   computedUnitPrice += modifierSelection.total;
 
   return {
@@ -334,8 +466,10 @@ function validateAndCalculatePricing(product, input) {
     sizeSource,
     sizeOptionId: selectedOption ? Number(selectedOption.id) : null,
     sizeOptionLabel: selectedOption ? String(selectedOption.label || '') : null,
-    selectionMode: normalizeSelectionMode(input.selection_mode ?? input.selectionMode) || null,
+    selectionMode: selectionMode || null,
     graphicScenarioEnabled: isGraphicScenario,
+    purchaseOptionKey: null,
+    purchaseOptionLabel: null,
     selectedModifiers: modifierSelection.selected,
     modifierTotal: modifierSelection.total,
     baseUnitPrice: computedUnitPrice - modifierSelection.total,
@@ -401,6 +535,10 @@ function buildCartSnapshot(pricing, input) {
     selection_mode: pricing.selectionMode,
     graphicScenarioEnabled: pricing.graphicScenarioEnabled,
     graphic_scenario_enabled: pricing.graphicScenarioEnabled,
+    purchaseOptionKey: pricing.purchaseOptionKey,
+    purchase_option_key: pricing.purchaseOptionKey,
+    purchaseOptionLabel: pricing.purchaseOptionLabel,
+    purchase_option_label: pricing.purchaseOptionLabel,
     unitPrice: pricing.unitPrice,
     baseUnitPrice: pricing.baseUnitPrice,
     modifierTotal: pricing.modifierTotal,
@@ -418,6 +556,8 @@ function buildCartSnapshot(pricing, input) {
       size_option_label: pricing.sizeOptionLabel,
       selection_mode: pricing.selectionMode,
       graphic_scenario_enabled: pricing.graphicScenarioEnabled,
+      purchase_option_key: pricing.purchaseOptionKey,
+      purchase_option_label: pricing.purchaseOptionLabel,
       width: pricing.width,
       height: pricing.height,
       area_sqft: pricing.areaSqft,
