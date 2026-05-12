@@ -666,6 +666,217 @@ const deleteModifierCatalogGroupAdmin = async (req, res) => {
   }
 };
 
+function parsePresetModifierGroupIds(body) {
+  const raw = body?.modifier_group_ids ?? body?.modifierGroupIds;
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const x of raw) {
+    const n = Number(x);
+    if (!Number.isFinite(n) || n <= 0) continue;
+    if (seen.has(n)) continue;
+    seen.add(n);
+    out.push(n);
+  }
+  return out;
+}
+
+async function fetchModifierPresetsPayload() {
+  const presetsRes = await pool.query(
+    `SELECT id, name, sort_order, created_at, updated_at
+     FROM modifier_presets
+     ORDER BY sort_order ASC, id ASC`
+  );
+  if (presetsRes.rows.length === 0) return [];
+  const presetIds = presetsRes.rows.map((r) => Number(r.id));
+  const itemsRes = await pool.query(
+    `SELECT mpi.id, mpi.modifier_preset_id, mpi.modifier_group_id, mpi.sort_order,
+            mg.key AS group_key, mg.name AS group_name
+     FROM modifier_preset_items mpi
+     INNER JOIN modifier_groups mg ON mg.id = mpi.modifier_group_id
+     WHERE mpi.modifier_preset_id = ANY($1::int[])
+     ORDER BY mpi.modifier_preset_id ASC, mpi.sort_order ASC, mpi.id ASC`,
+    [presetIds]
+  );
+  const byPreset = new Map();
+  for (const row of itemsRes.rows) {
+    const pid = Number(row.modifier_preset_id);
+    if (!byPreset.has(pid)) byPreset.set(pid, []);
+    byPreset.get(pid).push({
+      id: Number(row.id),
+      modifier_group_id: Number(row.modifier_group_id),
+      sort_order: Number(row.sort_order || 0),
+      key: String(row.group_key || ''),
+      name: String(row.group_name || ''),
+    });
+  }
+  return presetsRes.rows.map((p) => ({
+    id: Number(p.id),
+    name: String(p.name || ''),
+    sort_order: Number(p.sort_order || 0),
+    modifiers: byPreset.get(Number(p.id)) || [],
+  }));
+}
+
+const getModifierPresetsAdmin = async (req, res) => {
+  try {
+    const presets = await fetchModifierPresetsPayload();
+    res.json({ presets });
+  } catch (error) {
+    console.error('Get modifier presets error:', error);
+    res.status(500).json({ message: 'Failed to fetch modifier presets' });
+  }
+};
+
+const createModifierPresetAdmin = async (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  if (!name) {
+    return res.status(400).json({ message: 'Preset name is required.' });
+  }
+  const ids = parsePresetModifierGroupIds(req.body);
+  const sortOrder = req.body?.sort_order != null ? Number(req.body.sort_order) : 0;
+  const client = await pool.connect();
+  let presetId;
+  try {
+    await client.query('BEGIN');
+    const ins = await client.query(
+      `INSERT INTO modifier_presets (name, sort_order) VALUES ($1, $2) RETURNING id`,
+      [name, Number.isFinite(sortOrder) ? sortOrder : 0]
+    );
+    presetId = Number(ins.rows[0].id);
+    for (let i = 0; i < ids.length; i++) {
+      const gid = ids[i];
+      const check = await client.query(`SELECT id FROM modifier_groups WHERE id = $1`, [gid]);
+      if (check.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ message: `Modifier not found (id ${gid}). Save modifiers first.` });
+      }
+      await client.query(
+        `INSERT INTO modifier_preset_items (modifier_preset_id, modifier_group_id, sort_order)
+         VALUES ($1, $2, $3)`,
+        [presetId, gid, i]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (_) {
+      // ignore
+    }
+    console.error('Create modifier preset error:', error);
+    const msg = String(error.message || '');
+    if (/modifier_presets|modifier_preset_items/i.test(msg)) {
+      return res.status(500).json({ message: 'Database is missing modifier preset tables. Run migrations.' });
+    }
+    return res.status(500).json({ message: 'Failed to create modifier preset' });
+  } finally {
+    client.release();
+  }
+  try {
+    const presets = await fetchModifierPresetsPayload();
+    const created = presets.find((p) => p.id === presetId);
+    res.status(201).json({
+      preset: created || { id: presetId, name, sort_order: sortOrder, modifiers: [] },
+    });
+  } catch (error) {
+    console.error('Create modifier preset fetch error:', error);
+    res.status(201).json({ preset: { id: presetId, name, sort_order: sortOrder, modifiers: [] } });
+  }
+};
+
+const updateModifierPresetAdmin = async (req, res) => {
+  const presetId = Number(req.params?.id);
+  if (!Number.isFinite(presetId) || presetId <= 0) {
+    return res.status(400).json({ message: 'Invalid preset id.' });
+  }
+  const nameRaw = req.body?.name;
+  const ids = parsePresetModifierGroupIds(req.body);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const exist = await client.query(`SELECT id FROM modifier_presets WHERE id = $1`, [presetId]);
+    if (exist.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ message: 'Preset not found.' });
+    }
+    if (nameRaw != null) {
+      const name = String(nameRaw || '').trim();
+      if (!name) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ message: 'Preset name cannot be empty.' });
+      }
+      await client.query(`UPDATE modifier_presets SET name = $1, updated_at = NOW() WHERE id = $2`, [
+        name,
+        presetId,
+      ]);
+    }
+    if (req.body?.modifier_group_ids != null || req.body?.modifierGroupIds != null) {
+      await client.query(`DELETE FROM modifier_preset_items WHERE modifier_preset_id = $1`, [presetId]);
+      for (let i = 0; i < ids.length; i++) {
+        const gid = ids[i];
+        const check = await client.query(`SELECT id FROM modifier_groups WHERE id = $1`, [gid]);
+        if (check.rows.length === 0) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ message: `Modifier not found (id ${gid}).` });
+        }
+        await client.query(
+          `INSERT INTO modifier_preset_items (modifier_preset_id, modifier_group_id, sort_order)
+           VALUES ($1, $2, $3)`,
+          [presetId, gid, i]
+        );
+      }
+    }
+    if (req.body?.sort_order != null) {
+      const so = Number(req.body.sort_order);
+      if (Number.isFinite(so)) {
+        await client.query(`UPDATE modifier_presets SET sort_order = $1, updated_at = NOW() WHERE id = $2`, [
+          so,
+          presetId,
+        ]);
+      }
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (_) {
+      // ignore
+    }
+    console.error('Update modifier preset error:', error);
+    return res.status(500).json({ message: 'Failed to update modifier preset' });
+  } finally {
+    client.release();
+  }
+  try {
+    const presets = await fetchModifierPresetsPayload();
+    const updated = presets.find((p) => p.id === presetId);
+    res.json({ preset: updated || { id: presetId, name: '', sort_order: 0, modifiers: [] } });
+  } catch (error) {
+    console.error('Update modifier preset fetch error:', error);
+    res.status(500).json({ message: 'Preset updated but failed to reload.' });
+  }
+};
+
+const deleteModifierPresetAdmin = async (req, res) => {
+  const presetId = Number(req.params?.id);
+  if (!Number.isFinite(presetId) || presetId <= 0) {
+    return res.status(400).json({ message: 'Invalid preset id.' });
+  }
+  try {
+    const result = await pool.query(`DELETE FROM modifier_presets WHERE id = $1 RETURNING id, name`, [
+      presetId,
+    ]);
+    if (result.rowCount === 0) {
+      return res.status(404).json({ message: 'Preset not found.' });
+    }
+    res.json({ message: 'Preset deleted.', preset: result.rows[0] });
+  } catch (error) {
+    console.error('Delete modifier preset error:', error);
+    res.status(500).json({ message: 'Failed to delete modifier preset' });
+  }
+};
+
 const getProductPurchaseOptionsAdmin = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1536,6 +1747,10 @@ module.exports = {
   getModifierCatalogAdmin,
   updateModifierCatalogAdmin,
   deleteModifierCatalogGroupAdmin,
+  getModifierPresetsAdmin,
+  createModifierPresetAdmin,
+  updateModifierPresetAdmin,
+  deleteModifierPresetAdmin,
   getProductPurchaseOptionsAdmin,
   updateProductPurchaseOptionsAdmin,
   getHardwareTemplatesAdmin,

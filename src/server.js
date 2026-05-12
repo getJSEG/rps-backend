@@ -131,6 +131,10 @@ async function ensureEmployeeColumns() {
       const sql26 = fs.readFileSync(path.join(migrationsDir, 'addProductWeightAndShippingDims.sql'), 'utf8');
       await pool.query(sql26);
     }
+    if (fs.existsSync(path.join(migrationsDir, 'addModifierPresets.sql'))) {
+      const sql27 = fs.readFileSync(path.join(migrationsDir, 'addModifierPresets.sql'), 'utf8');
+      await pool.query(sql27);
+    }
   } catch (err) {
     console.warn('Migrations (optional):', err.message);
   }

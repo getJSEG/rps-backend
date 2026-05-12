@@ -20,6 +20,10 @@ const {
   getModifierCatalogAdmin,
   updateModifierCatalogAdmin,
   deleteModifierCatalogGroupAdmin,
+  getModifierPresetsAdmin,
+  createModifierPresetAdmin,
+  updateModifierPresetAdmin,
+  deleteModifierPresetAdmin,
   getProductPurchaseOptionsAdmin,
   updateProductPurchaseOptionsAdmin,
   getHardwareTemplatesAdmin,
@@ -63,6 +67,10 @@ router.delete('/admin/products/:id', authenticateToken, requireAdmin, deleteProd
 router.get('/admin/modifier-catalog', authenticateToken, requireAdmin, getModifierCatalogAdmin);
 router.put('/admin/modifier-catalog', authenticateToken, requireAdmin, updateModifierCatalogAdmin);
 router.delete('/admin/modifier-catalog/:key', authenticateToken, requireAdmin, deleteModifierCatalogGroupAdmin);
+router.get('/admin/modifier-presets', authenticateToken, requireAdmin, getModifierPresetsAdmin);
+router.post('/admin/modifier-presets', authenticateToken, requireAdmin, createModifierPresetAdmin);
+router.put('/admin/modifier-presets/:id', authenticateToken, requireAdmin, updateModifierPresetAdmin);
+router.delete('/admin/modifier-presets/:id', authenticateToken, requireAdmin, deleteModifierPresetAdmin);
 router.post('/admin/categories', authenticateToken, requireAdmin, createCategory);
 router.put('/admin/categories/:id', authenticateToken, requireAdmin, updateCategory);
 router.delete('/admin/categories/:id', authenticateToken, requireAdmin, deleteCategory);
