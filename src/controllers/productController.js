@@ -224,8 +224,152 @@ async function getProductModifierGroups(productId, { includeInactive = false } =
   return groups;
 }
 
+async function getProductConditionalModifierRules(productId) {
+  const result = await pool.query(
+    `SELECT
+      r.id,
+      r.product_id,
+      r.hardware_option_id,
+      po.option_key AS hardware_option_key,
+      po.label AS hardware_option_label,
+      r.source_modifier_id,
+      smg.key AS source_modifier_key,
+      smg.name AS source_modifier_name,
+      r.source_option_id,
+      so.value AS source_option_value,
+      so.label AS source_option_label,
+      r.action_type,
+      r.target_modifier_id,
+      tmg.key AS target_modifier_key,
+      tmg.name AS target_modifier_name,
+      r.target_option_id,
+      target_o.value AS target_option_value,
+      target_o.label AS target_option_label,
+      r.sort_order
+    FROM product_conditional_modifier_rules r
+    LEFT JOIN product_purchase_options po ON po.id = r.hardware_option_id
+    INNER JOIN modifier_groups smg ON smg.id = r.source_modifier_id
+    LEFT JOIN modifier_options so ON so.id = r.source_option_id
+    INNER JOIN modifier_groups tmg ON tmg.id = r.target_modifier_id
+    LEFT JOIN modifier_options target_o ON target_o.id = r.target_option_id
+    WHERE r.product_id = $1
+    ORDER BY r.sort_order ASC, r.id ASC`,
+    [productId]
+  );
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    product_id: Number(row.product_id),
+    hardware_option_id: row.hardware_option_id == null ? null : Number(row.hardware_option_id),
+    hardware_option_key: row.hardware_option_key == null ? null : String(row.hardware_option_key),
+    hardware_option_label: row.hardware_option_label == null ? null : String(row.hardware_option_label),
+    source_modifier_id: Number(row.source_modifier_id),
+    source_modifier_key: String(row.source_modifier_key || ''),
+    source_modifier_name: String(row.source_modifier_name || ''),
+    source_option_id: row.source_option_id == null ? null : Number(row.source_option_id),
+    source_option_value: row.source_option_value == null ? null : String(row.source_option_value || ''),
+    source_option_label: row.source_option_label == null ? null : String(row.source_option_label || ''),
+    action_type: String(row.action_type || ''),
+    target_modifier_id: Number(row.target_modifier_id),
+    target_modifier_key: String(row.target_modifier_key || ''),
+    target_modifier_name: String(row.target_modifier_name || ''),
+    target_option_id: row.target_option_id == null ? null : Number(row.target_option_id),
+    target_option_value: row.target_option_value == null ? null : String(row.target_option_value || ''),
+    target_option_label: row.target_option_label == null ? null : String(row.target_option_label || ''),
+    sort_order: Number(row.sort_order || 0),
+  }));
+}
+
+async function resolveProductPurchaseOptionId(client, productId, rawId, rawKey) {
+  if (rawId != null && rawId !== '') {
+    const id = Number(rawId);
+    if (!Number.isFinite(id) || id <= 0) throw new Error('Invalid hardware option id.');
+    const check = await client.query(
+      'SELECT id FROM product_purchase_options WHERE id = $1 AND product_id = $2',
+      [id, productId]
+    );
+    if (check.rows.length === 0) throw new Error('Hardware option does not belong to this product.');
+    return id;
+  }
+  const key = String(rawKey || '').trim().toLowerCase();
+  if (!key || key === 'all') return null;
+  const check = await client.query(
+    'SELECT id FROM product_purchase_options WHERE product_id = $1 AND LOWER(option_key) = $2 ORDER BY sort_order ASC, id ASC LIMIT 1',
+    [productId, key]
+  );
+  if (check.rows.length === 0) throw new Error(`Hardware option not found: ${key}`);
+  return Number(check.rows[0].id);
+}
+
+async function validateModifierOptionPair(client, modifierGroupId, optionId, label) {
+  const groupId = Number(modifierGroupId);
+  const optId = Number(optionId);
+  if (!Number.isFinite(groupId) || groupId <= 0) throw new Error(`${label} modifier is required.`);
+  if (!Number.isFinite(optId) || optId <= 0) throw new Error(`${label} option is required.`);
+  const result = await client.query(
+    `SELECT mo.id
+     FROM modifier_options mo
+     INNER JOIN modifier_groups mg ON mg.id = mo.modifier_group_id
+     WHERE mg.id = $1 AND mo.id = $2`,
+    [groupId, optId]
+  );
+  if (result.rows.length === 0) throw new Error(`${label} option does not belong to selected modifier.`);
+  return { groupId, optId };
+}
+
+async function validateModifierGroup(client, modifierGroupId, label) {
+  const groupId = Number(modifierGroupId);
+  if (!Number.isFinite(groupId) || groupId <= 0) throw new Error(`${label} modifier is required.`);
+  const result = await client.query('SELECT id FROM modifier_groups WHERE id = $1', [groupId]);
+  if (result.rows.length === 0) throw new Error(`${label} modifier not found.`);
+  return groupId;
+}
+
+async function replaceProductConditionalModifierRules(client, productId, rules) {
+  await client.query('DELETE FROM product_conditional_modifier_rules WHERE product_id = $1', [productId]);
+  if (!Array.isArray(rules) || rules.length === 0) return;
+  for (let i = 0; i < rules.length; i++) {
+    const rule = rules[i] || {};
+    const actionType = String(rule.action_type || rule.actionType || '').trim();
+    if (actionType !== 'auto_select' && actionType !== 'disable') {
+      throw new Error('Conditional rule action must be auto_select or disable.');
+    }
+    const hardwareOptionId = await resolveProductPurchaseOptionId(
+      client,
+      productId,
+      rule.hardware_option_id ?? rule.hardwareOptionId,
+      rule.hardware_option_key ?? rule.hardwareOptionKey
+    );
+    const sourceGroupId = await validateModifierGroup(client, rule.source_modifier_id ?? rule.sourceModifierId, 'Source');
+    const rawSourceOptionId = rule.source_option_id ?? rule.sourceOptionId;
+    const sourceOptionId =
+      rawSourceOptionId == null || rawSourceOptionId === ''
+        ? null
+        : (await validateModifierOptionPair(client, sourceGroupId, rawSourceOptionId, 'Source')).optId;
+    const targetGroupId = await validateModifierGroup(client, rule.target_modifier_id ?? rule.targetModifierId, 'Target');
+    const rawTargetOptionId = rule.target_option_id ?? rule.targetOptionId;
+    const targetOptionId =
+      rawTargetOptionId == null || rawTargetOptionId === ''
+        ? null
+        : (await validateModifierOptionPair(client, targetGroupId, rawTargetOptionId, 'Target')).optId;
+    if (actionType === 'auto_select' && targetOptionId == null) {
+      throw new Error('Target option is required for auto-select rules.');
+    }
+    await client.query(
+      `INSERT INTO product_conditional_modifier_rules
+       (product_id, hardware_option_id, source_modifier_id, source_option_id, action_type, target_modifier_id, target_option_id, sort_order)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [productId, hardwareOptionId, sourceGroupId, sourceOptionId, actionType, targetGroupId, targetOptionId, i]
+    );
+  }
+}
+
 async function replaceProductModifierConfig(productId, payload) {
   const groups = Array.isArray(payload?.groups) ? payload.groups : [];
+  const rules = Array.isArray(payload?.conditional_rules)
+    ? payload.conditional_rules
+    : Array.isArray(payload?.conditionalRules)
+      ? payload.conditionalRules
+      : [];
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -296,6 +440,7 @@ async function replaceProductModifierConfig(productId, payload) {
         );
       }
     }
+    await replaceProductConditionalModifierRules(client, productId, rules);
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');
@@ -581,6 +726,7 @@ const getProductById = async (req, res) => {
     product.size_options = await getProductSizeOptions(product.id);
     product.purchase_options = await getProductPurchaseOptions(product.id);
     product.modifier_groups = await getProductModifierGroups(product.id);
+    product.conditional_modifier_rules = await getProductConditionalModifierRules(product.id);
     const sm = product.size_mode != null ? String(product.size_mode).trim() : '';
     if (!sm && Array.isArray(product.size_options) && product.size_options.length > 0) {
       product.size_mode = 'predefined';
@@ -598,7 +744,8 @@ const getProductModifierConfigAdmin = async (req, res) => {
     const check = await pool.query('SELECT id FROM products WHERE id = $1', [id]);
     if (check.rows.length === 0) return res.status(404).json({ message: 'Product not found' });
     const groups = await getProductModifierGroups(id, { includeInactive: true });
-    res.json({ product_id: Number(id), groups });
+    const conditional_rules = await getProductConditionalModifierRules(id);
+    res.json({ product_id: Number(id), groups, conditional_rules });
   } catch (error) {
     console.error('Get product modifier config error:', error);
     res.status(500).json({ message: 'Failed to fetch product modifier config' });
@@ -612,7 +759,8 @@ const updateProductModifierConfigAdmin = async (req, res) => {
     if (check.rows.length === 0) return res.status(404).json({ message: 'Product not found' });
     await replaceProductModifierConfig(id, req.body || {});
     const groups = await getProductModifierGroups(id, { includeInactive: true });
-    res.json({ product_id: Number(id), groups });
+    const conditional_rules = await getProductConditionalModifierRules(id);
+    res.json({ product_id: Number(id), groups, conditional_rules });
   } catch (error) {
     console.error('Update product modifier config error:', error);
     const code = /not found|invalid|required/i.test(String(error.message || '')) ? 400 : 500;

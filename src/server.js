@@ -139,6 +139,18 @@ async function ensureEmployeeColumns() {
       const sqlFedex = fs.readFileSync(path.join(migrationsDir, 'addFedexShipment.sql'), 'utf8');
       await pool.query(sqlFedex);
     }
+    if (fs.existsSync(path.join(migrationsDir, 'zzAddProductConditionalModifierRules.sql'))) {
+      const sql28 = fs.readFileSync(path.join(migrationsDir, 'zzAddProductConditionalModifierRules.sql'), 'utf8');
+      await pool.query(sql28);
+    }
+    if (fs.existsSync(path.join(migrationsDir, 'zzAlterConditionalModifierRulesNullableTargetOption.sql'))) {
+      const sql29 = fs.readFileSync(path.join(migrationsDir, 'zzAlterConditionalModifierRulesNullableTargetOption.sql'), 'utf8');
+      await pool.query(sql29);
+    }
+    if (fs.existsSync(path.join(migrationsDir, 'zzAlterConditionalModifierRulesNullableSourceOption.sql'))) {
+      const sql30 = fs.readFileSync(path.join(migrationsDir, 'zzAlterConditionalModifierRulesNullableSourceOption.sql'), 'utf8');
+      await pool.query(sql30);
+    }
   } catch (err) {
     console.warn('Migrations (optional):', err.message);
   }
