@@ -1,4 +1,5 @@
 const pool = require('../config/database');
+const { isPersistedFedexQuotedServiceType } = require('../utils/fedexQuoteServiceType');
 
 const PRICING_MODE = {
   FIXED: 'fixed',
@@ -477,6 +478,38 @@ function validateAndCalculatePricing(product, input) {
   };
 }
 
+/**
+ * If the client sent a persisted FedEx quote (REST serviceType + finite amount), merge it onto the cart snapshot
+ * so it is never dropped when amount parsing or defaults would omit it. No-op for guests / no FedEx in input.
+ * Skips when shipping mode is store pickup.
+ */
+function applyPersistedFedExQuoteFromInput(snapshot, input) {
+  if (!snapshot || !input || typeof input !== 'object') return snapshot;
+  const mode = normalizeShippingMode(input.shippingMode ?? input.shipping_mode ?? input.shipping);
+  if (mode === 'store_pickup') return snapshot;
+  const svcIn = String(input.shippingService ?? input.shipping_service ?? '').trim();
+  if (!isPersistedFedexQuotedServiceType(svcIn)) return snapshot;
+  const rawAmt = input.shippingRateAmount ?? input.shipping_rate_amount;
+  if (rawAmt === undefined || rawAmt === null || rawAmt === '') return snapshot;
+  const amtIn = Number(rawAmt);
+  if (!Number.isFinite(amtIn) || amtIn < 0) return snapshot;
+  const cur = String(input.shippingRateCurrency ?? input.shipping_rate_currency ?? 'USD').trim().toUpperCase() || 'USD';
+  const name = String(input.shippingRateServiceName ?? input.shipping_rate_service_name ?? '').trim() || svcIn;
+  const ed = input.shippingRateEstimatedDelivery ?? input.shipping_rate_estimated_delivery;
+  const edOut = ed != null && String(ed).trim() !== '' ? ed : null;
+  snapshot.shippingService = svcIn;
+  snapshot.shipping_service = svcIn;
+  snapshot.shippingRateAmount = amtIn;
+  snapshot.shipping_rate_amount = amtIn;
+  snapshot.shippingRateCurrency = cur;
+  snapshot.shipping_rate_currency = cur;
+  snapshot.shippingRateServiceName = name;
+  snapshot.shipping_rate_service_name = name;
+  snapshot.shippingRateEstimatedDelivery = edOut;
+  snapshot.shipping_rate_estimated_delivery = edOut;
+  return snapshot;
+}
+
 function buildCartSnapshot(pricing, input) {
   const shippingMode = normalizeShippingMode(input.shippingMode ?? input.shipping_mode ?? input.shipping);
   const shippingService =
@@ -527,7 +560,7 @@ function buildCartSnapshot(pricing, input) {
   const shippingRateEstimatedDelivery = String(
     input.shippingRateEstimatedDelivery ?? input.shipping_rate_estimated_delivery ?? ''
   ).trim();
-  return {
+  const result = {
     productId: pricing.productId,
     productName: pricing.productName,
     productImage: pricing.productImage,
@@ -541,10 +574,15 @@ function buildCartSnapshot(pricing, input) {
     shippingMode,
     shipping: shippingMode === 'store_pickup' ? 'store-pickup' : 'blind-drop',
     shippingService,
+    shipping_service: shippingService,
     shippingRateAmount: Number.isFinite(shippingRateAmount) ? shippingRateAmount : undefined,
+    shipping_rate_amount: Number.isFinite(shippingRateAmount) ? shippingRateAmount : undefined,
     shippingRateCurrency: shippingRateCurrency || 'USD',
+    shipping_rate_currency: shippingRateCurrency || 'USD',
     shippingRateServiceName: shippingRateServiceName || shippingService,
+    shipping_rate_service_name: shippingRateServiceName || shippingService,
     shippingRateEstimatedDelivery: shippingRateEstimatedDelivery || null,
+    shipping_rate_estimated_delivery: shippingRateEstimatedDelivery || null,
     storePickupAddressId: shippingMode === 'store_pickup' ? storePickupAddressId : null,
     selectionMode: pricing.selectionMode,
     selection_mode: pricing.selectionMode,
@@ -587,6 +625,8 @@ function buildCartSnapshot(pricing, input) {
     },
     timestamp: new Date().toISOString(),
   };
+  applyPersistedFedExQuoteFromInput(result, input);
+  return result;
 }
 
 async function calculateCartItemFromInput(input) {

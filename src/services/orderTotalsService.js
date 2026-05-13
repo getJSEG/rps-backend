@@ -1,5 +1,6 @@
 const shippingRatesRepository = require('../repositories/shippingRatesRepository');
 const taxRepository = require('../repositories/taxRepository');
+const { isPersistedFedexQuotedServiceType } = require('../utils/fedexQuoteServiceType');
 
 function roundMoney2(n) {
   const x = Number(n);
@@ -23,11 +24,6 @@ function isCartLineStorePickup(item) {
   return false;
 }
 
-function isFedexServiceType(svcRaw) {
-  const s = String(svcRaw || '').trim().toUpperCase();
-  return s.startsWith('FEDEX_');
-}
-
 async function aggregateShippingFromCartItems(cartItems) {
   const seenKeys = new Set();
   let mergedSum = 0;
@@ -43,7 +39,7 @@ async function aggregateShippingFromCartItems(cartItems) {
     seenKeys.add(key);
     const explicitAmountRaw = i.shippingRateAmount ?? i.shipping_rate_amount;
     const explicitAmount = Number(explicitAmountRaw);
-    const fedex = isFedexServiceType(svcRaw);
+    const fedex = isPersistedFedexQuotedServiceType(svcRaw);
     let price;
     if (fedex) {
       price = Number.isFinite(explicitAmount) ? explicitAmount : 0;

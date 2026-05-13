@@ -1,6 +1,7 @@
 const cartRepository = require('../repositories/cartRepository');
 const { calculateCartItemFromInput } = require('../services/pricingService');
 const { computeShippingFromCartItems, computeTaxAndTotal, roundMoney2 } = require('../services/orderTotalsService');
+const { isPersistedFedexQuotedServiceType } = require('../utils/fedexQuoteServiceType');
 
 function isAdminUser(req) {
   const role = (req.user?.role || '').toString().toLowerCase();
@@ -35,10 +36,8 @@ function cartItemLineSubtotal(item) {
 /** Same idea as storefront `cartLineFedexQuotedAmount`: persisted FedEx quote on a cart line. */
 function itemHasPersistedFedexQuote(obj) {
   if (!obj || typeof obj !== 'object') return false;
-  const svc = String(obj.shippingService ?? obj.shipping_service ?? '')
-    .trim()
-    .toUpperCase();
-  if (!svc.startsWith('FEDEX_')) return false;
+  const svc = String(obj.shippingService ?? obj.shipping_service ?? '').trim();
+  if (!isPersistedFedexQuotedServiceType(svc)) return false;
   const raw = obj.shippingRateAmount ?? obj.shipping_rate_amount;
   if (raw === undefined || raw === null || raw === '') return false;
   const n = Number(raw);
@@ -87,9 +86,19 @@ const addToCart = async (req, res) => {
       return res.status(400).json({ message: 'Cart item data is required' });
     }
 
-    // FedEx fields from logged-in PDP (shippingService FEDEX_*, shippingRateAmount) flow through
+    // FedEx fields from logged-in PDP (FedEx REST serviceType + shippingRateAmount) flow through
     // calculateCartItemFromInput → item_data; GET /cart merges id + item_data for the storefront.
     const itemData = await calculateCartItemFromInput(rawItemData);
+    if (
+      process.env.NODE_ENV === 'development' &&
+      userId &&
+      itemHasPersistedFedexQuote(rawItemData) &&
+      !itemHasPersistedFedexQuote(itemData)
+    ) {
+      console.warn('[cart add] FedEx quote present on request but missing after calculateCartItemFromInput', {
+        productId: rawItemData?.productId ?? rawItemData?.product_id,
+      });
+    }
     const cartItem = await cartRepository.insertCartItem(userId, guestSessionId, itemData);
     res.status(201).json({ cartItem });
   } catch (error) {
