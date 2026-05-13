@@ -135,6 +135,10 @@ async function ensureEmployeeColumns() {
       const sql27 = fs.readFileSync(path.join(migrationsDir, 'addModifierPresets.sql'), 'utf8');
       await pool.query(sql27);
     }
+    if (fs.existsSync(path.join(migrationsDir, 'addFedexShipment.sql'))) {
+      const sqlFedex = fs.readFileSync(path.join(migrationsDir, 'addFedexShipment.sql'), 'utf8');
+      await pool.query(sqlFedex);
+    }
   } catch (err) {
     console.warn('Migrations (optional):', err.message);
   }
@@ -159,6 +163,7 @@ const storePickupAddressRoutes = require('./routes/storePickupAddresses');
 const taxRoutes = require('./routes/taxes');
 const artworkRoutes = require('./routes/artworks');
 const reportsRoutes = require('./routes/reports');
+const fedexRoutes = require('./routes/fedex');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -239,6 +244,7 @@ app.use('/api/store-pickup-addresses', storePickupAddressRoutes);
 app.use('/api/taxes', taxRoutes);
 app.use('/api/artworks', artworkRoutes);
 app.use('/api/reports', reportsRoutes);
+app.use('/api/fedex', fedexRoutes);
 
 // 404 handler
 app.use((req, res) => {

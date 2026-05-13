@@ -23,9 +23,17 @@ function isCartLineStorePickup(item) {
   return false;
 }
 
+function isFedexServiceType(svcRaw) {
+  const s = String(svcRaw || '').trim().toUpperCase();
+  return s.startsWith('FEDEX_');
+}
+
 async function aggregateShippingFromCartItems(cartItems) {
   const seenKeys = new Set();
   let mergedSum = 0;
+  const labels = [];
+  let carrierServiceTypeFedex = null;
+  let shippingEstimatedDelivery = null;
   for (const i of cartItems) {
     if (isCartLineStorePickup(i)) continue;
     const svcRaw = String(i.shippingService ?? i.shipping_service ?? '').trim();
@@ -33,21 +41,38 @@ async function aggregateShippingFromCartItems(cartItems) {
     const key = svcRaw.toLowerCase();
     if (seenKeys.has(key)) continue;
     seenKeys.add(key);
-    const price = await shippingRatesRepository.findPriceByServiceName(svcRaw);
+    const explicitAmountRaw = i.shippingRateAmount ?? i.shipping_rate_amount;
+    const explicitAmount = Number(explicitAmountRaw);
+    const fedex = isFedexServiceType(svcRaw);
+    let price;
+    if (fedex) {
+      price = Number.isFinite(explicitAmount) ? explicitAmount : 0;
+    } else if (Number.isFinite(explicitAmount)) {
+      price = explicitAmount;
+    } else {
+      price = await shippingRatesRepository.findPriceByServiceName(svcRaw);
+    }
     mergedSum += roundMoney2(price);
+    const label = String(
+      i.shippingRateServiceName ?? i.shipping_rate_service_name ?? svcRaw
+    ).trim();
+    if (label) labels.push(label);
+    if (fedex && !carrierServiceTypeFedex) {
+      carrierServiceTypeFedex = svcRaw;
+      const etaRaw = i.shippingRateEstimatedDelivery ?? i.shipping_rate_estimated_delivery;
+      if (etaRaw != null && String(etaRaw).trim() !== '') {
+        shippingEstimatedDelivery = String(etaRaw).trim();
+      }
+    }
   }
-  const labels = [
-    ...new Set(
-      cartItems
-        .filter((i) => !isCartLineStorePickup(i))
-        .map((i) => String(i.shippingService ?? i.shipping_service ?? '').trim())
-        .filter(Boolean)
-    ),
-  ];
+  const dedupedLabels = [...new Set(labels)];
   return {
     shippingSum: roundMoney2(mergedSum),
-    shippingMethod: labels.length === 0 ? null : labels.join(', '),
+    shippingMethod: dedupedLabels.length === 0 ? null : dedupedLabels.join(', '),
     shippingCharge: roundMoney2(mergedSum),
+    carrier: carrierServiceTypeFedex ? 'fedex' : null,
+    carrierServiceType: carrierServiceTypeFedex,
+    shippingEstimatedDelivery,
   };
 }
 
@@ -62,7 +87,13 @@ async function computeShippingFromCartItems(cartItems) {
       shippingSum: 0,
       shippingMethod: 'Store Pickup',
       shippingCharge: 0,
+      carrier: null,
+      carrierServiceType: null,
+      shippingEstimatedDelivery: null,
       storePickupAddressId: Number.isNaN(parsedPickup) ? null : parsedPickup,
+      applyFreeShipping() {
+        return { shippingSum: 0, shippingCharge: 0 };
+      },
     };
   }
   const agg = await aggregateShippingFromCartItems(cartItems);
@@ -74,6 +105,9 @@ async function computeShippingFromCartItems(cartItems) {
     shippingSum,
     shippingMethod: agg.shippingMethod,
     shippingCharge,
+    carrier: agg.carrier ?? null,
+    carrierServiceType: agg.carrierServiceType ?? null,
+    shippingEstimatedDelivery: agg.shippingEstimatedDelivery ?? null,
     freeShippingEnabled: !!policy.freeShippingEnabled,
     freeShippingThreshold: roundMoney2(policy.freeShippingThreshold),
     applyFreeShipping(subtotal) {

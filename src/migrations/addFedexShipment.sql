@@ -1,0 +1,8 @@
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS carrier VARCHAR(20);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS carrier_service_type VARCHAR(64);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_estimated_delivery VARCHAR(64);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS fedex_shipment_id VARCHAR(128);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_label_url TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipment_status VARCHAR(64);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipment_last_event JSONB;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipment_updated_at TIMESTAMP;

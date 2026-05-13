@@ -415,9 +415,30 @@ const SQL = {
   INSERT_ORDER_ITEM_ADMIN_NO_JOB: `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price, image_url, width_inches, height_inches, selected_modifiers, selection_mode, graphic_scenario_enabled, modifier_total, base_unit_price, purchase_option_key, purchase_option_label)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16)`,
   SELECT_ORDER_BY_ID: `SELECT o.* FROM orders o WHERE o.id = $1`,
-  INSERT_ORDER_STRIPE_PENDING: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, payment_status, notes, guest_checkout, guest_tracking_token_hash, guest_tracking_token_created_at, shipping_address_id, billing_address_id, shipping_method, shipping_charge, shipping_mode, store_pickup_address_id, subtotal_amount, tax_id, tax_name, tax_percentage, tax_amount)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+  INSERT_ORDER_STRIPE_PENDING: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, payment_status, notes, guest_checkout, guest_tracking_token_hash, guest_tracking_token_created_at, shipping_address_id, billing_address_id, shipping_method, shipping_charge, shipping_mode, store_pickup_address_id, subtotal_amount, tax_id, tax_name, tax_percentage, tax_amount, carrier, carrier_service_type, shipping_estimated_delivery)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
          RETURNING id, order_number`,
+  UPDATE_ORDER_FEDEX_SHIPMENT_CREATED: `UPDATE orders
+       SET fedex_shipment_id = $2,
+           shipping_label_url = $3,
+           order_tracking_id = $4,
+           status = $5,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1
+       RETURNING *`,
+  UPDATE_ORDER_SHIPMENT_TRACKING: `UPDATE orders
+       SET shipment_status = $2,
+           shipment_last_event = $3::jsonb,
+           shipment_updated_at = CURRENT_TIMESTAMP,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1
+       RETURNING *`,
+  UPDATE_ORDER_CARRIER_SERVICE_TYPE: `UPDATE orders
+       SET carrier_service_type = $2,
+           carrier = 'fedex',
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1
+       RETURNING *`,
   UPDATE_ORDER_STRIPE_PAID: `UPDATE orders SET payment_status = $1, status = $2, notes = COALESCE(notes, '') || ' | Paid via Stripe ' || $3 WHERE id = $4`,
   UPDATE_ORDER_PAID_WITHOUT_STRIPE: `UPDATE orders SET payment_status = $1, status = $2, payment_method = $3, notes = COALESCE(notes, '') || $4 WHERE id = $5`,
   UPDATE_CUSTOMER_ARTWORK_ON_ORDER_ITEM: `UPDATE order_items oi
@@ -679,6 +700,42 @@ async function updateOrderTrackingIdById(orderId, trackingId) {
   return result.rows[0] ?? null;
 }
 
+async function updateOrderAfterFedexShipmentCreated(orderId, payload) {
+  const {
+    fedexShipmentId,
+    shippingLabelUrl,
+    trackingNumber,
+    orderStatus = 'shipped',
+  } = payload || {};
+  const result = await pool.query(SQL.UPDATE_ORDER_FEDEX_SHIPMENT_CREATED, [
+    orderId,
+    fedexShipmentId ?? null,
+    shippingLabelUrl ?? null,
+    trackingNumber ?? null,
+    orderStatus,
+  ]);
+  return result.rows[0] ?? null;
+}
+
+async function updateOrderShipmentTracking(orderId, payload) {
+  const { shipmentStatus, shipmentLastEvent } = payload || {};
+  const result = await pool.query(SQL.UPDATE_ORDER_SHIPMENT_TRACKING, [
+    orderId,
+    shipmentStatus ?? null,
+    shipmentLastEvent != null ? JSON.stringify(shipmentLastEvent) : null,
+  ]);
+  return result.rows[0] ?? null;
+}
+
+async function updateOrderCarrierServiceType(orderId, carrierServiceType) {
+  const svc = String(carrierServiceType || '').trim().toUpperCase();
+  const result = await pool.query(SQL.UPDATE_ORDER_CARRIER_SERVICE_TYPE, [
+    orderId,
+    svc || null,
+  ]);
+  return result.rows[0] ?? null;
+}
+
 /**
  * @returns {Promise<number|null>} deleted id or null
  */
@@ -917,6 +974,9 @@ async function createPendingStripeOrderWithItems({
   storePickupAddressId = null,
   subtotalAmount = 0,
   tax = null,
+  carrier = null,
+  carrierServiceType = null,
+  shippingEstimatedDelivery = null,
 }) {
   const client = await pool.connect();
   try {
@@ -943,6 +1003,9 @@ async function createPendingStripeOrderWithItems({
       tax?.name ?? null,
       tax?.percentage ?? 0,
       tax?.amount ?? 0,
+      carrier,
+      carrierServiceType,
+      shippingEstimatedDelivery,
     ]);
     const order = orderResult.rows[0];
     const orderId = order.id;
@@ -1129,6 +1192,9 @@ module.exports = {
   findOrderByIdAdmin,
   updateOrderStatusById,
   updateOrderTrackingIdById,
+  updateOrderAfterFedexShipmentCreated,
+  updateOrderShipmentTracking,
+  updateOrderCarrierServiceType,
   deleteOrderById,
   productExists,
   createOrderFromCartItemAdmin,

@@ -516,6 +516,17 @@ function buildCartSnapshot(pricing, input) {
     ];
   }
   const subtotal = jobs.reduce((sum, j) => sum + Number(j.lineSubtotal || 0), 0);
+  const shippingRateAmountRaw = input.shippingRateAmount ?? input.shipping_rate_amount;
+  const shippingRateAmount = Number(shippingRateAmountRaw);
+  const shippingRateCurrency = String(
+    input.shippingRateCurrency ?? input.shipping_rate_currency ?? 'USD'
+  ).trim().toUpperCase();
+  const shippingRateServiceName = String(
+    input.shippingRateServiceName ?? input.shipping_rate_service_name ?? ''
+  ).trim();
+  const shippingRateEstimatedDelivery = String(
+    input.shippingRateEstimatedDelivery ?? input.shipping_rate_estimated_delivery ?? ''
+  ).trim();
   return {
     productId: pricing.productId,
     productName: pricing.productName,
@@ -530,6 +541,10 @@ function buildCartSnapshot(pricing, input) {
     shippingMode,
     shipping: shippingMode === 'store_pickup' ? 'store-pickup' : 'blind-drop',
     shippingService,
+    shippingRateAmount: Number.isFinite(shippingRateAmount) ? shippingRateAmount : undefined,
+    shippingRateCurrency: shippingRateCurrency || 'USD',
+    shippingRateServiceName: shippingRateServiceName || shippingService,
+    shippingRateEstimatedDelivery: shippingRateEstimatedDelivery || null,
     storePickupAddressId: shippingMode === 'store_pickup' ? storePickupAddressId : null,
     selectionMode: pricing.selectionMode,
     selection_mode: pricing.selectionMode,

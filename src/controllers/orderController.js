@@ -879,6 +879,11 @@ const createOrderWithPaymentIntent = async (req, res) => {
       storePickupAddressId,
       subtotalAmount: totals.subtotal,
       tax: totals.tax,
+      carrier: shippingMode === 'store_pickup' ? null : shippingComputed.carrier ?? null,
+      carrierServiceType:
+        shippingMode === 'store_pickup' ? null : shippingComputed.carrierServiceType ?? null,
+      shippingEstimatedDelivery:
+        shippingMode === 'store_pickup' ? null : shippingComputed.shippingEstimatedDelivery ?? null,
     });
 
     if (!shouldUseStripePaymentIntent()) {
@@ -1121,9 +1126,6 @@ const refundOrderAdmin = async (req, res) => {
       return res.status(400).json({
         message: 'Refund is allowed only when order status is Awaiting refund or Cancellation requested.',
       });
-    }
-    if (isOrderStatusLocked(status)) {
-      return res.status(400).json({ message: 'This order is locked and cannot be changed.' });
     }
 
     let paymentIntentId = String(order.stripe_payment_intent_id || '').trim();

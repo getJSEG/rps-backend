@@ -32,6 +32,48 @@ function cartItemLineSubtotal(item) {
   return unit * qty;
 }
 
+/** Same idea as storefront `cartLineFedexQuotedAmount`: persisted FedEx quote on a cart line. */
+function itemHasPersistedFedexQuote(obj) {
+  if (!obj || typeof obj !== 'object') return false;
+  const svc = String(obj.shippingService ?? obj.shipping_service ?? '')
+    .trim()
+    .toUpperCase();
+  if (!svc.startsWith('FEDEX_')) return false;
+  const raw = obj.shippingRateAmount ?? obj.shipping_rate_amount;
+  if (raw === undefined || raw === null || raw === '') return false;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0;
+}
+
+/** When PUT body omits or clears FedEx fields, keep an existing line quote so cart/checkout stay in sync with PDP. */
+function mergeCartUpdatePreservingFedexQuote(existingData, incoming) {
+  const existing = existingData && typeof existingData === 'object' ? existingData : {};
+  const inc = incoming && typeof incoming === 'object' ? incoming : {};
+  const merged = { ...existing, ...inc };
+  if (!itemHasPersistedFedexQuote(existing) || itemHasPersistedFedexQuote(merged)) {
+    return merged;
+  }
+  const ex = existing;
+  const svc = String(ex.shippingService ?? ex.shipping_service ?? '').trim();
+  const amt = ex.shippingRateAmount ?? ex.shipping_rate_amount;
+  const cur = String(ex.shippingRateCurrency ?? ex.shipping_rate_currency ?? 'USD')
+    .trim()
+    .toUpperCase();
+  const name = String(ex.shippingRateServiceName ?? ex.shipping_rate_service_name ?? '').trim();
+  const ed = ex.shippingRateEstimatedDelivery ?? ex.shipping_rate_estimated_delivery;
+  merged.shippingService = svc;
+  merged.shipping_service = svc;
+  merged.shippingRateAmount = amt;
+  merged.shipping_rate_amount = amt;
+  merged.shippingRateCurrency = cur || 'USD';
+  merged.shipping_rate_currency = merged.shippingRateCurrency;
+  merged.shippingRateServiceName = name || svc;
+  merged.shipping_rate_service_name = merged.shippingRateServiceName;
+  merged.shippingRateEstimatedDelivery = ed != null && String(ed).trim() !== '' ? ed : null;
+  merged.shipping_rate_estimated_delivery = merged.shippingRateEstimatedDelivery;
+  return merged;
+}
+
 /** Add item to cart (logged-in user or guest with X-Guest-Session-Id) */
 const addToCart = async (req, res) => {
   try {
@@ -45,6 +87,8 @@ const addToCart = async (req, res) => {
       return res.status(400).json({ message: 'Cart item data is required' });
     }
 
+    // FedEx fields from logged-in PDP (shippingService FEDEX_*, shippingRateAmount) flow through
+    // calculateCartItemFromInput → item_data; GET /cart merges id + item_data for the storefront.
     const itemData = await calculateCartItemFromInput(rawItemData);
     const cartItem = await cartRepository.insertCartItem(userId, guestSessionId, itemData);
     res.status(201).json({ cartItem });
@@ -123,10 +167,7 @@ const updateCartItem = async (req, res) => {
     }
     if (!existingRow) return res.status(404).json({ message: 'Cart item not found' });
 
-    const merged = {
-      ...(existingRow.item_data || {}),
-      ...(incoming && typeof incoming === 'object' ? incoming : {}),
-    };
+    const merged = mergeCartUpdatePreservingFedexQuote(existingRow.item_data, incoming);
     const itemData = await calculateCartItemFromInput(merged);
 
     let result;
@@ -177,10 +218,8 @@ const getCartSummary = async (req, res) => {
     const subtotal = roundMoney2(cartItems.reduce((sum, item) => sum + cartItemLineSubtotal(item), 0));
     const shippingComputed = await computeShippingFromCartItems(cartItems);
     let shipping = shippingComputed.shippingSum;
-    if (shippingComputed.applyFreeShipping) {
-      const freeShipping = shippingComputed.applyFreeShipping(subtotal);
-      shipping = freeShipping.shippingSum;
-    }
+    const freeShipping = shippingComputed.applyFreeShipping(subtotal);
+    shipping = freeShipping.shippingSum;
     const totals = await computeTaxAndTotal(subtotal, shipping);
     res.json({
       subtotal: totals.subtotal,
