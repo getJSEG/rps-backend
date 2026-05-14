@@ -7,6 +7,9 @@ const cartRepository = require('../repositories/cartRepository');
 const pool = require('../config/database');
 const storePickupAddressRepository = require('../repositories/storePickupAddressRepository');
 const { computeShippingFromCartItems, computeTaxAndTotal } = require('../services/orderTotalsService');
+const fedexService = require('../services/fedexService');
+const { isPersistedFedexQuotedServiceType } = require('../utils/fedexQuoteServiceType');
+const { buildFedexPackagesFromShippableCartItems } = require('../utils/fedexCartPackage');
 const crypto = require('crypto');
 const Stripe = require('stripe');
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
@@ -328,6 +331,130 @@ function parseGuestCheckout(body) {
     billingAddress: line(ba),
   };
   return { snapshot };
+}
+
+function checkoutCountryCode(country) {
+  const raw = String(country || 'US').trim();
+  if (!raw) return 'US';
+  if (raw.toLowerCase() === 'united states') return 'US';
+  if (raw.length === 2) return raw.toUpperCase();
+  return raw.toUpperCase();
+}
+
+function checkoutValidationError(message) {
+  const err = new Error(message);
+  err.statusCode = 400;
+  return err;
+}
+
+function fedexDestinationFromAddress(address) {
+  if (!address || typeof address !== 'object') return null;
+  const postalCode = String(address.postcode ?? address.postalCode ?? address.zip ?? '').trim();
+  const countryRaw = String(address.country || 'US').trim();
+  if (!postalCode || !countryRaw) return null;
+  const street1 = String(address.street_address ?? address.streetAddress ?? '').trim();
+  const street2 = String(address.address_line2 ?? address.addressLine2 ?? '').trim();
+  const streetLines = [street1, street2].filter(Boolean);
+  return {
+    postalCode,
+    countryCode: checkoutCountryCode(countryRaw),
+    stateOrProvinceCode: String(address.state || '').trim().toUpperCase() || undefined,
+    city: String(address.city || '').trim() || undefined,
+    ...(streetLines.length > 0 ? { streetLines } : {}),
+  };
+}
+
+function isCheckoutLineStorePickup(item) {
+  const mode = String(item?.shippingMode ?? item?.shipping_mode ?? '').trim().toLowerCase();
+  if (mode === 'store_pickup' || mode === 'store-pickup' || mode === 'store pickup') return true;
+  const ship = String(item?.shipping ?? '').trim().toLowerCase();
+  if (ship === 'store-pickup' || ship === 'store_pickup') return true;
+  const pickupId = item?.storePickupAddressId ?? item?.store_pickup_address_id;
+  return pickupId != null && String(pickupId) !== '';
+}
+
+function checkoutLineBillableQuantity(item) {
+  const jobs = Array.isArray(item?.jobs) ? item.jobs : [];
+  if (jobs.length > 0) {
+    return jobs.reduce((sum, j) => sum + Math.max(1, Number(j.quantity) || 1), 0);
+  }
+  return Math.max(1, Number(item?.quantity) || 1);
+}
+
+function buildFedexPackagesFromCheckoutCart(cartItems) {
+  return buildFedexPackagesFromShippableCartItems(cartItems);
+}
+
+function checkoutSelectedFedexServiceType(cartItems) {
+  const services = new Set();
+  for (const item of cartItems) {
+    if (isCheckoutLineStorePickup(item)) continue;
+    const service = String(item.shippingService ?? item.shipping_service ?? '').trim();
+    if (!isPersistedFedexQuotedServiceType(service)) {
+      throw checkoutValidationError('A valid FedEx service selection is required before checkout.');
+    }
+    services.add(service.toUpperCase());
+  }
+  if (services.size === 0) return null;
+  if (services.size > 1) {
+    throw checkoutValidationError('Checkout must use one FedEx service for the shipment. Please refresh rates and select a service.');
+  }
+  return Array.from(services)[0];
+}
+
+function validateLoggedInCartFedexQuotes(cartItems) {
+  for (const item of cartItems) {
+    if (isCheckoutLineStorePickup(item)) continue;
+    const service = String(item.shippingService ?? item.shipping_service ?? '').trim();
+    const amount = Number(item.shippingRateAmount ?? item.shipping_rate_amount);
+    if (!isPersistedFedexQuotedServiceType(service) || !Number.isFinite(amount) || amount < 0) {
+      throw checkoutValidationError(
+        'FedEx shipping must be calculated on the product detail page before logged-in checkout.'
+      );
+    }
+  }
+}
+
+async function refreshCartItemsWithAuthoritativeFedexQuote(cartItems, destination) {
+  const selectedServiceType = checkoutSelectedFedexServiceType(cartItems);
+  if (!selectedServiceType) return cartItems;
+  if (!destination?.postalCode) {
+    throw checkoutValidationError('A complete shipping address is required before FedEx checkout.');
+  }
+  const rates = await fedexService.getRateQuotes(destination, buildFedexPackagesFromCheckoutCart(cartItems));
+  const selectedRate = rates.find(
+    (rate) => String(rate.serviceType || '').trim().toUpperCase() === selectedServiceType
+  );
+  if (!selectedRate) {
+    throw checkoutValidationError('Selected FedEx service is no longer available for this shipment.');
+  }
+  const amount = Number(selectedRate.totalCharge);
+  if (!Number.isFinite(amount) || amount < 0) {
+    throw checkoutValidationError('FedEx returned an invalid rate for the selected service.');
+  }
+  const serviceType = String(selectedRate.serviceType || selectedServiceType).trim();
+  const serviceName = String(selectedRate.serviceName || serviceType).trim();
+  const currency = String(selectedRate.currency || 'USD').trim().toUpperCase() || 'USD';
+  const estimatedDelivery =
+    selectedRate.estimatedDelivery != null && String(selectedRate.estimatedDelivery).trim() !== ''
+      ? selectedRate.estimatedDelivery
+      : null;
+  return cartItems.map((item) => {
+    if (isCheckoutLineStorePickup(item)) return item;
+    return {
+      ...item,
+      shippingService: serviceType,
+      shipping_service: serviceType,
+      shippingRateServiceName: serviceName,
+      shipping_rate_service_name: serviceName,
+      shippingRateAmount: amount,
+      shipping_rate_amount: amount,
+      shippingRateCurrency: currency,
+      shipping_rate_currency: currency,
+      shippingRateEstimatedDelivery: estimatedDelivery,
+      shipping_rate_estimated_delivery: estimatedDelivery,
+    };
+  });
 }
 
 const createOrder = async (req, res) => {
@@ -773,15 +900,65 @@ const createOrderWithPaymentIntent = async (req, res) => {
       guestTrackingTokenHash = hashGuestTrackingToken(guestTrackingToken);
     }
 
-    const cartItems = await loadServerCartForCheckout(req, userId);
+    let cartItems = await loadServerCartForCheckout(req, userId);
     if (!Array.isArray(cartItems) || cartItems.length === 0) {
       return res.status(400).json({ message: 'No cart items found for checkout.' });
     }
 
+    let shippingComputed = await computeShippingFromCartItems(cartItems);
+    const shippingMode = shippingComputed.shippingMode;
+    let shippingAddressId = null;
+    let billingAddressId = null;
+    /** Guest FedEx refresh only; logged-in quotes are validated from cart line fields. */
+    let guestShippingSnapshotForFedex = null;
+
+    if (userId && shippingMode !== 'store_pickup') {
+      const rawShip = req.body.shippingAddressId ?? req.body.shipping_address_id;
+      const rawBill = req.body.billingAddressId ?? req.body.billing_address_id;
+      const shipParsed = rawShip != null && rawShip !== '' ? parseInt(String(rawShip), 10) : NaN;
+      const billParsed = rawBill != null && rawBill !== '' ? parseInt(String(rawBill), 10) : NaN;
+      let ship = Number.isNaN(shipParsed) ? null : shipParsed;
+      let bill = Number.isNaN(billParsed) ? null : billParsed;
+      if (ship != null && !(await orderRepository.verifyAddressBelongsToUser(userId, ship))) {
+        ship = null;
+      }
+      if (bill != null && !(await orderRepository.verifyAddressBelongsToUser(userId, bill))) {
+        bill = null;
+      }
+      if (ship != null && bill == null) bill = ship;
+      if (bill != null && ship == null) ship = bill;
+      if (ship == null) {
+        return res.status(400).json({ message: 'A valid shipping address is required for FedEx checkout.' });
+      }
+      shippingAddressId = ship;
+      billingAddressId = bill;
+      const addressResult = await pool.query('SELECT * FROM addresses WHERE id = $1 AND user_id = $2', [
+        shippingAddressId,
+        userId,
+      ]);
+      const shippingRow = addressResult.rows[0] ?? null;
+      if (!shippingRow) {
+        return res.status(400).json({ message: 'Selected shipping address was not found.' });
+      }
+    } else if (!userId && shippingMode !== 'store_pickup') {
+      guestShippingSnapshotForFedex = guestCheckout?.shippingAddress ?? null;
+    }
+
+    if (userId && shippingMode !== 'store_pickup') {
+      validateLoggedInCartFedexQuotes(cartItems);
+    }
+
+    if (!userId && shippingMode !== 'store_pickup') {
+      const destination = fedexDestinationFromAddress(guestShippingSnapshotForFedex);
+      if (!destination) {
+        return res.status(400).json({ message: 'A complete shipping address is required for FedEx checkout.' });
+      }
+      cartItems = await refreshCartItemsWithAuthoritativeFedexQuote(cartItems, destination);
+      shippingComputed = await computeShippingFromCartItems(cartItems);
+    }
+
     const orderItems = cartItems.flatMap((item) => expandCartItemToOrderLines(item));
     const subtotalSum = roundMoney2(orderItems.reduce((s, o) => s + o.total_price, 0));
-    const shippingComputed = await computeShippingFromCartItems(cartItems);
-    const shippingMode = shippingComputed.shippingMode;
     let shippingSum = shippingComputed.shippingSum;
     let shippingMethod = shippingComputed.shippingMethod;
     let shippingCharge = shippingComputed.shippingCharge;
@@ -813,27 +990,6 @@ const createOrderWithPaymentIntent = async (req, res) => {
     }
     const amountCents = Math.round(totalAmount * 100);
     if (amountCents < 50) return res.status(400).json({ message: 'Order total must be at least $0.50' });
-
-    let shippingAddressId = null;
-    let billingAddressId = null;
-    if (userId && shippingMode !== 'store_pickup') {
-      const rawShip = req.body.shippingAddressId ?? req.body.shipping_address_id;
-      const rawBill = req.body.billingAddressId ?? req.body.billing_address_id;
-      const shipParsed = rawShip != null && rawShip !== '' ? parseInt(String(rawShip), 10) : NaN;
-      const billParsed = rawBill != null && rawBill !== '' ? parseInt(String(rawBill), 10) : NaN;
-      let ship = Number.isNaN(shipParsed) ? null : shipParsed;
-      let bill = Number.isNaN(billParsed) ? null : billParsed;
-      if (ship != null && !(await orderRepository.verifyAddressBelongsToUser(userId, ship))) {
-        ship = null;
-      }
-      if (bill != null && !(await orderRepository.verifyAddressBelongsToUser(userId, bill))) {
-        bill = null;
-      }
-      if (ship != null && bill == null) bill = ship;
-      if (bill != null && ship == null) ship = bill;
-      shippingAddressId = ship;
-      billingAddressId = bill;
-    }
 
     if (shippingMode === 'store_pickup') {
       shippingAddressId = null;
@@ -942,6 +1098,10 @@ const createOrderWithPaymentIntent = async (req, res) => {
     });
   } catch (error) {
     console.error('Create order with payment intent error:', error);
+    const statusCode = Number(error?.statusCode) || 500;
+    if (statusCode >= 400 && statusCode < 500) {
+      return res.status(statusCode).json({ message: error.message || 'Checkout could not be completed' });
+    }
     res.status(500).json({
       message: 'Failed to create payment intent',
     });

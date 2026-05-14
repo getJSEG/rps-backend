@@ -91,7 +91,12 @@ async function getProductPricingConfig(productId) {
       p.max_width,
       p.min_height,
       p.max_height,
-      p.graphic_scenario_enabled
+      p.graphic_scenario_enabled,
+      p.hardware_template_id,
+      p.shipping_length,
+      p.shipping_width,
+      p.shipping_height,
+      p.shipping_weight
     FROM products p
     WHERE p.id = $1`,
     [productId]
@@ -510,7 +515,42 @@ function applyPersistedFedExQuoteFromInput(snapshot, input) {
   return snapshot;
 }
 
-function buildCartSnapshot(pricing, input) {
+/** Copy hardware FedEx box from product row (and optional client overrides) onto cart JSON. */
+function attachHardwareShippingSnapshot(result, productRow, input) {
+  if (!result || !productRow) return;
+  const htRaw = productRow.hardware_template_id ?? input.hardware_template_id ?? input.hardwareTemplateId;
+  if (htRaw == null || htRaw === '') return;
+  const htId = Number(htRaw);
+  if (!Number.isFinite(htId)) return;
+
+  const sl = asNumber(input.shipping_length ?? input.shippingLength ?? productRow.shipping_length);
+  const sw = asNumber(input.shipping_width ?? input.shippingWidth ?? productRow.shipping_width);
+  const sh = asNumber(input.shipping_height ?? input.shippingHeight ?? productRow.shipping_height);
+  const swt = asNumber(input.shipping_weight ?? input.shippingWeight ?? productRow.shipping_weight);
+  if (!(sl > 0) || !(sw > 0) || !(sh > 0) || !(swt > 0)) return;
+
+  result.hardware_template_id = htId;
+  result.hardwareTemplateId = htId;
+  result.shipping_length = sl;
+  result.shipping_width = sw;
+  result.shipping_height = sh;
+  result.shipping_weight = swt;
+  result.shippingLength = sl;
+  result.shippingWidth = sw;
+  result.shippingHeight = sh;
+  result.shippingWeight = swt;
+
+  result.pricing_snapshot = {
+    ...result.pricing_snapshot,
+    hardware_template_id: htId,
+    shipping_length: sl,
+    shipping_width: sw,
+    shipping_height: sh,
+    shipping_weight: swt,
+  };
+}
+
+function buildCartSnapshot(pricing, input, productRow) {
   const shippingMode = normalizeShippingMode(input.shippingMode ?? input.shipping_mode ?? input.shipping);
   const shippingService =
     shippingMode === 'store_pickup'
@@ -626,6 +666,7 @@ function buildCartSnapshot(pricing, input) {
     timestamp: new Date().toISOString(),
   };
   applyPersistedFedExQuoteFromInput(result, input);
+  attachHardwareShippingSnapshot(result, productRow, input);
   return result;
 }
 
@@ -638,7 +679,7 @@ async function calculateCartItemFromInput(input) {
   const config = await getProductPricingConfig(productId);
   if (!config) throw new Error('Product not found.');
   const pricing = validateAndCalculatePricing(config, input);
-  return buildCartSnapshot(pricing, input);
+  return buildCartSnapshot(pricing, input, config);
 }
 
 module.exports = {

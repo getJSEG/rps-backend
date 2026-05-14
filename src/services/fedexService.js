@@ -7,6 +7,16 @@ const FEDEX_API_KEY = () => String(process.env.FEDEX_API_KEY || '').trim();
 const FEDEX_API_SECRET = () => String(process.env.FEDEX_API_SECRET || '').trim();
 const FEDEX_ACCOUNT_NUMBER = () => String(process.env.FEDEX_ACCOUNT_NUMBER || '').trim();
 
+const DEFAULT_RATE_SERVICE_PROBES = [
+  'FEDEX_GROUND',
+  'GROUND_HOME_DELIVERY',
+  'FEDEX_2_DAY',
+  'FEDEX_EXPRESS_SAVER',
+  'STANDARD_OVERNIGHT',
+  'PRIORITY_OVERNIGHT',
+  'FIRST_OVERNIGHT',
+];
+
 let cachedToken = null;
 let tokenExpiresAt = 0;
 
@@ -104,8 +114,13 @@ async function fedexRequest(apiPath, payload, options = {}) {
     return await doOnce();
   } catch (e) {
     const code = Number(e?.statusCode);
-    if (retryOnceOn5xx && Number.isFinite(code) && code >= 500 && code < 600) {
-      await new Promise((r) => setTimeout(r, 400));
+    const transient =
+      retryOnceOn5xx &&
+      Number.isFinite(code) &&
+      (code === 429 || (code >= 500 && code < 600));
+    if (transient) {
+      const waitMs = code === 429 ? 700 : 450;
+      await new Promise((r) => setTimeout(r, waitMs));
       return await doOnce();
     }
     throw e;
@@ -176,45 +191,56 @@ function buildRecipientAddressForRating(destinationInput) {
   };
 }
 
-async function getRateQuotes(destinationInput, packagesInput) {
-  const recipientAddr = buildRecipientAddressForRating(destinationInput);
-  const postalCode = recipientAddr.postalCode;
-  if (!postalCode) {
-    throw new Error('destination.postalCode is required');
-  }
-  const packages = normalizePackages(packagesInput);
-  const shipperAddr = buildShipperAddressForRating();
-  if (!shipperAddr.streetLines.length) {
-    shipperAddr.streetLines = ['2000 FedEx Way'];
-  }
+function rateServiceProbes() {
+  const raw = String(process.env.FEDEX_RATE_SERVICE_PROBES || '').trim();
+  const list = raw
+    ? raw.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean)
+    : DEFAULT_RATE_SERVICE_PROBES;
+  return [...new Set(list)];
+}
 
-  /** Without carrierCodes, FedEx may evaluate freight/SmartPost paths that reject YOUR_PACKAGING and return SERVICE.PACKAGING.COMBINATION.INVALID. */
-  const totalPackageCount = packages.reduce(
-    (sum, line) => sum + (Number(line.groupPackageCount) > 0 ? Number(line.groupPackageCount) : 1),
-    0
-  );
-  const shipDatestamp = new Date().toISOString().slice(0, 10);
+/** Delay between FedEx rate probe calls to reduce sandbox throttling (ms). Default 90; max 500; set 0 to disable pause. */
+function fedexRateProbeDelayMs() {
+  const raw = process.env.FEDEX_RATE_PROBE_DELAY_MS;
+  if (raw == null || String(raw).trim() === '') return 90;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 90;
+  return Math.min(500, Math.max(0, Math.round(n)));
+}
 
-  const payload = {
-    accountNumber: { value: FEDEX_ACCOUNT_NUMBER() },
-    carrierCodes: ['FDXE', 'FDXG'],
-    requestedShipment: {
-      shipDatestamp,
-      shipper: {
-        address: { ...shipperAddr, residential: false },
-      },
-      recipient: {
-        address: { ...recipientAddr, residential: false },
-      },
-      packagingType: 'YOUR_PACKAGING',
-      pickupType: 'USE_SCHEDULED_PICKUP',
-      rateRequestType: ['ACCOUNT', 'LIST'],
-      totalPackageCount,
-      requestedPackageLineItems: packages,
+/** Log failed per-service rate probes when set (e.g. FEDEX_RATES_DEBUG=1 or true). */
+function fedexRatesDebugEnabled() {
+  const raw = String(process.env.FEDEX_RATES_DEBUG || process.env.DEBUG_FEDEX_RATES || '')
+    .trim()
+    .toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
+function buildRatePayload({ shipperAddr, recipientAddr, packages, totalPackageCount, shipDatestamp, serviceType }) {
+  const requestedShipment = {
+    shipDatestamp,
+    shipper: {
+      address: { ...shipperAddr, residential: false },
     },
+    recipient: {
+      address: { ...recipientAddr, residential: false },
+    },
+    ...(serviceType ? { serviceType } : {}),
+    packagingType: 'YOUR_PACKAGING',
+    pickupType: 'USE_SCHEDULED_PICKUP',
+    rateRequestType: ['ACCOUNT', 'LIST'],
+    totalPackageCount,
+    requestedPackageLineItems: packages,
   };
 
-  const data = await fedexRequest('/rate/v1/rates/quotes', payload, { retryOnceOn5xx: true });
+  return {
+    accountNumber: { value: FEDEX_ACCOUNT_NUMBER() },
+    carrierCodes: ['FDXE', 'FDXG'],
+    requestedShipment,
+  };
+}
+
+function ratesFromFedexResponse(data) {
   const rateReplyDetails = Array.isArray(data?.output?.rateReplyDetails)
     ? data.output.rateReplyDetails
     : [];
@@ -253,8 +279,84 @@ async function getRateQuotes(destinationInput, packagesInput) {
         estimatedDelivery,
       };
     })
-    .filter((r) => r.serviceType && Number.isFinite(r.totalCharge))
-    .sort((a, b) => a.totalCharge - b.totalCharge);
+    .filter((r) => r.serviceType && Number.isFinite(r.totalCharge));
+}
+
+function mergeFedexRates(rateGroups) {
+  const byService = new Map();
+  for (const rates of rateGroups) {
+    if (!Array.isArray(rates)) continue;
+    for (const rate of rates) {
+      const key = String(rate?.serviceType || '').trim().toUpperCase();
+      if (!key) continue;
+      const existing = byService.get(key);
+      if (!existing || Number(rate.totalCharge) < Number(existing.totalCharge)) {
+        byService.set(key, rate);
+      }
+    }
+  }
+  return Array.from(byService.values()).sort((a, b) => Number(a.totalCharge) - Number(b.totalCharge));
+}
+
+async function getRateQuotes(destinationInput, packagesInput) {
+  const recipientAddr = buildRecipientAddressForRating(destinationInput);
+  const postalCode = recipientAddr.postalCode;
+  if (!postalCode) {
+    throw new Error('destination.postalCode is required');
+  }
+  const packages = normalizePackages(packagesInput);
+  const shipperAddr = buildShipperAddressForRating();
+  if (!shipperAddr.streetLines.length) {
+    shipperAddr.streetLines = ['2000 FedEx Way'];
+  }
+
+  /** Without carrierCodes, FedEx may evaluate freight/SmartPost paths that reject YOUR_PACKAGING and return SERVICE.PACKAGING.COMBINATION.INVALID. */
+  const totalPackageCount = packages.reduce(
+    (sum, line) => sum + (Number(line.groupPackageCount) > 0 ? Number(line.groupPackageCount) : 1),
+    0
+  );
+  const shipDatestamp = new Date().toISOString().slice(0, 10);
+
+  const basePayload = buildRatePayload({
+    shipperAddr,
+    recipientAddr,
+    packages,
+    totalPackageCount,
+    shipDatestamp,
+  });
+  const baseData = await fedexRequest('/rate/v1/rates/quotes', basePayload, { retryOnceOn5xx: true });
+  const baseRates = ratesFromFedexResponse(baseData);
+
+  /** Sequential probes + spacing: parallel bursts often lose most services on sandbox (429/throttle). */
+  const probes = rateServiceProbes();
+  const probeDelayMs = fedexRateProbeDelayMs();
+  const debugRates = fedexRatesDebugEnabled();
+  const probeRateArrays = [];
+  for (let i = 0; i < probes.length; i += 1) {
+    const serviceType = probes[i];
+    if (probeDelayMs > 0 && i > 0) {
+      await new Promise((r) => setTimeout(r, probeDelayMs));
+    }
+    try {
+      const payload = buildRatePayload({
+        shipperAddr,
+        recipientAddr,
+        packages,
+        totalPackageCount,
+        shipDatestamp,
+        serviceType,
+      });
+      const data = await fedexRequest('/rate/v1/rates/quotes', payload, { retryOnceOn5xx: true });
+      probeRateArrays.push(ratesFromFedexResponse(data));
+    } catch (e) {
+      if (debugRates) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn(`[FedEx rates] probe ${serviceType} failed:`, msg);
+      }
+    }
+  }
+
+  return mergeFedexRates([baseRates, ...probeRateArrays]);
 }
 
 function normalizeCountryCode(c) {
