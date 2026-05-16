@@ -10,6 +10,10 @@ const { computeShippingFromCartItems, computeTaxAndTotal } = require('../service
 const fedexService = require('../services/fedexService');
 const { isPersistedFedexQuotedServiceType } = require('../utils/fedexQuoteServiceType');
 const { buildFedexPackagesFromShippableCartItems } = require('../utils/fedexCartPackage');
+const {
+  fedexDeliveryEstimateWithProduction,
+  maxProductionTimeBusinessDays,
+} = require('../utils/deliveryEstimate');
 const crypto = require('crypto');
 const Stripe = require('stripe');
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
@@ -435,9 +439,10 @@ async function refreshCartItemsWithAuthoritativeFedexQuote(cartItems, destinatio
   if (!destination?.postalCode) {
     throw checkoutValidationError('A complete shipping address is required before FedEx checkout.');
   }
-  const rates = await fedexService.getRateQuotes(destination, buildFedexPackagesFromCheckoutCart(cartItems));
-  const selectedRate = rates.find(
-    (rate) => String(rate.serviceType || '').trim().toUpperCase() === selectedServiceType
+  const selectedRate = await fedexService.getRateQuoteForService(
+    destination,
+    buildFedexPackagesFromCheckoutCart(cartItems),
+    selectedServiceType
   );
   if (!selectedRate) {
     throw checkoutValidationError('Selected FedEx service is no longer available for this shipment.');
@@ -450,9 +455,10 @@ async function refreshCartItemsWithAuthoritativeFedexQuote(cartItems, destinatio
   const serviceName = String(selectedRate.serviceName || serviceType).trim();
   const currency = String(selectedRate.currency || 'USD').trim().toUpperCase() || 'USD';
   const estimatedDelivery =
-    selectedRate.estimatedDelivery != null && String(selectedRate.estimatedDelivery).trim() !== ''
+    fedexDeliveryEstimateWithProduction(selectedRate, maxProductionTimeBusinessDays(cartItems)) ??
+    (selectedRate.estimatedDelivery != null && String(selectedRate.estimatedDelivery).trim() !== ''
       ? selectedRate.estimatedDelivery
-      : null;
+      : null);
   return cartItems.map((item) => {
     if (isCheckoutLineStorePickup(item)) return item;
     return {
