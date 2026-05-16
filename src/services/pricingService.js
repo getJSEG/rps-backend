@@ -93,6 +93,8 @@ async function getProductPricingConfig(productId) {
       p.max_height,
       p.graphic_scenario_enabled,
       p.hardware_template_id,
+      p.weight,
+      p.length,
       p.shipping_length,
       p.shipping_width,
       p.shipping_height,
@@ -515,39 +517,59 @@ function applyPersistedFedExQuoteFromInput(snapshot, input) {
   return snapshot;
 }
 
-/** Copy hardware FedEx box from product row (and optional client overrides) onto cart JSON. */
-function attachHardwareShippingSnapshot(result, productRow, input) {
+/** Copy FedEx physical package values onto cart JSON for checkout/server-side rating. */
+function attachShippingSnapshot(result, productRow, input) {
   if (!result || !productRow) return;
   const htRaw = productRow.hardware_template_id ?? input.hardware_template_id ?? input.hardwareTemplateId;
-  if (htRaw == null || htRaw === '') return;
-  const htId = Number(htRaw);
-  if (!Number.isFinite(htId)) return;
+  const htId = htRaw == null || htRaw === '' ? null : Number(htRaw);
+  const hasHardware = Number.isFinite(htId);
 
-  const sl = asNumber(input.shipping_length ?? input.shippingLength ?? productRow.shipping_length);
-  const sw = asNumber(input.shipping_width ?? input.shippingWidth ?? productRow.shipping_width);
-  const sh = asNumber(input.shipping_height ?? input.shippingHeight ?? productRow.shipping_height);
-  const swt = asNumber(input.shipping_weight ?? input.shippingWeight ?? productRow.shipping_weight);
-  if (!(sl > 0) || !(sw > 0) || !(sh > 0) || !(swt > 0)) return;
+  if (hasHardware) {
+    const sl = asNumber(input.shipping_length ?? input.shippingLength ?? productRow.shipping_length);
+    const sw = asNumber(input.shipping_width ?? input.shippingWidth ?? productRow.shipping_width);
+    const sh = asNumber(input.shipping_height ?? input.shippingHeight ?? productRow.shipping_height);
+    const swt = asNumber(input.shipping_weight ?? input.shippingWeight ?? productRow.shipping_weight);
+    if (!(sl > 0) || !(sw > 0) || !(sh > 0) || !(swt > 0)) return;
 
-  result.hardware_template_id = htId;
-  result.hardwareTemplateId = htId;
-  result.shipping_length = sl;
-  result.shipping_width = sw;
-  result.shipping_height = sh;
-  result.shipping_weight = swt;
-  result.shippingLength = sl;
-  result.shippingWidth = sw;
-  result.shippingHeight = sh;
-  result.shippingWeight = swt;
+    result.hardware_template_id = htId;
+    result.hardwareTemplateId = htId;
+    result.shipping_length = sl;
+    result.shipping_width = sw;
+    result.shipping_height = sh;
+    result.shipping_weight = swt;
+    result.shippingLength = sl;
+    result.shippingWidth = sw;
+    result.shippingHeight = sh;
+    result.shippingWeight = swt;
 
-  result.pricing_snapshot = {
-    ...result.pricing_snapshot,
-    hardware_template_id: htId,
-    shipping_length: sl,
-    shipping_width: sw,
-    shipping_height: sh,
-    shipping_weight: swt,
-  };
+    result.pricing_snapshot = {
+      ...result.pricing_snapshot,
+      hardware_template_id: htId,
+      shipping_length: sl,
+      shipping_width: sw,
+      shipping_height: sh,
+      shipping_weight: swt,
+    };
+    return;
+  }
+
+  const standardLength = asNumber(input.shipping_length ?? input.shippingLength ?? productRow.length);
+  const standardWeight = asNumber(input.shipping_weight ?? input.shippingWeight ?? productRow.weight);
+  if (standardLength > 0) {
+    result.shipping_length = standardLength;
+    result.shippingLength = standardLength;
+  }
+  if (standardWeight > 0) {
+    result.shipping_weight = standardWeight;
+    result.shippingWeight = standardWeight;
+  }
+  if (standardLength > 0 || standardWeight > 0) {
+    result.pricing_snapshot = {
+      ...result.pricing_snapshot,
+      ...(standardLength > 0 ? { shipping_length: standardLength } : {}),
+      ...(standardWeight > 0 ? { shipping_weight: standardWeight } : {}),
+    };
+  }
 }
 
 function buildCartSnapshot(pricing, input, productRow) {
@@ -666,7 +688,7 @@ function buildCartSnapshot(pricing, input, productRow) {
     timestamp: new Date().toISOString(),
   };
   applyPersistedFedExQuoteFromInput(result, input);
-  attachHardwareShippingSnapshot(result, productRow, input);
+  attachShippingSnapshot(result, productRow, input);
   return result;
 }
 

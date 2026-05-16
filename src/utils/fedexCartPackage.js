@@ -1,7 +1,8 @@
 /**
  * Builds one consolidated FedEx rating package from cart lines.
  * Hardware products (hardware_template_id + shipping_* on line or pricing_snapshot)
- * use DB dimensions and shipping_weight × billable qty; others keep legacy rules.
+ * use DB dimensions and shipping_weight × billable qty.
+ * Standard products use product length/weight plus customer-entered width/height.
  */
 
 function billableQtyFromItem(item) {
@@ -19,24 +20,6 @@ function isStorePickupLine(item) {
   if (ship === 'store-pickup' || ship === 'store_pickup') return true;
   const pid = item?.storePickupAddressId ?? item?.store_pickup_address_id;
   return pid != null && String(pid) !== '';
-}
-
-function isGraphicScenarioLine(item) {
-  const mode = String(
-    item?.selection_mode ??
-      item?.selectionMode ??
-      item?.pricing_snapshot?.selection_mode ??
-      item?.pricing_snapshot?.selectionMode ??
-      ''
-  ).trim();
-  return (
-    mode === 'graphic_only' ||
-    mode === 'graphic_frame' ||
-    item?.graphic_scenario_enabled === true ||
-    item?.graphicScenarioEnabled === true ||
-    item?.pricing_snapshot?.graphic_scenario_enabled === true ||
-    item?.pricing_snapshot?.graphicScenarioEnabled === true
-  );
 }
 
 function parsePositiveNumber(v) {
@@ -82,18 +65,15 @@ function buildFedexPackagesFromShippableCartItems(cartItems) {
       maxWid = Math.max(maxWid, Math.ceil(hw.width));
       maxHt = Math.max(maxHt, Math.ceil(hw.height));
       sumWeight += hw.weightPerUnit * qty;
-    } else if (isGraphicScenarioLine(item)) {
-      maxLen = Math.max(maxLen, 12);
-      maxWid = Math.max(maxWid, 10);
-      maxHt = Math.max(maxHt, 6);
-      sumWeight += qty;
     } else {
       const w = Number(item.width ?? item.width_inches) || 0;
       const h = Number(item.height ?? item.height_inches) || 0;
-      maxLen = Math.max(maxLen, w > 0 ? Math.max(1, Math.ceil(w)) : 0);
-      maxWid = Math.max(maxWid, h > 0 ? Math.max(1, Math.ceil(h)) : 0);
-      maxHt = Math.max(maxHt, 6);
-      sumWeight += qty;
+      const storedLength = parsePositiveNumber(item.shipping_length ?? item.shippingLength);
+      const storedWeight = parsePositiveNumber(item.shipping_weight ?? item.shippingWeight);
+      maxLen = Math.max(maxLen, storedLength != null ? Math.ceil(storedLength) : 12);
+      maxWid = Math.max(maxWid, w > 0 ? Math.max(1, Math.ceil(w)) : 10);
+      maxHt = Math.max(maxHt, h > 0 ? Math.max(1, Math.ceil(h)) : 6);
+      sumWeight += (storedWeight != null ? storedWeight : 1) * qty;
     }
   }
 
