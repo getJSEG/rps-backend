@@ -1,5 +1,6 @@
 const fs = require('fs').promises;
 const path = require('path');
+const storeAddressRepository = require('../repositories/storeAddressRepository');
 
 const FEDEX_API_URL = () =>
   (process.env.FEDEX_API_URL || 'https://apis-sandbox.fedex.com').replace(/\/+$/, '');
@@ -19,6 +20,52 @@ const DEFAULT_RATE_SERVICE_PROBES = [
 
 let cachedToken = null;
 let tokenExpiresAt = 0;
+const rateQuoteCache = new Map();
+
+function fedexRateCacheTtlMs() {
+  const n = Number(process.env.FEDEX_RATE_CACHE_TTL_MS);
+  if (!Number.isFinite(n)) return 10 * 60 * 1000;
+  return Math.max(0, Math.round(n));
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function rateQuoteCacheKey({ shipperAddr, recipientAddr, packages, serviceType = '' }) {
+  return stableJson({
+    shipperAddr,
+    recipientAddr,
+    packages,
+    serviceType: String(serviceType || '').trim().toUpperCase(),
+  });
+}
+
+function getCachedRates(key) {
+  const hit = rateQuoteCache.get(key);
+  if (!hit) return null;
+  if (hit.expiresAt <= Date.now()) {
+    rateQuoteCache.delete(key);
+    return null;
+  }
+  return hit.rates;
+}
+
+function setCachedRates(key, rates) {
+  const ttl = fedexRateCacheTtlMs();
+  if (ttl <= 0) return;
+  rateQuoteCache.set(key, {
+    expiresAt: Date.now() + ttl,
+    rates: Array.isArray(rates) ? rates : [],
+  });
+}
 
 function ensureFedexEnv() {
   if (!FEDEX_API_KEY() || !FEDEX_API_SECRET() || !FEDEX_ACCOUNT_NUMBER()) {
@@ -152,7 +199,15 @@ function normalizePackages(packages) {
 }
 
 /** FedEx Rate API expects full addresses; streetLines are required for reliable US domestic quotes. */
-function buildShipperAddressForRating() {
+function normalizeCountryCode(c) {
+  const x = String(c || '').trim();
+  if (!x) return 'US';
+  if (x.toLowerCase() === 'united states') return 'US';
+  if (x.length === 2) return x.toUpperCase();
+  return 'US';
+}
+
+function envShipperAddress() {
   return {
     streetLines: [String(process.env.FEDEX_SHIPPER_STREET || '2000 FedEx Way').trim()].filter(Boolean),
     city: String(process.env.FEDEX_SHIPPER_CITY || 'Memphis').trim(),
@@ -165,6 +220,68 @@ function buildShipperAddressForRating() {
       .trim()
       .toUpperCase()
       .slice(0, 2),
+  };
+}
+
+function storeAddressToFedexAddress(address) {
+  if (!address) return null;
+  return {
+    streetLines: [address.street_address, address.address_line2].map((s) => String(s || '').trim()).filter(Boolean),
+    city: String(address.city || '').trim(),
+    stateOrProvinceCode: String(address.state || '').trim().toUpperCase().slice(0, 2),
+    postalCode: String(address.postcode || '').trim(),
+    countryCode: normalizeCountryCode(address.country),
+  };
+}
+
+async function getDefaultStoreAddress() {
+  try {
+    return await storeAddressRepository.findDefault();
+  } catch (error) {
+    console.warn('[FedEx] Could not load default store address; using env shipper address:', error?.message || error);
+    return null;
+  }
+}
+
+async function buildShipperAddressForRating() {
+  const storeAddress = await getDefaultStoreAddress();
+  const dynamicAddress = storeAddressToFedexAddress(storeAddress);
+  if (dynamicAddress?.streetLines?.length && dynamicAddress.city && dynamicAddress.postalCode) {
+    return dynamicAddress;
+  }
+  return envShipperAddress();
+}
+
+async function buildShipperContactAndAddressForShipment() {
+  const storeAddress = await getDefaultStoreAddress();
+  const address = storeAddressToFedexAddress(storeAddress);
+  if (address?.streetLines?.length && address.city && address.postalCode) {
+    const fallbackName =
+      String(storeAddress.contact_name || storeAddress.company || storeAddress.label || 'Shipper').trim() || 'Shipper';
+    const fallbackPhone =
+      String(storeAddress.phone || process.env.FEDEX_SHIPPER_PHONE || '9015551234')
+        .replace(/\D/g, '')
+        .slice(0, 15) || '9015551234';
+    return {
+      contact: {
+        personName: fallbackName.slice(0, 35),
+        phoneNumber: fallbackPhone,
+        ...(storeAddress.company ? { companyName: String(storeAddress.company).slice(0, 35) } : {}),
+      },
+      address,
+    };
+  }
+  return {
+    contact: {
+      personName: String(process.env.FEDEX_SHIPPER_NAME || process.env.FEDEX_SHIPPER_COMPANY || 'Shipper').slice(0, 35),
+      phoneNumber: String(process.env.FEDEX_SHIPPER_PHONE || '9015551234')
+        .replace(/\D/g, '')
+        .slice(0, 15) || '9015551234',
+      ...(process.env.FEDEX_SHIPPER_COMPANY
+        ? { companyName: String(process.env.FEDEX_SHIPPER_COMPANY).slice(0, 35) }
+        : {}),
+    },
+    address: envShipperAddress(),
   };
 }
 
@@ -305,7 +422,7 @@ async function getRateQuotes(destinationInput, packagesInput) {
     throw new Error('destination.postalCode is required');
   }
   const packages = normalizePackages(packagesInput);
-  const shipperAddr = buildShipperAddressForRating();
+  const shipperAddr = await buildShipperAddressForRating();
   if (!shipperAddr.streetLines.length) {
     shipperAddr.streetLines = ['2000 FedEx Way'];
   }
@@ -316,6 +433,9 @@ async function getRateQuotes(destinationInput, packagesInput) {
     0
   );
   const shipDatestamp = new Date().toISOString().slice(0, 10);
+  const cacheKey = rateQuoteCacheKey({ shipperAddr, recipientAddr, packages });
+  const cachedRates = getCachedRates(cacheKey);
+  if (cachedRates) return cachedRates;
 
   const basePayload = buildRatePayload({
     shipperAddr,
@@ -356,15 +476,64 @@ async function getRateQuotes(destinationInput, packagesInput) {
     }
   }
 
-  return mergeFedexRates([baseRates, ...probeRateArrays]);
+  const mergedRates = mergeFedexRates([baseRates, ...probeRateArrays]);
+  setCachedRates(cacheKey, mergedRates);
+  for (const rate of mergedRates) {
+    const serviceType = String(rate?.serviceType || '').trim().toUpperCase();
+    if (serviceType) {
+      setCachedRates(rateQuoteCacheKey({ shipperAddr, recipientAddr, packages, serviceType }), [rate]);
+    }
+  }
+  return mergedRates;
 }
 
-function normalizeCountryCode(c) {
-  const x = String(c || '').trim();
-  if (!x) return 'US';
-  if (x.toLowerCase() === 'united states') return 'US';
-  if (x.length === 2) return x.toUpperCase();
-  return 'US';
+async function getRateQuoteForService(destinationInput, packagesInput, serviceTypeInput) {
+  const serviceType = String(serviceTypeInput || '').trim().toUpperCase();
+  if (!serviceType) return null;
+  const recipientAddr = buildRecipientAddressForRating(destinationInput);
+  if (!recipientAddr.postalCode) {
+    throw new Error('destination.postalCode is required');
+  }
+  const packages = normalizePackages(packagesInput);
+  const shipperAddr = await buildShipperAddressForRating();
+  if (!shipperAddr.streetLines.length) {
+    shipperAddr.streetLines = ['2000 FedEx Way'];
+  }
+  const serviceCacheKey = rateQuoteCacheKey({ shipperAddr, recipientAddr, packages, serviceType });
+  const cachedServiceRates = getCachedRates(serviceCacheKey);
+  if (cachedServiceRates?.length) return cachedServiceRates[0];
+
+  const allRatesCacheKey = rateQuoteCacheKey({ shipperAddr, recipientAddr, packages });
+  const cachedAllRates = getCachedRates(allRatesCacheKey);
+  const cachedRate = cachedAllRates?.find(
+    (rate) => String(rate?.serviceType || '').trim().toUpperCase() === serviceType
+  );
+  if (cachedRate) {
+    setCachedRates(serviceCacheKey, [cachedRate]);
+    return cachedRate;
+  }
+
+  const totalPackageCount = packages.reduce(
+    (sum, line) => sum + (Number(line.groupPackageCount) > 0 ? Number(line.groupPackageCount) : 1),
+    0
+  );
+  const payload = buildRatePayload({
+    shipperAddr,
+    recipientAddr,
+    packages,
+    totalPackageCount,
+    shipDatestamp: new Date().toISOString().slice(0, 10),
+    serviceType,
+  });
+  const data = await fedexRequest('/rate/v1/rates/quotes', payload, { retryOnceOn5xx: true });
+  const rate = ratesFromFedexResponse(data).find(
+    (candidate) => String(candidate?.serviceType || '').trim().toUpperCase() === serviceType
+  );
+  if (rate) {
+    setCachedRates(serviceCacheKey, [rate]);
+    return rate;
+  }
+  return null;
 }
 
 function parseGuestCheckout(order) {
@@ -479,6 +648,7 @@ async function createShipment(order) {
     throw new Error('Ship-to address is missing for this order.');
   }
   const requestedPackageLineItems = packagesFromOrderItems(order.items);
+  const shipper = await buildShipperContactAndAddressForShipment();
   const payload = {
     labelResponseOptions: 'LABEL',
     accountNumber: { value: FEDEX_ACCOUNT_NUMBER() },
@@ -493,27 +663,7 @@ async function createShipment(order) {
         imageType: 'PDF',
         labelStockType: 'PAPER_85X11_TOP_HALF_LABEL',
       },
-      shipper: {
-        contact: {
-          personName: String(process.env.FEDEX_SHIPPER_NAME || 'Shipper').slice(0, 35),
-          phoneNumber: String(process.env.FEDEX_SHIPPER_PHONE || '9015551234')
-            .replace(/\D/g, '')
-            .slice(0, 15) || '9015551234',
-        },
-        address: {
-          streetLines: [String(process.env.FEDEX_SHIPPER_STREET || '2000 FedEx Way').trim()].filter(Boolean),
-          city: String(process.env.FEDEX_SHIPPER_CITY || 'Memphis').trim(),
-          stateOrProvinceCode: String(process.env.FEDEX_SHIPPER_STATE || 'TN')
-            .trim()
-            .toUpperCase()
-            .slice(0, 2),
-          postalCode: String(process.env.FEDEX_SHIPPER_POSTAL || '38115').trim(),
-          countryCode: String(process.env.FEDEX_SHIPPER_COUNTRY || 'US')
-            .trim()
-            .toUpperCase()
-            .slice(0, 2),
-        },
-      },
+      shipper,
       recipients: [recipient],
       requestedPackageLineItems,
     },
@@ -576,6 +726,7 @@ async function trackShipment(trackingNumber) {
 
 module.exports = {
   getRateQuotes,
+  getRateQuoteForService,
   createShipment,
   trackShipment,
   saveFedexLabelPdf,

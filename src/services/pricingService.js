@@ -622,6 +622,10 @@ function buildCartSnapshot(pricing, input, productRow) {
   const shippingRateEstimatedDelivery = String(
     input.shippingRateEstimatedDelivery ?? input.shipping_rate_estimated_delivery ?? ''
   ).trim();
+  const productionTimeRaw = input.productionTime ?? input.production_time ?? productRow.production_time;
+  const productionTime = Number(productionTimeRaw);
+  const productionTimeDays =
+    Number.isFinite(productionTime) && productionTime > 0 ? Math.trunc(productionTime) : null;
   const result = {
     productId: pricing.productId,
     productName: pricing.productName,
@@ -654,6 +658,8 @@ function buildCartSnapshot(pricing, input, productRow) {
     purchase_option_key: pricing.purchaseOptionKey,
     purchaseOptionLabel: pricing.purchaseOptionLabel,
     purchase_option_label: pricing.purchaseOptionLabel,
+    productionTime: productionTimeDays,
+    production_time: productionTimeDays,
     unitPrice: pricing.unitPrice,
     baseUnitPrice: pricing.baseUnitPrice,
     modifierTotal: pricing.modifierTotal,
@@ -673,6 +679,7 @@ function buildCartSnapshot(pricing, input, productRow) {
       graphic_scenario_enabled: pricing.graphicScenarioEnabled,
       purchase_option_key: pricing.purchaseOptionKey,
       purchase_option_label: pricing.purchaseOptionLabel,
+      production_time: productionTimeDays,
       width: pricing.width,
       height: pricing.height,
       area_sqft: pricing.areaSqft,

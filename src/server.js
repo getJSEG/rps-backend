@@ -172,6 +172,7 @@ const employeeRoutes = require('./routes/employees');
 const cartRoutes = require('./routes/cart');
 const shippingRatesRoutes = require('./routes/shippingRates');
 const storePickupAddressRoutes = require('./routes/storePickupAddresses');
+const storeAddressRoutes = require('./routes/storeAddresses');
 const taxRoutes = require('./routes/taxes');
 const artworkRoutes = require('./routes/artworks');
 const reportsRoutes = require('./routes/reports');
@@ -253,6 +254,7 @@ app.use('/api/admin/employees', employeeRoutes);
 app.use('/api/cart', cartRoutes);
 app.use('/api/shipping-rates', shippingRatesRoutes);
 app.use('/api/store-pickup-addresses', storePickupAddressRoutes);
+app.use('/api/store-addresses', storeAddressRoutes);
 app.use('/api/taxes', taxRoutes);
 app.use('/api/artworks', artworkRoutes);
 app.use('/api/reports', reportsRoutes);
@@ -300,4 +302,3 @@ ensureBaseTables()
 });
 
 module.exports = app;
-
