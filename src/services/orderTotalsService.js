@@ -1,5 +1,5 @@
 const shippingRatesRepository = require('../repositories/shippingRatesRepository');
-const taxRepository = require('../repositories/taxRepository');
+const { computeDynamicTaxAndTotal, calculateTaxTotals } = require('./taxService');
 const { isPersistedFedexQuotedServiceType } = require('../utils/fedexQuoteServiceType');
 
 function roundMoney2(n) {
@@ -116,26 +116,22 @@ async function computeShippingFromCartItems(cartItems) {
   };
 }
 
-async function computeTaxAndTotal(subtotal, shipping) {
+async function computeTaxAndTotal(subtotal, shipping, options = {}) {
   const normalizedSubtotal = roundMoney2(subtotal);
   const normalizedShipping = roundMoney2(shipping);
-  const preTaxTotal = roundMoney2(normalizedSubtotal + normalizedShipping);
-  const activeTax = await taxRepository.getActiveTax();
-  const taxPercentage = activeTax ? Number(activeTax.percentage) || 0 : 0;
-  const taxAmount = roundMoney2(preTaxTotal * (taxPercentage / 100));
-  const total = roundMoney2(preTaxTotal + taxAmount);
-  return {
-    subtotal: normalizedSubtotal,
-    shipping: normalizedShipping,
-    preTaxTotal,
-    tax: {
-      id: activeTax?.id ?? null,
-      name: activeTax?.name ?? null,
-      percentage: taxPercentage,
-      amount: taxAmount,
-    },
-    total,
-  };
+  const postalCode = String(options.postalCode ?? options.postcode ?? options.zip ?? '').trim();
+  if (!postalCode) {
+    return {
+      ...calculateTaxTotals({
+        subtotal: normalizedSubtotal,
+        shipping: normalizedShipping,
+        taxRate: 0,
+        taxPercentage: 0,
+      }),
+      warning: 'No ZIP/postal code available; tax set to 0.',
+    };
+  }
+  return computeDynamicTaxAndTotal(normalizedSubtotal, normalizedShipping, postalCode);
 }
 
 module.exports = {

@@ -364,6 +364,20 @@ function fedexDestinationFromAddress(address) {
   };
 }
 
+async function findAddressForTax(userId, addressId) {
+  if (!userId || addressId == null) return null;
+  const result = await pool.query('SELECT postcode FROM addresses WHERE id = $1 AND user_id = $2 LIMIT 1', [
+    addressId,
+    userId,
+  ]);
+  return result.rows[0] ?? null;
+}
+
+function guestTaxPostalCode(guestCheckout) {
+  const sa = guestCheckout?.shippingAddress || guestCheckout?.shipping_address;
+  return String(sa?.postcode ?? sa?.postalCode ?? sa?.zip ?? '').trim();
+}
+
 function isCheckoutLineStorePickup(item) {
   const mode = String(item?.shippingMode ?? item?.shipping_mode ?? '').trim().toLowerCase();
   if (mode === 'store_pickup' || mode === 'store-pickup' || mode === 'store pickup') return true;
@@ -983,7 +997,14 @@ const createOrderWithPaymentIntent = async (req, res) => {
       shippingSum = freeShippingResult.shippingSum;
       shippingCharge = freeShippingResult.shippingCharge;
     }
-    const totals = await computeTaxAndTotal(subtotalSum, shippingSum);
+    let taxPostalCode = '';
+    if (userId && shippingAddressId != null) {
+      const taxAddress = await findAddressForTax(userId, shippingAddressId);
+      taxPostalCode = String(taxAddress?.postcode || '').trim();
+    } else if (!userId) {
+      taxPostalCode = guestTaxPostalCode(guestCheckout);
+    }
+    const totals = await computeTaxAndTotal(subtotalSum, shippingSum, { postalCode: taxPostalCode });
     let totalAmount = totals.total;
     if (totalAmount > MAX_ORDER_MONEY) {
       return res.status(400).json({ message: 'Order total exceeds the maximum allowed amount.' });

@@ -1,107 +1,79 @@
-const taxRepository = require('../repositories/taxRepository');
+const pool = require('../config/database');
+const { computeDynamicTaxAndTotal, normalizeZip5 } = require('../services/taxService');
 
-function parseTaxId(req) {
-  const id = parseInt(req.params.id, 10);
-  return Number.isFinite(id) && id > 0 ? id : null;
-}
-
-function parsePercentage(value) {
+function parseMoney(value) {
   const n = Number(value);
-  if (!Number.isFinite(n) || n < 0) return null;
-  return n;
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
-async function getTaxesAdmin(req, res) {
-  try {
-    const taxes = await taxRepository.getAllTaxes();
-    res.json({ taxes });
-  } catch (error) {
-    console.error('getTaxesAdmin:', error);
-    res.status(500).json({ message: 'Failed to load taxes' });
-  }
+async function findDefaultAddressForUser(userId) {
+  const result = await pool.query(
+    `SELECT id, postcode, address_type, is_default
+     FROM addresses
+     WHERE user_id = $1
+     ORDER BY is_default DESC,
+       CASE WHEN address_type = 'shipping' THEN 0 ELSE 1 END,
+       updated_at DESC NULLS LAST,
+       created_at DESC
+     LIMIT 1`,
+    [userId]
+  );
+  return result.rows[0] ?? null;
 }
 
-async function getActiveTax(req, res) {
+async function estimateTax(req, res) {
   try {
-    const tax = await taxRepository.getActiveTax();
-    res.json({ tax });
-  } catch (error) {
-    console.error('getActiveTax:', error);
-    res.status(500).json({ message: 'Failed to load active tax' });
-  }
-}
+    const subtotal = parseMoney(req.body?.subtotal);
+    const shipping = parseMoney(req.body?.shipping);
+    if (subtotal == null) return res.status(400).json({ message: 'subtotal must be a non-negative number' });
+    if (shipping == null) return res.status(400).json({ message: 'shipping must be a non-negative number' });
 
-async function createTaxAdmin(req, res) {
-  try {
-    const name = String(req.body?.name || '').trim();
-    const percentage = parsePercentage(req.body?.percentage);
-    const isActive = req.body?.isActive === true;
-    if (!name) return res.status(400).json({ message: 'name is required' });
-    if (percentage == null) return res.status(400).json({ message: 'percentage must be a non-negative number' });
-    const tax = await taxRepository.createTax({ name, percentage, isActive });
-    res.status(201).json({ tax });
-  } catch (error) {
-    console.error('createTaxAdmin:', error);
-    res.status(500).json({ message: 'Failed to create tax' });
-  }
-}
+    const explicitPostalCode = String(
+      req.body?.postalCode ?? req.body?.postcode ?? req.body?.zip ?? ''
+    ).trim();
+    let postalCode = explicitPostalCode;
+    let addressId = null;
 
-async function updateTaxAdmin(req, res) {
-  try {
-    const id = parseTaxId(req);
-    if (!id) return res.status(400).json({ message: 'Invalid id' });
-    const payload = {};
-    if (req.body?.name !== undefined) {
-      const name = String(req.body.name || '').trim();
-      if (!name) return res.status(400).json({ message: 'name cannot be empty' });
-      payload.name = name;
+    if (!postalCode && req.user?.id) {
+      const defaultAddress = await findDefaultAddressForUser(req.user.id);
+      addressId = defaultAddress?.id ?? null;
+      postalCode = String(defaultAddress?.postcode || '').trim();
     }
-    if (req.body?.percentage !== undefined) {
-      const percentage = parsePercentage(req.body.percentage);
-      if (percentage == null) return res.status(400).json({ message: 'percentage must be a non-negative number' });
-      payload.percentage = percentage;
+
+    if (!normalizeZip5(postalCode)) {
+      return res.status(400).json({
+        success: false,
+        code: postalCode ? 'INVALID_POSTAL_CODE' : 'MISSING_POSTAL_CODE',
+        message: postalCode
+          ? 'Invalid postal code'
+          : 'Add a default shipping address with a valid ZIP code to calculate tax.',
+      });
     }
-    if (req.body?.isActive !== undefined) payload.isActive = !!req.body.isActive;
-    const tax = await taxRepository.updateTax(id, payload);
-    if (!tax) return res.status(404).json({ message: 'Tax not found' });
-    res.json({ tax });
-  } catch (error) {
-    console.error('updateTaxAdmin:', error);
-    res.status(500).json({ message: 'Failed to update tax' });
-  }
-}
 
-async function deleteTaxAdmin(req, res) {
-  try {
-    const id = parseTaxId(req);
-    if (!id) return res.status(400).json({ message: 'Invalid id' });
-    const deleted = await taxRepository.deleteTax(id);
-    if (!deleted) return res.status(404).json({ message: 'Tax not found' });
-    res.json({ message: 'Tax deleted' });
+    const totals = await computeDynamicTaxAndTotal(subtotal, shipping, postalCode);
+    return res.json({
+      success: true,
+      taxRate: totals.tax.rate,
+      taxPercentage: totals.tax.percentage,
+      tax: totals.tax.amount,
+      total: totals.total,
+      subtotal: totals.subtotal,
+      shipping: totals.shipping,
+      addressId,
+      postalCode: normalizeZip5(postalCode),
+      warning: totals.warning,
+    });
   } catch (error) {
-    console.error('deleteTaxAdmin:', error);
-    res.status(500).json({ message: 'Failed to delete tax' });
-  }
-}
-
-async function activateTaxAdmin(req, res) {
-  try {
-    const id = parseTaxId(req);
-    if (!id) return res.status(400).json({ message: 'Invalid id' });
-    const tax = await taxRepository.activateTax(id);
-    if (!tax) return res.status(404).json({ message: 'Tax not found' });
-    res.json({ tax });
-  } catch (error) {
-    console.error('activateTaxAdmin:', error);
-    res.status(500).json({ message: 'Failed to activate tax' });
+    console.error('estimateTax:', error);
+    const statusCode = Number(error?.statusCode) || 500;
+    return res.status(statusCode >= 400 && statusCode < 500 ? statusCode : 500).json({
+      success: false,
+      code: error?.code || 'TAX_ESTIMATE_FAILED',
+      message: error?.message || 'Failed to estimate tax',
+    });
   }
 }
 
 module.exports = {
-  getTaxesAdmin,
-  getActiveTax,
-  createTaxAdmin,
-  updateTaxAdmin,
-  deleteTaxAdmin,
-  activateTaxAdmin,
+  estimateTax,
 };

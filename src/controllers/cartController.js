@@ -2,6 +2,7 @@ const cartRepository = require('../repositories/cartRepository');
 const { calculateCartItemFromInput } = require('../services/pricingService');
 const { computeShippingFromCartItems, computeTaxAndTotal, roundMoney2 } = require('../services/orderTotalsService');
 const { isPersistedFedexQuotedServiceType } = require('../utils/fedexQuoteServiceType');
+const pool = require('../config/database');
 
 function isAdminUser(req) {
   const role = (req.user?.role || '').toString().toLowerCase();
@@ -31,6 +32,22 @@ function cartItemLineSubtotal(item) {
   const qty = Number(item?.quantity) || 1;
   const unit = Number(item?.unitPrice ?? item?.unit_price) || 0;
   return unit * qty;
+}
+
+async function findDefaultTaxPostalCode(userId) {
+  if (!userId) return '';
+  const result = await pool.query(
+    `SELECT postcode
+     FROM addresses
+     WHERE user_id = $1
+     ORDER BY is_default DESC,
+       CASE WHEN address_type = 'shipping' THEN 0 ELSE 1 END,
+       updated_at DESC NULLS LAST,
+       created_at DESC
+     LIMIT 1`,
+    [userId]
+  );
+  return String(result.rows[0]?.postcode || '').trim();
 }
 
 /** Same idea as storefront `cartLineFedexQuotedAmount`: persisted FedEx quote on a cart line. */
@@ -229,7 +246,8 @@ const getCartSummary = async (req, res) => {
     let shipping = shippingComputed.shippingSum;
     const freeShipping = shippingComputed.applyFreeShipping(subtotal);
     shipping = freeShipping.shippingSum;
-    const totals = await computeTaxAndTotal(subtotal, shipping);
+    const taxPostalCode = await findDefaultTaxPostalCode(userId);
+    const totals = await computeTaxAndTotal(subtotal, shipping, { postalCode: taxPostalCode });
     res.json({
       subtotal: totals.subtotal,
       shipping: totals.shipping,
