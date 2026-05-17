@@ -28,7 +28,8 @@ const getFedexRates = async (req, res) => {
     return res.json({ rates });
   } catch (error) {
     console.error('FedEx rates error:', error);
-    return res.status(500).json({
+    const statusCode = Number(error?.statusCode) || 500;
+    return res.status(statusCode >= 400 && statusCode < 500 ? statusCode : 500).json({
       message: error?.message || 'Failed to fetch FedEx rates',
     });
   }

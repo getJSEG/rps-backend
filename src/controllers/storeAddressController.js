@@ -31,8 +31,8 @@ function readPayload(body = {}) {
 }
 
 function validateRequired(payload) {
-  if (!payload.label || !payload.street_address || !payload.city || !payload.state || !payload.postcode) {
-    return 'label, streetAddress, city, state and postcode are required';
+  if (!payload.label || !payload.phone || !payload.street_address || !payload.city || !payload.state || !payload.postcode) {
+    return 'label, phone, streetAddress, city, state and postcode are required';
   }
   return null;
 }
@@ -93,9 +93,9 @@ const deleteStoreAddressAdmin = async (req, res) => {
   try {
     const id = parseInt(String(req.params.id), 10);
     if (Number.isNaN(id)) return res.status(400).json({ message: 'Invalid id' });
-    const deletedId = await repo.archiveAddress(id);
+    const deletedId = await repo.deleteAddress(id);
     if (!deletedId) return res.status(404).json({ message: 'Address not found' });
-    res.json({ message: 'Address archived', id: deletedId });
+    res.json({ message: 'Address deleted', id: deletedId });
   } catch (error) {
     console.error('deleteStoreAddressAdmin:', error);
     res.status(500).json({ message: 'Failed to delete store address' });

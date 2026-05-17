@@ -932,6 +932,10 @@ const createOrderWithPaymentIntent = async (req, res) => {
     /** Guest FedEx refresh only; logged-in quotes are validated from cart line fields. */
     let guestShippingSnapshotForFedex = null;
 
+    if (shippingMode !== 'store_pickup') {
+      await fedexService.ensureDefaultShipperStoreAddress();
+    }
+
     if (userId && shippingMode !== 'store_pickup') {
       const rawShip = req.body.shippingAddressId ?? req.body.shipping_address_id;
       const rawBill = req.body.billingAddressId ?? req.body.billing_address_id;

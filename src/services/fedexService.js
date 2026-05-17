@@ -18,6 +18,8 @@ const DEFAULT_RATE_SERVICE_PROBES = [
   'FIRST_OVERNIGHT',
 ];
 
+const STORE_ADDRESS_REQUIRED_MESSAGE = 'Shipping will be available once admin add store address.';
+
 let cachedToken = null;
 let tokenExpiresAt = 0;
 const rateQuoteCache = new Map();
@@ -207,22 +209,6 @@ function normalizeCountryCode(c) {
   return 'US';
 }
 
-function envShipperAddress() {
-  return {
-    streetLines: [String(process.env.FEDEX_SHIPPER_STREET || '2000 FedEx Way').trim()].filter(Boolean),
-    city: String(process.env.FEDEX_SHIPPER_CITY || 'Memphis').trim(),
-    stateOrProvinceCode: String(process.env.FEDEX_SHIPPER_STATE || 'TN')
-      .trim()
-      .toUpperCase()
-      .slice(0, 2),
-    postalCode: String(process.env.FEDEX_SHIPPER_POSTAL || '38115').trim(),
-    countryCode: String(process.env.FEDEX_SHIPPER_COUNTRY || 'US')
-      .trim()
-      .toUpperCase()
-      .slice(0, 2),
-  };
-}
-
 function storeAddressToFedexAddress(address) {
   if (!address) return null;
   return {
@@ -234,12 +220,18 @@ function storeAddressToFedexAddress(address) {
   };
 }
 
+function requiredDefaultStoreAddressError(message) {
+  const error = new Error(message);
+  error.statusCode = 400;
+  return error;
+}
+
 async function getDefaultStoreAddress() {
   try {
     return await storeAddressRepository.findDefault();
   } catch (error) {
-    console.warn('[FedEx] Could not load default store address; using env shipper address:', error?.message || error);
-    return null;
+    console.warn('[FedEx] Could not load default store address:', error?.message || error);
+    throw requiredDefaultStoreAddressError(STORE_ADDRESS_REQUIRED_MESSAGE);
   }
 }
 
@@ -249,40 +241,32 @@ async function buildShipperAddressForRating() {
   if (dynamicAddress?.streetLines?.length && dynamicAddress.city && dynamicAddress.postalCode) {
     return dynamicAddress;
   }
-  return envShipperAddress();
+  throw requiredDefaultStoreAddressError(STORE_ADDRESS_REQUIRED_MESSAGE);
 }
 
 async function buildShipperContactAndAddressForShipment() {
   const storeAddress = await getDefaultStoreAddress();
   const address = storeAddressToFedexAddress(storeAddress);
   if (address?.streetLines?.length && address.city && address.postalCode) {
-    const fallbackName =
-      String(storeAddress.contact_name || storeAddress.company || storeAddress.label || 'Shipper').trim() || 'Shipper';
-    const fallbackPhone =
-      String(storeAddress.phone || process.env.FEDEX_SHIPPER_PHONE || '9015551234')
-        .replace(/\D/g, '')
-        .slice(0, 15) || '9015551234';
+    const shipperName = String(storeAddress.contact_name || storeAddress.company || storeAddress.label || '').trim();
+    const shipperPhone = String(storeAddress.phone || '').replace(/\D/g, '').slice(0, 15);
+    if (!shipperName || !shipperPhone) {
+      throw requiredDefaultStoreAddressError(STORE_ADDRESS_REQUIRED_MESSAGE);
+    }
     return {
       contact: {
-        personName: fallbackName.slice(0, 35),
-        phoneNumber: fallbackPhone,
+        personName: shipperName.slice(0, 35),
+        phoneNumber: shipperPhone,
         ...(storeAddress.company ? { companyName: String(storeAddress.company).slice(0, 35) } : {}),
       },
       address,
     };
   }
-  return {
-    contact: {
-      personName: String(process.env.FEDEX_SHIPPER_NAME || process.env.FEDEX_SHIPPER_COMPANY || 'Shipper').slice(0, 35),
-      phoneNumber: String(process.env.FEDEX_SHIPPER_PHONE || '9015551234')
-        .replace(/\D/g, '')
-        .slice(0, 15) || '9015551234',
-      ...(process.env.FEDEX_SHIPPER_COMPANY
-        ? { companyName: String(process.env.FEDEX_SHIPPER_COMPANY).slice(0, 35) }
-        : {}),
-    },
-    address: envShipperAddress(),
-  };
+  throw requiredDefaultStoreAddressError(STORE_ADDRESS_REQUIRED_MESSAGE);
+}
+
+async function ensureDefaultShipperStoreAddress() {
+  await buildShipperContactAndAddressForShipment();
 }
 
 function buildRecipientAddressForRating(destinationInput) {
@@ -423,9 +407,6 @@ async function getRateQuotes(destinationInput, packagesInput) {
   }
   const packages = normalizePackages(packagesInput);
   const shipperAddr = await buildShipperAddressForRating();
-  if (!shipperAddr.streetLines.length) {
-    shipperAddr.streetLines = ['2000 FedEx Way'];
-  }
 
   /** Without carrierCodes, FedEx may evaluate freight/SmartPost paths that reject YOUR_PACKAGING and return SERVICE.PACKAGING.COMBINATION.INVALID. */
   const totalPackageCount = packages.reduce(
@@ -496,9 +477,6 @@ async function getRateQuoteForService(destinationInput, packagesInput, serviceTy
   }
   const packages = normalizePackages(packagesInput);
   const shipperAddr = await buildShipperAddressForRating();
-  if (!shipperAddr.streetLines.length) {
-    shipperAddr.streetLines = ['2000 FedEx Way'];
-  }
   const serviceCacheKey = rateQuoteCacheKey({ shipperAddr, recipientAddr, packages, serviceType });
   const cachedServiceRates = getCachedRates(serviceCacheKey);
   if (cachedServiceRates?.length) return cachedServiceRates[0];
@@ -727,6 +705,7 @@ async function trackShipment(trackingNumber) {
 module.exports = {
   getRateQuotes,
   getRateQuoteForService,
+  ensureDefaultShipperStoreAddress,
   createShipment,
   trackShipment,
   saveFedexLabelPdf,

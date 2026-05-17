@@ -164,12 +164,9 @@ async function setDefault(id) {
   }
 }
 
-async function archiveAddress(id) {
+async function deleteAddress(id) {
   const r = await pool.query(
-    `UPDATE store_addresses
-     SET is_active = false,
-         is_default = false,
-         updated_at = CURRENT_TIMESTAMP
+    `DELETE FROM store_addresses
      WHERE id = $1
      RETURNING id`,
     [id]
@@ -184,5 +181,5 @@ module.exports = {
   createAddress,
   updateAddress,
   setDefault,
-  archiveAddress,
+  deleteAddress,
 };

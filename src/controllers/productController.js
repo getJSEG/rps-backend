@@ -25,6 +25,30 @@ function asNumberOrNull(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+function validateFedexShippingDataForHardware({
+  isHardware,
+  shippingLength,
+  shippingWidth,
+  shippingHeight,
+  shippingWeight,
+}) {
+  if (!isHardware) return null;
+  const required = [
+    ['length', shippingLength],
+    ['width', shippingWidth],
+    ['height', shippingHeight],
+    ['weight', shippingWeight],
+  ];
+  const missing = required
+    .filter(([, value]) => !Number.isFinite(Number(value)) || Number(value) <= 0)
+    .map(([label]) => label);
+  if (missing.length === 0) return null;
+  const list = missing.length > 1
+    ? `${missing.slice(0, -1).join(', ')}, and ${missing[missing.length - 1]}`
+    : missing[0];
+  return `FedEx shipping data is required. Add ${list}.`;
+}
+
 /** Whole number for INTEGER columns; null if empty/invalid. */
 function asIntegerOrNull(value) {
   if (value === undefined || value === null || value === '') return null;
@@ -1608,6 +1632,16 @@ const createProduct = async (req, res) => {
     const shippingWidthVal = asNumberOrNull(shipping_width);
     const shippingHeightVal = asNumberOrNull(shipping_height);
     const shippingWeightVal = asNumberOrNull(shipping_weight);
+    const fedexShippingValidationError = validateFedexShippingDataForHardware({
+      isHardware: graphicScenarioEnabledVal,
+      shippingLength: shippingLengthVal,
+      shippingWidth: shippingWidthVal,
+      shippingHeight: shippingHeightVal,
+      shippingWeight: shippingWeightVal,
+    });
+    if (fedexShippingValidationError) {
+      return res.status(400).json({ message: fedexShippingValidationError });
+    }
     const productionTimeVal = asIntegerOrNull(production_time);
     const highlightsVal = Array.isArray(product_highlights)
       ? JSON.stringify(product_highlights.map(String).filter((s) => s.trim()))
@@ -1747,6 +1781,16 @@ const updateProduct = async (req, res) => {
       req.body.shipping_height !== undefined ? asNumberOrNull(req.body.shipping_height) : row.shipping_height;
     const shippingWeightVal =
       req.body.shipping_weight !== undefined ? asNumberOrNull(req.body.shipping_weight) : row.shipping_weight;
+    const fedexShippingValidationError = validateFedexShippingDataForHardware({
+      isHardware: graphicScenarioEnabledVal,
+      shippingLength: shippingLengthVal,
+      shippingWidth: shippingWidthVal,
+      shippingHeight: shippingHeightVal,
+      shippingWeight: shippingWeightVal,
+    });
+    if (fedexShippingValidationError) {
+      return res.status(400).json({ message: fedexShippingValidationError });
+    }
     const productionTimeVal =
       req.body.production_time !== undefined ? asIntegerOrNull(req.body.production_time) : row.production_time;
     const highlightsVal = req.body.product_highlights !== undefined
@@ -1905,4 +1949,3 @@ module.exports = {
   upsertHardwareTemplateAdmin,
   deleteHardwareTemplateAdmin,
 };
-
