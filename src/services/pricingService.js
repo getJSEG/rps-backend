@@ -206,8 +206,19 @@ function resolveSelectedModifiers(product, input, baseUnitPrice, activePurchaseO
   }
 
   const rawSelected = input.selectedModifiers ?? input.selected_modifiers ?? {};
-  const selectedObj =
-    rawSelected && typeof rawSelected === 'object' && !Array.isArray(rawSelected) ? rawSelected : {};
+  const selectedObj = Array.isArray(rawSelected)
+    ? rawSelected.reduce((acc, row) => {
+        if (!row || typeof row !== 'object') return acc;
+        const groupKey = String(row.group_key ?? row.groupKey ?? '').trim();
+        const optionValue = row.option_value ?? row.optionValue ?? row.value;
+        if (groupKey && optionValue != null && String(optionValue).trim() !== '') {
+          acc[groupKey] = String(optionValue);
+        }
+        return acc;
+      }, {})
+    : rawSelected && typeof rawSelected === 'object'
+      ? rawSelected
+      : {};
   const selected = [];
   let fixedTotal = 0;
   let percentTotal = 0;
