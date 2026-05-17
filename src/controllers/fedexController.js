@@ -1,5 +1,6 @@
 const fedexService = require('../services/fedexService');
 const orderRepository = require('../repositories/orderRepository');
+const { isPersistedFedexQuotedServiceType } = require('../utils/fedexQuoteServiceType');
 
 function validateDestination(destination) {
   const postalCode = String(destination?.postalCode || '').trim();
@@ -42,7 +43,7 @@ function isOrderPaidForShipping(order) {
 function normalizeFedexServiceType(raw) {
   const s = String(raw || '').trim().toUpperCase();
   if (!s) return '';
-  return /^FEDEX_[A-Z0-9_]+$/.test(s) ? s : '';
+  return isPersistedFedexQuotedServiceType(s) ? s : '';
 }
 
 const createShipmentForOrder = async (req, res) => {
