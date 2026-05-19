@@ -82,6 +82,94 @@ function parseSizeOptionsInput(value) {
     .filter((item) => item.label && item.width != null && item.height != null);
 }
 
+function parseShippingBoxRulesInput(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => ({
+      shipping_box_id:
+        item?.shipping_box_id == null || item?.shipping_box_id === ''
+          ? null
+          : parseInt(String(item.shipping_box_id), 10),
+      min_smallest_side: asNumberOrNull(item?.min_smallest_side),
+      max_smallest_side: asNumberOrNull(item?.max_smallest_side),
+      is_active: item?.is_active !== false,
+    }))
+    .filter((item) => item.shipping_box_id != null);
+}
+
+async function replaceProductShippingBoxRules(productId, rules) {
+  await pool.query('DELETE FROM product_shipping_box_rules WHERE product_id = $1', [productId]);
+  if (!Array.isArray(rules) || rules.length === 0) return;
+  for (let i = 0; i < rules.length; i += 1) {
+    const rule = rules[i];
+    if (!Number.isFinite(rule.shipping_box_id) || rule.shipping_box_id <= 0) {
+      throw new Error('Shipping box is required for each box rule.');
+    }
+    if (
+      rule.min_smallest_side != null &&
+      rule.max_smallest_side != null &&
+      Number(rule.min_smallest_side) > Number(rule.max_smallest_side)
+    ) {
+      throw new Error('Box rule minimum smallest side cannot be greater than maximum.');
+    }
+    const check = await pool.query('SELECT id FROM shipping_boxes WHERE id = $1', [rule.shipping_box_id]);
+    if (check.rows.length === 0) {
+      throw new Error('Selected shipping box does not exist.');
+    }
+    await pool.query(
+      `INSERT INTO product_shipping_box_rules
+       (product_id, shipping_box_id, min_smallest_side, max_smallest_side, sort_order, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        productId,
+        rule.shipping_box_id,
+        rule.min_smallest_side,
+        rule.max_smallest_side,
+        i,
+        rule.is_active !== false,
+      ]
+    );
+  }
+}
+
+async function getProductShippingBoxRules(productId) {
+  const result = await pool.query(
+    `SELECT
+       r.id,
+       r.product_id,
+       r.shipping_box_id,
+       r.min_smallest_side,
+       r.max_smallest_side,
+       r.sort_order,
+       r.is_active,
+       b.name AS box_name,
+       b.length AS box_length,
+       b.width AS box_width,
+       b.height AS box_height
+     FROM product_shipping_box_rules r
+     INNER JOIN shipping_boxes b ON b.id = r.shipping_box_id
+     WHERE r.product_id = $1
+     ORDER BY r.sort_order ASC, r.id ASC`,
+    [productId]
+  );
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    product_id: Number(row.product_id),
+    shipping_box_id: Number(row.shipping_box_id),
+    min_smallest_side: row.min_smallest_side == null ? null : Number(row.min_smallest_side),
+    max_smallest_side: row.max_smallest_side == null ? null : Number(row.max_smallest_side),
+    sort_order: Number(row.sort_order || 0),
+    is_active: row.is_active !== false,
+    box: {
+      id: Number(row.shipping_box_id),
+      name: String(row.box_name || ''),
+      length: Number(row.box_length) || 0,
+      width: Number(row.box_width) || 0,
+      height: Number(row.box_height) || 0,
+    },
+  }));
+}
+
 async function getProductSizeOptions(productId) {
   const result = await pool.query(
     `SELECT id, product_id, label, width, height, unit_price, is_default
@@ -751,6 +839,7 @@ const getProductById = async (req, res) => {
     product.purchase_options = await getProductPurchaseOptions(product.id);
     product.modifier_groups = await getProductModifierGroups(product.id);
     product.conditional_modifier_rules = await getProductConditionalModifierRules(product.id);
+    product.shipping_box_rules = await getProductShippingBoxRules(product.id);
     const sm = product.size_mode != null ? String(product.size_mode).trim() : '';
     if (!sm && Array.isArray(product.size_options) && product.size_options.length > 0) {
       product.size_mode = 'predefined';
@@ -1075,6 +1164,35 @@ const updateProductPurchaseOptionsAdmin = async (req, res) => {
     console.error('Update product purchase options error:', error);
     const code = /invalid|required/i.test(String(error.message || '')) ? 400 : 500;
     res.status(code).json({ message: error.message || 'Failed to update product purchase options' });
+  }
+};
+
+const getProductShippingBoxRulesAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const check = await pool.query('SELECT id FROM products WHERE id = $1', [id]);
+    if (check.rows.length === 0) return res.status(404).json({ message: 'Product not found' });
+    const shipping_box_rules = await getProductShippingBoxRules(id);
+    res.json({ product_id: Number(id), shipping_box_rules });
+  } catch (error) {
+    console.error('Get product shipping box rules error:', error);
+    res.status(500).json({ message: 'Failed to fetch product shipping box rules' });
+  }
+};
+
+const updateProductShippingBoxRulesAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const check = await pool.query('SELECT id FROM products WHERE id = $1', [id]);
+    if (check.rows.length === 0) return res.status(404).json({ message: 'Product not found' });
+    const parsedRules = parseShippingBoxRulesInput(req.body?.shipping_box_rules);
+    await replaceProductShippingBoxRules(id, parsedRules);
+    const shipping_box_rules = await getProductShippingBoxRules(id);
+    res.json({ product_id: Number(id), shipping_box_rules });
+  } catch (error) {
+    console.error('Update product shipping box rules error:', error);
+    const code = /Shipping box|Box rule|minimum smallest side/i.test(String(error?.message || '')) ? 400 : 500;
+    res.status(code).json({ message: error.message || 'Failed to update product shipping box rules' });
   }
 };
 
@@ -1587,6 +1705,7 @@ const createProduct = async (req, res) => {
       shipping_width,
       shipping_height,
       shipping_weight,
+      shipping_box_rules,
       production_time,
       product_highlights,
     } = req.body;
@@ -1632,6 +1751,9 @@ const createProduct = async (req, res) => {
     const shippingWidthVal = asNumberOrNull(shipping_width);
     const shippingHeightVal = asNumberOrNull(shipping_height);
     const shippingWeightVal = asNumberOrNull(shipping_weight);
+    const parsedShippingBoxRules = graphicScenarioEnabledVal
+      ? []
+      : parseShippingBoxRulesInput(shipping_box_rules);
     const fedexShippingValidationError = validateFedexShippingDataForHardware({
       isHardware: graphicScenarioEnabledVal,
       shippingLength: shippingLengthVal,
@@ -1696,6 +1818,7 @@ const createProduct = async (req, res) => {
     );
     const created = result.rows[0];
     await replaceProductSizeOptions(created.id, parsedSizeOptions);
+    await replaceProductShippingBoxRules(created.id, parsedShippingBoxRules);
     const parsedPurchaseOptions = parsePurchaseOptionsInput(purchase_options);
     await replaceProductPurchaseOptions(created.id, parsedPurchaseOptions);
     created.size_options = await getProductSizeOptions(created.id);
@@ -1703,6 +1826,11 @@ const createProduct = async (req, res) => {
     res.status(201).json({ product: created });
   } catch (error) {
     if (error.code === '23505') return res.status(400).json({ message: 'Product slug already exists' });
+    if (
+      /Shipping box|Box rule|minimum smallest side/i.test(String(error?.message || ''))
+    ) {
+      return res.status(400).json({ message: error.message });
+    }
     console.error('Create product error:', error);
     res.status(500).json({ message: 'Failed to create product' });
   }
@@ -1781,6 +1909,11 @@ const updateProduct = async (req, res) => {
       req.body.shipping_height !== undefined ? asNumberOrNull(req.body.shipping_height) : row.shipping_height;
     const shippingWeightVal =
       req.body.shipping_weight !== undefined ? asNumberOrNull(req.body.shipping_weight) : row.shipping_weight;
+    const parsedShippingBoxRules = graphicScenarioEnabledVal
+      ? []
+      : (req.body.shipping_box_rules !== undefined
+          ? parseShippingBoxRulesInput(req.body.shipping_box_rules)
+          : null);
     const fedexShippingValidationError = validateFedexShippingDataForHardware({
       isHardware: graphicScenarioEnabledVal,
       shippingLength: shippingLengthVal,
@@ -1822,11 +1955,18 @@ const updateProduct = async (req, res) => {
     if (parsedPurchaseOptions !== null) {
       await replaceProductPurchaseOptions(id, parsedPurchaseOptions);
     }
+    if (parsedShippingBoxRules !== null) {
+      await replaceProductShippingBoxRules(id, parsedShippingBoxRules);
+    }
     updated.size_options = await getProductSizeOptions(id);
     updated.purchase_options = await getProductPurchaseOptions(id);
+    updated.shipping_box_rules = await getProductShippingBoxRules(id);
     res.json({ product: updated });
   } catch (error) {
     if (error.code === '23505') return res.status(400).json({ message: 'Product slug already exists' });
+    if (/Shipping box|Box rule|minimum smallest side/i.test(String(error?.message || ''))) {
+      return res.status(400).json({ message: error.message });
+    }
     console.error('Update product error:', error);
     res.status(500).json({ message: 'Failed to update product' });
   }
@@ -1945,6 +2085,8 @@ module.exports = {
   deleteModifierPresetAdmin,
   getProductPurchaseOptionsAdmin,
   updateProductPurchaseOptionsAdmin,
+  getProductShippingBoxRulesAdmin,
+  updateProductShippingBoxRulesAdmin,
   getHardwareTemplatesAdmin,
   upsertHardwareTemplateAdmin,
   deleteHardwareTemplateAdmin,

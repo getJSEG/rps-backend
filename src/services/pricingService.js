@@ -150,6 +150,26 @@ async function getProductPricingConfig(productId) {
     ORDER BY pm.sort_order ASC, mg.sort_order ASC, pmo.is_default DESC, mo.sort_order ASC, mo.id ASC`,
     [productId]
   );
+  const shippingBoxRulesResult = await pool.query(
+    `SELECT
+       r.id,
+       r.shipping_box_id,
+       r.min_smallest_side,
+       r.max_smallest_side,
+       r.sort_order,
+       r.is_active,
+       b.name AS box_name,
+       b.length AS box_length,
+       b.width AS box_width,
+       b.height AS box_height
+     FROM product_shipping_box_rules r
+     INNER JOIN shipping_boxes b ON b.id = r.shipping_box_id
+     WHERE r.product_id = $1
+       AND r.is_active = TRUE
+       AND b.is_active = TRUE
+     ORDER BY r.sort_order ASC, r.id ASC`,
+    [productId]
+  );
   const groupsByKey = new Map();
   for (const row of modifierGroupsResult.rows) {
     if (!row.option_active || !row.product_option_active) continue;
@@ -182,6 +202,21 @@ async function getProductPricingConfig(productId) {
     size_options: optionsResult.rows,
     purchase_options: purchaseOptionsResult.rows,
     modifier_groups,
+    shipping_box_rules: shippingBoxRulesResult.rows.map((row) => ({
+      id: Number(row.id),
+      shipping_box_id: Number(row.shipping_box_id),
+      min_smallest_side: row.min_smallest_side == null ? null : Number(row.min_smallest_side),
+      max_smallest_side: row.max_smallest_side == null ? null : Number(row.max_smallest_side),
+      sort_order: Number(row.sort_order || 0),
+      is_active: row.is_active !== false,
+      box: {
+        id: Number(row.shipping_box_id),
+        name: String(row.box_name || ''),
+        length: Number(row.box_length) || 0,
+        width: Number(row.box_width) || 0,
+        height: Number(row.box_height) || 0,
+      },
+    })),
   };
 }
 
@@ -533,33 +568,57 @@ function attachShippingSnapshot(result, productRow, input) {
   if (!result || !productRow) return;
   const htRaw = productRow.hardware_template_id ?? input.hardware_template_id ?? input.hardwareTemplateId;
   const htId = htRaw == null || htRaw === '' ? null : Number(htRaw);
-  const hasHardware = Number.isFinite(htId);
+  const hasHardware =
+    productRow.graphic_scenario_enabled === true ||
+    input.graphic_scenario_enabled === true ||
+    input.graphicScenarioEnabled === true ||
+    Number.isFinite(htId);
+
+  const shippingBoxRules = Array.isArray(productRow.shipping_box_rules)
+    ? productRow.shipping_box_rules
+    : [];
+  if (!hasHardware && shippingBoxRules.length > 0) {
+    result.shipping_box_rules = shippingBoxRules;
+    result.shippingBoxRules = shippingBoxRules;
+    result.pricing_snapshot = {
+      ...result.pricing_snapshot,
+      shipping_box_rules: shippingBoxRules,
+    };
+  }
 
   if (hasHardware) {
     const sl = asNumber(input.shipping_length ?? input.shippingLength ?? productRow.shipping_length);
     const sw = asNumber(input.shipping_width ?? input.shippingWidth ?? productRow.shipping_width);
     const sh = asNumber(input.shipping_height ?? input.shippingHeight ?? productRow.shipping_height);
     const swt = asNumber(input.shipping_weight ?? input.shippingWeight ?? productRow.shipping_weight);
-    if (!(sl > 0) || !(sw > 0) || !(sh > 0) || !(swt > 0)) return;
 
-    result.hardware_template_id = htId;
-    result.hardwareTemplateId = htId;
-    result.shipping_length = sl;
-    result.shipping_width = sw;
-    result.shipping_height = sh;
-    result.shipping_weight = swt;
-    result.shippingLength = sl;
-    result.shippingWidth = sw;
-    result.shippingHeight = sh;
-    result.shippingWeight = swt;
+    if (Number.isFinite(htId)) {
+      result.hardware_template_id = htId;
+      result.hardwareTemplateId = htId;
+    }
+    result.graphic_scenario_enabled = true;
+    result.graphicScenarioEnabled = true;
+    if (sl > 0 && sw > 0 && sh > 0) {
+      result.shipping_length = sl;
+      result.shipping_width = sw;
+      result.shipping_height = sh;
+      result.shippingLength = sl;
+      result.shippingWidth = sw;
+      result.shippingHeight = sh;
+    }
+    if (swt > 0) {
+      result.shipping_weight = swt;
+      result.shippingWeight = swt;
+    }
 
     result.pricing_snapshot = {
       ...result.pricing_snapshot,
-      hardware_template_id: htId,
-      shipping_length: sl,
-      shipping_width: sw,
-      shipping_height: sh,
-      shipping_weight: swt,
+      graphic_scenario_enabled: true,
+      ...(Number.isFinite(htId) ? { hardware_template_id: htId } : {}),
+      ...(sl > 0 && sw > 0 && sh > 0
+        ? { shipping_length: sl, shipping_width: sw, shipping_height: sh }
+        : {}),
+      ...(swt > 0 ? { shipping_weight: swt } : {}),
     };
     return;
   }

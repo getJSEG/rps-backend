@@ -151,6 +151,10 @@ async function ensureEmployeeColumns() {
       const sql30 = fs.readFileSync(path.join(migrationsDir, 'zzAlterConditionalModifierRulesNullableSourceOption.sql'), 'utf8');
       await pool.query(sql30);
     }
+    if (fs.existsSync(path.join(migrationsDir, 'addShippingBoxesAndRules.sql'))) {
+      const sql31 = fs.readFileSync(path.join(migrationsDir, 'addShippingBoxesAndRules.sql'), 'utf8');
+      await pool.query(sql31);
+    }
   } catch (err) {
     console.warn('Migrations (optional):', err.message);
   }
@@ -177,6 +181,7 @@ const taxRoutes = require('./routes/taxes');
 const artworkRoutes = require('./routes/artworks');
 const reportsRoutes = require('./routes/reports');
 const fedexRoutes = require('./routes/fedex');
+const shippingBoxesRoutes = require('./routes/shippingBoxes');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -259,6 +264,7 @@ app.use('/api/taxes', taxRoutes);
 app.use('/api/artworks', artworkRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/fedex', fedexRoutes);
+app.use('/api/shipping-boxes', shippingBoxesRoutes);
 
 // 404 handler
 app.use((req, res) => {

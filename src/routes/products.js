@@ -26,6 +26,8 @@ const {
   deleteModifierPresetAdmin,
   getProductPurchaseOptionsAdmin,
   updateProductPurchaseOptionsAdmin,
+  getProductShippingBoxRulesAdmin,
+  updateProductShippingBoxRulesAdmin,
   getHardwareTemplatesAdmin,
   upsertHardwareTemplateAdmin,
   deleteHardwareTemplateAdmin,
@@ -59,6 +61,8 @@ router.get('/admin/products/:id/modifiers', authenticateToken, requireAdmin, get
 router.put('/admin/products/:id/modifiers', authenticateToken, requireAdmin, updateProductModifierConfigAdmin);
 router.get('/admin/products/:id/purchase-options', authenticateToken, requireAdmin, getProductPurchaseOptionsAdmin);
 router.put('/admin/products/:id/purchase-options', authenticateToken, requireAdmin, updateProductPurchaseOptionsAdmin);
+router.get('/admin/products/:id/shipping-box-rules', authenticateToken, requireAdmin, getProductShippingBoxRulesAdmin);
+router.put('/admin/products/:id/shipping-box-rules', authenticateToken, requireAdmin, updateProductShippingBoxRulesAdmin);
 router.get('/admin/hardware-templates', authenticateToken, requireAdmin, getHardwareTemplatesAdmin);
 router.post('/admin/hardware-templates', authenticateToken, requireAdmin, upsertHardwareTemplateAdmin);
 router.put('/admin/hardware-templates/:id', authenticateToken, requireAdmin, upsertHardwareTemplateAdmin);
