@@ -23,6 +23,7 @@ const STORE_ADDRESS_REQUIRED_MESSAGE = 'Shipping will be available once admin ad
 let cachedToken = null;
 let tokenExpiresAt = 0;
 const rateQuoteCache = new Map();
+const addressResidentialCache = new Map();
 
 function fedexRateCacheTtlMs() {
   const n = Number(process.env.FEDEX_RATE_CACHE_TTL_MS);
@@ -66,6 +67,26 @@ function setCachedRates(key, rates) {
   rateQuoteCache.set(key, {
     expiresAt: Date.now() + ttl,
     rates: Array.isArray(rates) ? rates : [],
+  });
+}
+
+function getCachedResidential(key) {
+  const hit = addressResidentialCache.get(key);
+  if (!hit) return null;
+  if (hit.expiresAt <= Date.now()) {
+    addressResidentialCache.delete(key);
+    return null;
+  }
+  return hit;
+}
+
+function setCachedResidential(key, isResidential, source = 'fedex') {
+  const ttl = fedexRateCacheTtlMs();
+  if (ttl <= 0) return;
+  addressResidentialCache.set(key, {
+    expiresAt: Date.now() + ttl,
+    isResidential: isResidential !== false,
+    source,
   });
 }
 
@@ -220,6 +241,164 @@ function storeAddressToFedexAddress(address) {
   };
 }
 
+function addressResidentialCacheKey(address) {
+  return stableJson({
+    streetLines: Array.isArray(address?.streetLines)
+      ? address.streetLines.map((s) => String(s || '').trim().toUpperCase()).filter(Boolean)
+      : [],
+    city: String(address?.city || '').trim().toUpperCase(),
+    stateOrProvinceCode: String(address?.stateOrProvinceCode || '').trim().toUpperCase(),
+    postalCode: String(address?.postalCode || '').trim().toUpperCase(),
+    countryCode: String(address?.countryCode || 'US').trim().toUpperCase(),
+  });
+}
+
+function fedexAddressValidationPayload(address) {
+  return {
+    addressesToValidate: [
+      {
+        address: {
+          streetLines: Array.isArray(address?.streetLines) ? address.streetLines : [],
+          ...(address?.city ? { city: address.city } : {}),
+          ...(address?.stateOrProvinceCode ? { stateOrProvinceCode: address.stateOrProvinceCode } : {}),
+          postalCode: address?.postalCode,
+          countryCode: normalizeCountryCode(address?.countryCode),
+        },
+      },
+    ],
+  };
+}
+
+function collectObjectValues(value, matcher, output = []) {
+  if (value == null) return output;
+  if (Array.isArray(value)) {
+    for (const item of value) collectObjectValues(item, matcher, output);
+    return output;
+  }
+  if (typeof value !== 'object') return output;
+  if (matcher('', value)) output.push(value);
+  for (const [key, nested] of Object.entries(value)) {
+    if (matcher(key, nested)) output.push(nested);
+    collectObjectValues(nested, matcher, output);
+  }
+  return output;
+}
+
+function parseResidentialLikeValue(value) {
+  if (typeof value === 'boolean') return value;
+  const raw = String(value ?? '').trim().toUpperCase();
+  if (!raw) return null;
+  if (raw === 'TRUE' || raw === 'YES' || raw === 'Y' || raw === 'RESIDENTIAL') return true;
+  if (raw === 'FALSE' || raw === 'NO' || raw === 'N' || raw === 'BUSINESS' || raw === 'COMMERCIAL') {
+    return false;
+  }
+  return null;
+}
+
+function parseFedexResidentialClassification(data) {
+  const directResidentialValues = collectObjectValues(
+    data,
+    (key, value) => String(key).toLowerCase().includes('residential') && parseResidentialLikeValue(value) != null
+  );
+  const parsedDirectValues = directResidentialValues.map(parseResidentialLikeValue);
+  if (parsedDirectValues.some((value) => value === true)) return true;
+  if (parsedDirectValues.some((value) => value === false)) return false;
+
+  const attributeValues = collectObjectValues(data, (_key, value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const obj = value;
+    const name = String(obj.name ?? obj.key ?? obj.code ?? obj.type ?? '').trim().toUpperCase();
+    return name.includes('RESIDENTIAL') || name.includes('BUSINESS') || name.includes('COMMERCIAL');
+  });
+  for (const attr of attributeValues) {
+    const name = String(attr.name ?? attr.key ?? attr.code ?? attr.type ?? '').trim().toUpperCase();
+    const parsedValue = parseResidentialLikeValue(attr.value ?? attr.result ?? attr.status);
+    if (name.includes('RESIDENTIAL')) {
+      if (parsedValue != null) return parsedValue;
+      return true;
+    }
+    if (name.includes('BUSINESS') || name.includes('COMMERCIAL')) {
+      if (parsedValue != null) return !parsedValue;
+      return false;
+    }
+  }
+
+  const stringValues = collectObjectValues(data, (key, value) => {
+    const k = String(key).toLowerCase();
+    return (
+      typeof value === 'string' &&
+      (k.includes('classification') ||
+        k.includes('addresscategory') ||
+        k.includes('addresstype') ||
+        k.includes('deliverytype') ||
+        k.includes('residential'))
+    );
+  })
+    .map((value) => String(value || '').trim().toUpperCase())
+    .filter(Boolean);
+
+  if (stringValues.some((value) => value.includes('RESIDENTIAL'))) return true;
+  if (stringValues.some((value) => value.includes('BUSINESS') || value.includes('COMMERCIAL'))) return false;
+  return null;
+}
+
+async function resolveRecipientAddressResidential(address) {
+  const normalized = {
+    ...address,
+    countryCode: normalizeCountryCode(address?.countryCode),
+  };
+  const cacheKey = addressResidentialCacheKey(normalized);
+  const cached = getCachedResidential(cacheKey);
+  if (cached) {
+    console.log('[FedEx address validation] recipient residential:', {
+      residential: cached.isResidential,
+      source: `cache_${cached.source || 'unknown'}`,
+      postalCode: normalized.postalCode,
+      countryCode: normalized.countryCode,
+    });
+    return { ...normalized, residential: cached.isResidential };
+  }
+
+  try {
+    const data = await fedexRequest(
+      '/address/v1/addresses/resolve',
+      fedexAddressValidationPayload(normalized),
+      { retryOnceOn5xx: true }
+    );
+    const parsed = parseFedexResidentialClassification(data);
+    const isResidential = parsed == null ? true : parsed;
+    if (parsed == null) {
+      console.log('[FedEx address validation] UNKNOWN response debug:', {
+        streetLines: normalized.streetLines,
+        city: normalized.city,
+        stateOrProvinceCode: normalized.stateOrProvinceCode,
+        postalCode: normalized.postalCode,
+        countryCode: normalized.countryCode,
+      });
+      console.dir(data, { depth: null });
+    }
+    console.log('[FedEx address validation] recipient residential:', {
+      residential: isResidential,
+      source: parsed == null ? 'fallback_unknown' : 'fedex',
+      postalCode: normalized.postalCode,
+      countryCode: normalized.countryCode,
+    });
+    setCachedResidential(cacheKey, isResidential, parsed == null ? 'fallback_unknown' : 'fedex');
+    return { ...normalized, residential: isResidential };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.warn('[FedEx address validation] Falling back to residential:', msg);
+    console.log('[FedEx address validation] recipient residential:', {
+      residential: true,
+      source: 'fallback_error',
+      postalCode: normalized.postalCode,
+      countryCode: normalized.countryCode,
+    });
+    setCachedResidential(cacheKey, true, 'fallback_error');
+    return { ...normalized, residential: true };
+  }
+}
+
 function requiredDefaultStoreAddressError(message) {
   const error = new Error(message);
   error.statusCode = 400;
@@ -324,7 +503,7 @@ function buildRatePayload({ shipperAddr, recipientAddr, packages, totalPackageCo
       address: { ...shipperAddr, residential: false },
     },
     recipient: {
-      address: { ...recipientAddr, residential: false },
+      address: { ...recipientAddr, residential: recipientAddr?.residential !== false },
     },
     ...(serviceType ? { serviceType } : {}),
     packagingType: 'YOUR_PACKAGING',
@@ -400,11 +579,12 @@ function mergeFedexRates(rateGroups) {
 }
 
 async function getRateQuotes(destinationInput, packagesInput) {
-  const recipientAddr = buildRecipientAddressForRating(destinationInput);
-  const postalCode = recipientAddr.postalCode;
+  const rawRecipientAddr = buildRecipientAddressForRating(destinationInput);
+  const postalCode = rawRecipientAddr.postalCode;
   if (!postalCode) {
     throw new Error('destination.postalCode is required');
   }
+  const recipientAddr = await resolveRecipientAddressResidential(rawRecipientAddr);
   const packages = normalizePackages(packagesInput);
   const shipperAddr = await buildShipperAddressForRating();
 
@@ -471,10 +651,11 @@ async function getRateQuotes(destinationInput, packagesInput) {
 async function getRateQuoteForService(destinationInput, packagesInput, serviceTypeInput) {
   const serviceType = String(serviceTypeInput || '').trim().toUpperCase();
   if (!serviceType) return null;
-  const recipientAddr = buildRecipientAddressForRating(destinationInput);
-  if (!recipientAddr.postalCode) {
+  const rawRecipientAddr = buildRecipientAddressForRating(destinationInput);
+  if (!rawRecipientAddr.postalCode) {
     throw new Error('destination.postalCode is required');
   }
+  const recipientAddr = await resolveRecipientAddressResidential(rawRecipientAddr);
   const packages = normalizePackages(packagesInput);
   const shipperAddr = await buildShipperAddressForRating();
   const serviceCacheKey = rateQuoteCacheKey({ shipperAddr, recipientAddr, packages, serviceType });
@@ -625,6 +806,7 @@ async function createShipment(order) {
   if (!recipient) {
     throw new Error('Ship-to address is missing for this order.');
   }
+  recipient.address = await resolveRecipientAddressResidential(recipient.address);
   const requestedPackageLineItems = packagesFromOrderItems(order.items);
   const shipper = await buildShipperContactAndAddressForShipment();
   const payload = {
