@@ -70,7 +70,7 @@ function findMatchingShippingBoxRule(item, widthInches, heightInches) {
       const minOk = min == null || smallestSide >= min;
       const maxOk = max == null || smallestSide <= max;
       const box = ruleBox(rule);
-      if (box && minOk && maxOk) return box;
+      if (box && minOk && maxOk) return { ...rule, box };
     }
   }
 
@@ -78,9 +78,67 @@ function findMatchingShippingBoxRule(item, widthInches, heightInches) {
     const min = parsePositiveNumber(rule?.min_smallest_side);
     const max = parsePositiveNumber(rule?.max_smallest_side);
     const box = ruleBox(rule);
-    if (box && min == null && max == null) return box;
+    if (box && min == null && max == null) return { ...rule, box };
   }
   return null;
+}
+
+function weightPerSqftFromItem(item) {
+  const snap = item?.pricing_snapshot && typeof item.pricing_snapshot === 'object' ? item.pricing_snapshot : {};
+  return parsePositiveNumber(item?.weight_per_sqft ?? item?.weightPerSqft ?? snap.weight_per_sqft ?? snap.weightPerSqft);
+}
+
+function unitWeightForBoxRuleItem(item, widthInches, heightInches) {
+  const weightPerSqft = weightPerSqftFromItem(item);
+  if (weightPerSqft != null && widthInches > 0 && heightInches > 0) {
+    return (widthInches * heightInches / 144) * weightPerSqft;
+  }
+  return parsePositiveNumber(
+    item.shipping_weight ??
+      item.shippingWeight ??
+      item.weight ??
+      item.pricing_snapshot?.shipping_weight ??
+      item.pricing_snapshot?.shippingWeight
+  ) ?? 1;
+}
+
+function buildPackagesForMatchedBoxRule(rule, qty, unitWeight) {
+  const box = rule?.box;
+  if (!box) return [];
+  const maxQty = parsePositiveNumber(rule?.max_quantity_per_box);
+  const maxWeight = parsePositiveNumber(rule?.max_weight_per_box);
+  const totalQty = Math.max(1, Math.trunc(qty));
+  const totalWeight = Math.max(1, unitWeight * totalQty);
+  const qtyLimit = maxQty != null ? Math.max(1, Math.trunc(maxQty)) : totalQty;
+  const boxesByQty = Math.max(1, Math.ceil(totalQty / qtyLimit));
+  const boxesByWeight = maxWeight != null ? Math.max(1, Math.ceil(totalWeight / maxWeight)) : 1;
+  const boxCount = Math.max(boxesByQty, boxesByWeight);
+  const packages = [];
+  let remainingWeight = totalWeight;
+  for (let i = 0; i < boxCount; i += 1) {
+    const remainingBoxes = boxCount - i;
+    const idealWeight = remainingWeight / remainingBoxes;
+    const cappedWeight = maxWeight != null ? Math.min(maxWeight, idealWeight) : idealWeight;
+    const weight = Math.max(1, Math.round(cappedWeight * 100) / 100);
+    packages.push({
+      weight,
+      length: Math.max(1, Math.ceil(box.length)),
+      width: Math.max(1, Math.ceil(box.width)),
+      height: Math.max(1, Math.ceil(box.height)),
+    });
+    remainingWeight = Math.max(0, remainingWeight - cappedWeight);
+  }
+  return packages;
+}
+
+function firstActiveShippingBoxRuleWithBox(item) {
+  const rules = shippingBoxRulesFromItem(item)
+    .filter((rule) => rule?.is_active !== false)
+    .sort((a, b) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0));
+  if (rules.length === 0) return null;
+  const box = ruleBox(rules[0]);
+  if (!box) return null;
+  return { ...rules[0], box };
 }
 
 function isHardwareFedexLine(item) {
@@ -118,32 +176,26 @@ function buildFedexPackagesFromShippableCartItems(cartItems) {
   let maxWid = 0;
   let maxHt = 0;
   let sumWeight = 0;
+  const packages = [];
 
   for (const item of shippable) {
     const qty = billableQtyFromItem(item);
     const itemWidth = Number(item.width ?? item.width_inches) || 0;
     const itemHeight = Number(item.height ?? item.height_inches) || 0;
     const isHardware = isHardwareFedexLine(item);
-    const box = isHardware ? null : findMatchingShippingBoxRule(item, itemWidth, itemHeight);
-    if (box) {
-      const storedWeight = parsePositiveNumber(
-        item.shipping_weight ??
-          item.shippingWeight ??
-          item.weight ??
-          item.pricing_snapshot?.shipping_weight ??
-          item.pricing_snapshot?.shippingWeight
-      );
-      maxLen = Math.max(maxLen, Math.ceil(box.length));
-      maxWid = Math.max(maxWid, Math.ceil(box.width));
-      maxHt = Math.max(maxHt, Math.ceil(box.height));
-      sumWeight += (storedWeight != null ? storedWeight : 1) * qty;
+    const hw = hardwareShippingFromCartLine(item);
+    const matchedRule = isHardware
+      ? firstActiveShippingBoxRuleWithBox(item)
+      : findMatchingShippingBoxRule(item, itemWidth, itemHeight);
+    if (matchedRule) {
+      const unitWeight = hw ? hw.weightPerUnit : unitWeightForBoxRuleItem(item, itemWidth, itemHeight);
+      packages.push(...buildPackagesForMatchedBoxRule(matchedRule, qty, unitWeight));
       continue;
     }
     if (!isHardware && hasActiveShippingBoxRules(item)) {
       throw new Error('Shipping box is not configured for this size. Please contact admin.');
     }
 
-    const hw = hardwareShippingFromCartLine(item);
     if (hw) {
       maxLen = Math.max(maxLen, Math.ceil(hw.length));
       maxWid = Math.max(maxWid, Math.ceil(hw.width));
@@ -165,7 +217,10 @@ function buildFedexPackagesFromShippableCartItems(cartItems) {
   const roundedWt = Math.round(sumWeight * 100) / 100;
   const weight = Math.max(1, roundedWt);
 
-  return [{ weight, length, width, height }];
+  if (sumWeight > 0 || packages.length === 0) {
+    packages.push({ weight, length, width, height });
+  }
+  return packages;
 }
 
 module.exports = {

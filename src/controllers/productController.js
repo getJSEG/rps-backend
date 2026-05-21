@@ -93,6 +93,8 @@ function parseShippingBoxRulesInput(value) {
           : parseInt(String(item.shipping_box_id), 10),
       min_smallest_side: asNumberOrNull(item?.min_smallest_side),
       max_smallest_side: asNumberOrNull(item?.max_smallest_side),
+      max_quantity_per_box: asIntegerOrNull(item?.max_quantity_per_box),
+      max_weight_per_box: asNumberOrNull(item?.max_weight_per_box),
       is_active: item?.is_active !== false,
     }))
     .filter((item) => item.shipping_box_id != null);
@@ -113,19 +115,27 @@ async function replaceProductShippingBoxRules(productId, rules) {
     ) {
       throw new Error('Box rule minimum smallest side cannot be greater than maximum.');
     }
+    if (!Number.isFinite(Number(rule.max_quantity_per_box)) || Number(rule.max_quantity_per_box) <= 0) {
+      throw new Error('Box rule max quantity per box is required.');
+    }
+    if (rule.max_weight_per_box != null && (!Number.isFinite(Number(rule.max_weight_per_box)) || Number(rule.max_weight_per_box) <= 0)) {
+      throw new Error('Box rule max weight per box must be greater than zero.');
+    }
     const check = await pool.query('SELECT id FROM shipping_boxes WHERE id = $1', [rule.shipping_box_id]);
     if (check.rows.length === 0) {
       throw new Error('Selected shipping box does not exist.');
     }
     await pool.query(
       `INSERT INTO product_shipping_box_rules
-       (product_id, shipping_box_id, min_smallest_side, max_smallest_side, sort_order, is_active)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+       (product_id, shipping_box_id, min_smallest_side, max_smallest_side, max_quantity_per_box, max_weight_per_box, sort_order, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
         productId,
         rule.shipping_box_id,
         rule.min_smallest_side,
         rule.max_smallest_side,
+        Math.trunc(Number(rule.max_quantity_per_box)),
+        rule.max_weight_per_box == null ? null : rule.max_weight_per_box,
         i,
         rule.is_active !== false,
       ]
@@ -141,6 +151,8 @@ async function getProductShippingBoxRules(productId) {
        r.shipping_box_id,
        r.min_smallest_side,
        r.max_smallest_side,
+       r.max_quantity_per_box,
+       r.max_weight_per_box,
        r.sort_order,
        r.is_active,
        b.name AS box_name,
@@ -159,6 +171,8 @@ async function getProductShippingBoxRules(productId) {
     shipping_box_id: Number(row.shipping_box_id),
     min_smallest_side: row.min_smallest_side == null ? null : Number(row.min_smallest_side),
     max_smallest_side: row.max_smallest_side == null ? null : Number(row.max_smallest_side),
+    max_quantity_per_box: row.max_quantity_per_box == null ? null : Number(row.max_quantity_per_box),
+    max_weight_per_box: row.max_weight_per_box == null ? null : Number(row.max_weight_per_box),
     sort_order: Number(row.sort_order || 0),
     is_active: row.is_active !== false,
     box: {
@@ -1701,6 +1715,7 @@ const createProduct = async (req, res) => {
       hardware_template_id,
       purchase_options,
       weight,
+      weight_per_sqft,
       length,
       shipping_length,
       shipping_width,
@@ -1748,14 +1763,13 @@ const createProduct = async (req, res) => {
     const minHeightVal = asNumberOrNull(min_height);
     const maxHeightVal = asNumberOrNull(max_height);
     const weightVal = asNumberOrNull(weight);
+    const weightPerSqftVal = asNumberOrNull(weight_per_sqft);
     const lengthVal = asNumberOrNull(length);
     const shippingLengthVal = asNumberOrNull(shipping_length);
     const shippingWidthVal = asNumberOrNull(shipping_width);
     const shippingHeightVal = asNumberOrNull(shipping_height);
     const shippingWeightVal = asNumberOrNull(shipping_weight);
-    const parsedShippingBoxRules = graphicScenarioEnabledVal
-      ? []
-      : parseShippingBoxRulesInput(shipping_box_rules);
+    const parsedShippingBoxRules = parseShippingBoxRulesInput(shipping_box_rules);
     const fedexShippingValidationError = validateFedexShippingDataForHardware({
       isHardware: graphicScenarioEnabledVal,
       shippingLength: shippingLengthVal,
@@ -1778,6 +1792,9 @@ const createProduct = async (req, res) => {
     const parsedSizeOptions = parseSizeOptionsInput(size_options);
     if (sizeModeVal === 'predefined' && parsedSizeOptions.length === 0) {
       return res.status(400).json({ message: 'size_options are required when size_mode is predefined.' });
+    }
+    if (!graphicScenarioEnabledVal && parsedShippingBoxRules.length > 0 && !(weightPerSqftVal > 0)) {
+      return res.status(400).json({ message: 'Weight per sq ft is required when shipping box rules are configured.' });
     }
 
     const result = await pool.query(
@@ -1814,6 +1831,7 @@ const createProduct = async (req, res) => {
         graphicScenarioEnabledVal,
         hardwareTemplateIdVal,
         weightVal,
+        weightPerSqftVal,
         lengthVal,
         shippingLengthVal,
         shippingWidthVal,
@@ -1908,6 +1926,8 @@ const updateProduct = async (req, res) => {
     const isActiveVal = req.body.is_active !== undefined ? (req.body.is_active !== false && req.body.is_active !== 'false') : row.is_active;
     const skuVal = req.body.sku !== undefined ? req.body.sku : row.sku;
     const weightVal = req.body.weight !== undefined ? asNumberOrNull(req.body.weight) : row.weight;
+    const weightPerSqftVal =
+      req.body.weight_per_sqft !== undefined ? asNumberOrNull(req.body.weight_per_sqft) : row.weight_per_sqft;
     const lengthVal = req.body.length !== undefined ? asNumberOrNull(req.body.length) : row.length;
     const shippingLengthVal =
       req.body.shipping_length !== undefined ? asNumberOrNull(req.body.shipping_length) : row.shipping_length;
@@ -1917,11 +1937,9 @@ const updateProduct = async (req, res) => {
       req.body.shipping_height !== undefined ? asNumberOrNull(req.body.shipping_height) : row.shipping_height;
     const shippingWeightVal =
       req.body.shipping_weight !== undefined ? asNumberOrNull(req.body.shipping_weight) : row.shipping_weight;
-    const parsedShippingBoxRules = graphicScenarioEnabledVal
-      ? []
-      : (req.body.shipping_box_rules !== undefined
+    const parsedShippingBoxRules = req.body.shipping_box_rules !== undefined
           ? parseShippingBoxRulesInput(req.body.shipping_box_rules)
-          : null);
+          : null;
     const fedexShippingValidationError = validateFedexShippingDataForHardware({
       isHardware: graphicScenarioEnabledVal,
       shippingLength: shippingLengthVal,
@@ -1958,6 +1976,13 @@ const updateProduct = async (req, res) => {
       : await getProductSizeOptions(id);
     if (sizeModeVal === 'predefined' && parsedSizeOptions.length === 0) {
       return res.status(400).json({ message: 'size_options are required when size_mode is predefined.' });
+    }
+    const effectiveShippingBoxRuleCount =
+      parsedShippingBoxRules !== null
+        ? parsedShippingBoxRules.length
+        : (graphicScenarioEnabledVal ? 0 : (await getProductShippingBoxRules(id)).length);
+    if (!graphicScenarioEnabledVal && effectiveShippingBoxRuleCount > 0 && !(weightPerSqftVal > 0)) {
+      return res.status(400).json({ message: 'Weight per sq ft is required when shipping box rules are configured.' });
     }
     const parsedPurchaseOptions = req.body.purchase_options !== undefined
       ? parsePurchaseOptionsInput(req.body.purchase_options)

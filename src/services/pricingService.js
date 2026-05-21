@@ -95,6 +95,7 @@ async function getProductPricingConfig(productId) {
       p.graphic_scenario_enabled,
       p.hardware_template_id,
       p.weight,
+      p.weight_per_sqft,
       p.length,
       p.shipping_length,
       p.shipping_width,
@@ -158,6 +159,8 @@ async function getProductPricingConfig(productId) {
        r.shipping_box_id,
        r.min_smallest_side,
        r.max_smallest_side,
+       r.max_quantity_per_box,
+       r.max_weight_per_box,
        r.sort_order,
        r.is_active,
        b.name AS box_name,
@@ -209,6 +212,8 @@ async function getProductPricingConfig(productId) {
       shipping_box_id: Number(row.shipping_box_id),
       min_smallest_side: row.min_smallest_side == null ? null : Number(row.min_smallest_side),
       max_smallest_side: row.max_smallest_side == null ? null : Number(row.max_smallest_side),
+      max_quantity_per_box: row.max_quantity_per_box == null ? null : Number(row.max_quantity_per_box),
+      max_weight_per_box: row.max_weight_per_box == null ? null : Number(row.max_weight_per_box),
       sort_order: Number(row.sort_order || 0),
       is_active: row.is_active !== false,
       box: {
@@ -579,12 +584,18 @@ function attachShippingSnapshot(result, productRow, input) {
   const shippingBoxRules = Array.isArray(productRow.shipping_box_rules)
     ? productRow.shipping_box_rules
     : [];
-  if (!hasHardware && shippingBoxRules.length > 0) {
+  if (shippingBoxRules.length > 0) {
     result.shipping_box_rules = shippingBoxRules;
     result.shippingBoxRules = shippingBoxRules;
+    const weightPerSqft = asNumber(productRow.weight_per_sqft);
+    if (!hasHardware && weightPerSqft > 0) {
+      result.weight_per_sqft = weightPerSqft;
+      result.weightPerSqft = weightPerSqft;
+    }
     result.pricing_snapshot = {
       ...result.pricing_snapshot,
       shipping_box_rules: shippingBoxRules,
+      ...(!hasHardware && weightPerSqft > 0 ? { weight_per_sqft: weightPerSqft } : {}),
     };
   }
 
