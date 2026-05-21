@@ -598,20 +598,27 @@ async function getRateQuotes(destinationInput, packagesInput) {
   const cachedRates = getCachedRates(cacheKey);
   if (cachedRates) return cachedRates;
 
-  const basePayload = buildRatePayload({
-    shipperAddr,
-    recipientAddr,
-    packages,
-    totalPackageCount,
-    shipDatestamp,
-  });
-  const baseData = await fedexRequest('/rate/v1/rates/quotes', basePayload, { retryOnceOn5xx: true });
-  const baseRates = ratesFromFedexResponse(baseData);
-
   /** Sequential probes + spacing: parallel bursts often lose most services on sandbox (429/throttle). */
   const probes = rateServiceProbes();
   const probeDelayMs = fedexRateProbeDelayMs();
   const debugRates = fedexRatesDebugEnabled();
+  let baseRates = [];
+  try {
+    const basePayload = buildRatePayload({
+      shipperAddr,
+      recipientAddr,
+      packages,
+      totalPackageCount,
+      shipDatestamp,
+    });
+    const baseData = await fedexRequest('/rate/v1/rates/quotes', basePayload, { retryOnceOn5xx: true });
+    baseRates = ratesFromFedexResponse(baseData);
+  } catch (e) {
+    if (debugRates) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn('[FedEx rates] base quote failed, continuing service probes:', msg);
+    }
+  }
   const probeRateArrays = [];
   for (let i = 0; i < probes.length; i += 1) {
     const serviceType = probes[i];
