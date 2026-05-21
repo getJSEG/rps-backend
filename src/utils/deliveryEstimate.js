@@ -1,3 +1,5 @@
+const { normalizeProductionTimeRules, productionTimeBusinessDaysForQuantity } = require('./productionTimeRules');
+
 const FEDEX_SERVICE_TRANSIT_BUSINESS_DAYS = {
   FIRST_OVERNIGHT: 1,
   PRIORITY_OVERNIGHT: 1,
@@ -50,14 +52,29 @@ function productionTimeBusinessDays(value) {
   return Math.trunc(n);
 }
 
+function productionTimeQuantityFromItem(item) {
+  const jobs = Array.isArray(item?.jobs) ? item.jobs : [];
+  if (jobs.length > 0) {
+    return jobs.reduce((sum, job) => sum + Math.max(1, Math.trunc(Number(job?.quantity) || 1)), 0);
+  }
+  return Math.max(1, Math.trunc(Number(item?.quantity) || 1));
+}
+
 function maxProductionTimeBusinessDays(items) {
   return (Array.isArray(items) ? items : []).reduce((max, item) => {
     const snap = item && typeof item.pricing_snapshot === 'object' ? item.pricing_snapshot : {};
+    const rules =
+      item?.productionTimeRules ??
+      item?.production_time_rules ??
+      snap.productionTimeRules ??
+      snap.production_time_rules;
+    const productionDays = productionTimeBusinessDaysForQuantity(
+      productionTimeQuantityFromItem(item),
+      rules
+    );
     return Math.max(
       max,
-      productionTimeBusinessDays(
-        item?.productionTime ?? item?.production_time ?? snap.productionTime ?? snap.production_time
-      )
+      productionDays
     );
   }, 0);
 }

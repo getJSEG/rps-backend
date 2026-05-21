@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { uploadFromBuffer, isConfigured: spacesConfigured } = require('../utils/spaces');
 const { getProductPricingConfig, validateAndCalculatePricing } = require('../services/pricingService');
+const { normalizeProductionTimeRules, validateProductionTimeRules } = require('../utils/productionTimeRules');
 
 /** @param {unknown} value */
 function normalizeGalleryArrayInput(value) {
@@ -1707,6 +1708,7 @@ const createProduct = async (req, res) => {
       shipping_weight,
       shipping_box_rules,
       production_time,
+      production_time_rules,
       product_highlights,
     } = req.body;
     if (!name) return res.status(400).json({ message: 'Product name is required' });
@@ -1765,6 +1767,11 @@ const createProduct = async (req, res) => {
       return res.status(400).json({ message: fedexShippingValidationError });
     }
     const productionTimeVal = asIntegerOrNull(production_time);
+    const productionTimeRulesResult = validateProductionTimeRules(production_time_rules);
+    if (productionTimeRulesResult.error) {
+      return res.status(400).json({ message: productionTimeRulesResult.error });
+    }
+    const productionTimeRulesVal = JSON.stringify(productionTimeRulesResult.rules);
     const highlightsVal = Array.isArray(product_highlights)
       ? JSON.stringify(product_highlights.map(String).filter((s) => s.trim()))
       : '[]';
@@ -1774,8 +1781,8 @@ const createProduct = async (req, res) => {
     }
 
     const result = await pool.query(
-      `INSERT INTO products (name, slug, description, spec, file_setup, installation_guide, faq, category_id, subcategory, price, price_per_sqft, min_charge, material, image_url, is_new, is_active, sku, properties, gallery_images, pricing_mode, size_mode, base_unit, min_width, max_width, min_height, max_height, graphic_scenario_enabled, hardware_template_id, weight, length, shipping_length, shipping_width, shipping_height, shipping_weight, production_time, product_highlights)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36::jsonb)
+      `INSERT INTO products (name, slug, description, spec, file_setup, installation_guide, faq, category_id, subcategory, price, price_per_sqft, min_charge, material, image_url, is_new, is_active, sku, properties, gallery_images, pricing_mode, size_mode, base_unit, min_width, max_width, min_height, max_height, graphic_scenario_enabled, hardware_template_id, weight, length, shipping_length, shipping_width, shipping_height, shipping_weight, production_time, production_time_rules, product_highlights)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36::jsonb, $37::jsonb)
        RETURNING *`,
       [
         name,
@@ -1813,6 +1820,7 @@ const createProduct = async (req, res) => {
         shippingHeightVal,
         shippingWeightVal,
         productionTimeVal,
+        productionTimeRulesVal,
         highlightsVal,
       ]
     );
@@ -1926,6 +1934,14 @@ const updateProduct = async (req, res) => {
     }
     const productionTimeVal =
       req.body.production_time !== undefined ? asIntegerOrNull(req.body.production_time) : row.production_time;
+    const productionTimeRulesResult =
+      req.body.production_time_rules !== undefined
+        ? validateProductionTimeRules(req.body.production_time_rules)
+        : { rules: normalizeProductionTimeRules(row.production_time_rules) };
+    if (productionTimeRulesResult.error) {
+      return res.status(400).json({ message: productionTimeRulesResult.error });
+    }
+    const productionTimeRulesVal = JSON.stringify(productionTimeRulesResult.rules);
     const highlightsVal = req.body.product_highlights !== undefined
       ? (Array.isArray(req.body.product_highlights)
           ? JSON.stringify(req.body.product_highlights.map(String).filter((s) => s.trim()))
@@ -1947,8 +1963,8 @@ const updateProduct = async (req, res) => {
       ? parsePurchaseOptionsInput(req.body.purchase_options)
       : null;
     const result = await pool.query(
-      `UPDATE products SET name = $1, slug = $2, description = $3, spec = $4, file_setup = $5, installation_guide = $6, faq = $7::jsonb, category_id = $8, subcategory = $9, price = $10, price_per_sqft = $11, min_charge = $12, material = $13, image_url = $14, is_new = $15, is_active = $16, sku = $17, properties = $18::jsonb, gallery_images = $19::jsonb, pricing_mode = $20, size_mode = $21, base_unit = $22, min_width = $23, max_width = $24, min_height = $25, max_height = $26, graphic_scenario_enabled = $27, hardware_template_id = $28, weight = $29, length = $30, shipping_length = $31, shipping_width = $32, shipping_height = $33, shipping_weight = $34, production_time = $35, product_highlights = $36::jsonb, updated_at = CURRENT_TIMESTAMP WHERE id = $37 RETURNING *`,
-      [nameVal, slugVal, descriptionVal, specVal, fileSetupVal, installationGuideVal, faqVal, categoryIdVal, subcategoryVal, priceVal, pricePerSqftVal, minChargeVal, materialVal, imageUrlVal, isNewVal, isActiveVal, skuVal, propertiesVal, galleryJson, pricingModeVal, sizeModeVal, baseUnitVal, minWidthVal, maxWidthVal, minHeightVal, maxHeightVal, graphicScenarioEnabledVal, hardwareTemplateIdVal, weightVal, lengthVal, shippingLengthVal, shippingWidthVal, shippingHeightVal, shippingWeightVal, productionTimeVal, highlightsVal, id]
+      `UPDATE products SET name = $1, slug = $2, description = $3, spec = $4, file_setup = $5, installation_guide = $6, faq = $7::jsonb, category_id = $8, subcategory = $9, price = $10, price_per_sqft = $11, min_charge = $12, material = $13, image_url = $14, is_new = $15, is_active = $16, sku = $17, properties = $18::jsonb, gallery_images = $19::jsonb, pricing_mode = $20, size_mode = $21, base_unit = $22, min_width = $23, max_width = $24, min_height = $25, max_height = $26, graphic_scenario_enabled = $27, hardware_template_id = $28, weight = $29, length = $30, shipping_length = $31, shipping_width = $32, shipping_height = $33, shipping_weight = $34, production_time = $35, production_time_rules = $36::jsonb, product_highlights = $37::jsonb, updated_at = CURRENT_TIMESTAMP WHERE id = $38 RETURNING *`,
+      [nameVal, slugVal, descriptionVal, specVal, fileSetupVal, installationGuideVal, faqVal, categoryIdVal, subcategoryVal, priceVal, pricePerSqftVal, minChargeVal, materialVal, imageUrlVal, isNewVal, isActiveVal, skuVal, propertiesVal, galleryJson, pricingModeVal, sizeModeVal, baseUnitVal, minWidthVal, maxWidthVal, minHeightVal, maxHeightVal, graphicScenarioEnabledVal, hardwareTemplateIdVal, weightVal, lengthVal, shippingLengthVal, shippingWidthVal, shippingHeightVal, shippingWeightVal, productionTimeVal, productionTimeRulesVal, highlightsVal, id]
     );
     const updated = result.rows[0];
     await replaceProductSizeOptions(id, parsedSizeOptions);

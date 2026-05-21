@@ -1,5 +1,6 @@
 const pool = require('../config/database');
 const { isPersistedFedexQuotedServiceType } = require('../utils/fedexQuoteServiceType');
+const { productionTimeBusinessDaysForQuantity } = require('../utils/productionTimeRules');
 
 const PRICING_MODE = {
   FIXED: 'fixed',
@@ -98,7 +99,8 @@ async function getProductPricingConfig(productId) {
       p.shipping_length,
       p.shipping_width,
       p.shipping_height,
-      p.shipping_weight
+      p.shipping_weight,
+      p.production_time_rules
     FROM products p
     WHERE p.id = $1`,
     [productId]
@@ -692,10 +694,10 @@ function buildCartSnapshot(pricing, input, productRow) {
   const shippingRateEstimatedDelivery = String(
     input.shippingRateEstimatedDelivery ?? input.shipping_rate_estimated_delivery ?? ''
   ).trim();
-  const productionTimeRaw = input.productionTime ?? input.production_time ?? productRow.production_time;
-  const productionTime = Number(productionTimeRaw);
-  const productionTimeDays =
-    Number.isFinite(productionTime) && productionTime > 0 ? Math.trunc(productionTime) : null;
+  const productionTimeDays = productionTimeBusinessDaysForQuantity(
+    quantity,
+    productRow.production_time_rules
+  );
   const result = {
     productId: pricing.productId,
     productName: pricing.productName,
@@ -730,6 +732,8 @@ function buildCartSnapshot(pricing, input, productRow) {
     purchase_option_label: pricing.purchaseOptionLabel,
     productionTime: productionTimeDays,
     production_time: productionTimeDays,
+    productionTimeRules: productRow.production_time_rules || [],
+    production_time_rules: productRow.production_time_rules || [],
     unitPrice: pricing.unitPrice,
     baseUnitPrice: pricing.baseUnitPrice,
     modifierTotal: pricing.modifierTotal,
@@ -750,6 +754,7 @@ function buildCartSnapshot(pricing, input, productRow) {
       purchase_option_key: pricing.purchaseOptionKey,
       purchase_option_label: pricing.purchaseOptionLabel,
       production_time: productionTimeDays,
+      production_time_rules: productRow.production_time_rules || [],
       width: pricing.width,
       height: pricing.height,
       area_sqft: pricing.areaSqft,

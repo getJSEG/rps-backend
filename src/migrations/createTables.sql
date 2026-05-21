@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS products (
     is_active BOOLEAN DEFAULT true,
     stock_quantity INTEGER DEFAULT 0,
     sku VARCHAR(100),
+    production_time_rules JSONB DEFAULT '[]'::jsonb,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -185,4 +186,3 @@ CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id);
 CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
 CREATE INDEX IF NOT EXISTS idx_favorites_user ON favorites(user_id);
 CREATE INDEX IF NOT EXISTS idx_addresses_user ON addresses(user_id);
-
