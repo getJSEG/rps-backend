@@ -92,6 +92,8 @@ function parseShippingBoxRulesInput(value) {
           : parseInt(String(item.shipping_box_id), 10),
       min_smallest_side: asNumberOrNull(item?.min_smallest_side),
       max_smallest_side: asNumberOrNull(item?.max_smallest_side),
+      max_quantity_per_box: asIntegerOrNull(item?.max_quantity_per_box),
+      max_weight_per_box: asNumberOrNull(item?.max_weight_per_box),
       is_active: item?.is_active !== false,
     }))
     .filter((item) => item.shipping_box_id != null);
@@ -112,19 +114,27 @@ async function replaceProductShippingBoxRules(productId, rules) {
     ) {
       throw new Error('Box rule minimum smallest side cannot be greater than maximum.');
     }
+    if (!Number.isFinite(Number(rule.max_quantity_per_box)) || Number(rule.max_quantity_per_box) <= 0) {
+      throw new Error('Box rule max quantity per box is required.');
+    }
+    if (rule.max_weight_per_box != null && (!Number.isFinite(Number(rule.max_weight_per_box)) || Number(rule.max_weight_per_box) <= 0)) {
+      throw new Error('Box rule max weight per box must be greater than zero.');
+    }
     const check = await pool.query('SELECT id FROM shipping_boxes WHERE id = $1', [rule.shipping_box_id]);
     if (check.rows.length === 0) {
       throw new Error('Selected shipping box does not exist.');
     }
     await pool.query(
       `INSERT INTO product_shipping_box_rules
-       (product_id, shipping_box_id, min_smallest_side, max_smallest_side, sort_order, is_active)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+       (product_id, shipping_box_id, min_smallest_side, max_smallest_side, max_quantity_per_box, max_weight_per_box, sort_order, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
         productId,
         rule.shipping_box_id,
         rule.min_smallest_side,
         rule.max_smallest_side,
+        Math.trunc(Number(rule.max_quantity_per_box)),
+        rule.max_weight_per_box == null ? null : rule.max_weight_per_box,
         i,
         rule.is_active !== false,
       ]
@@ -140,6 +150,8 @@ async function getProductShippingBoxRules(productId) {
        r.shipping_box_id,
        r.min_smallest_side,
        r.max_smallest_side,
+       r.max_quantity_per_box,
+       r.max_weight_per_box,
        r.sort_order,
        r.is_active,
        b.name AS box_name,
@@ -158,6 +170,8 @@ async function getProductShippingBoxRules(productId) {
     shipping_box_id: Number(row.shipping_box_id),
     min_smallest_side: row.min_smallest_side == null ? null : Number(row.min_smallest_side),
     max_smallest_side: row.max_smallest_side == null ? null : Number(row.max_smallest_side),
+    max_quantity_per_box: row.max_quantity_per_box == null ? null : Number(row.max_quantity_per_box),
+    max_weight_per_box: row.max_weight_per_box == null ? null : Number(row.max_weight_per_box),
     sort_order: Number(row.sort_order || 0),
     is_active: row.is_active !== false,
     box: {
@@ -1700,6 +1714,7 @@ const createProduct = async (req, res) => {
       hardware_template_id,
       purchase_options,
       weight,
+      weight_per_sqft,
       length,
       shipping_length,
       shipping_width,
@@ -1746,14 +1761,13 @@ const createProduct = async (req, res) => {
     const minHeightVal = asNumberOrNull(min_height);
     const maxHeightVal = asNumberOrNull(max_height);
     const weightVal = asNumberOrNull(weight);
+    const weightPerSqftVal = asNumberOrNull(weight_per_sqft);
     const lengthVal = asNumberOrNull(length);
     const shippingLengthVal = asNumberOrNull(shipping_length);
     const shippingWidthVal = asNumberOrNull(shipping_width);
     const shippingHeightVal = asNumberOrNull(shipping_height);
     const shippingWeightVal = asNumberOrNull(shipping_weight);
-    const parsedShippingBoxRules = graphicScenarioEnabledVal
-      ? []
-      : parseShippingBoxRulesInput(shipping_box_rules);
+    const parsedShippingBoxRules = parseShippingBoxRulesInput(shipping_box_rules);
     const fedexShippingValidationError = validateFedexShippingDataForHardware({
       isHardware: graphicScenarioEnabledVal,
       shippingLength: shippingLengthVal,
@@ -1772,10 +1786,13 @@ const createProduct = async (req, res) => {
     if (sizeModeVal === 'predefined' && parsedSizeOptions.length === 0) {
       return res.status(400).json({ message: 'size_options are required when size_mode is predefined.' });
     }
+    if (!graphicScenarioEnabledVal && parsedShippingBoxRules.length > 0 && !(weightPerSqftVal > 0)) {
+      return res.status(400).json({ message: 'Weight per sq ft is required when shipping box rules are configured.' });
+    }
 
     const result = await pool.query(
-      `INSERT INTO products (name, slug, description, spec, file_setup, installation_guide, faq, category_id, subcategory, price, price_per_sqft, min_charge, material, image_url, is_new, is_active, sku, properties, gallery_images, pricing_mode, size_mode, base_unit, min_width, max_width, min_height, max_height, graphic_scenario_enabled, hardware_template_id, weight, length, shipping_length, shipping_width, shipping_height, shipping_weight, production_time, product_highlights)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36::jsonb)
+      `INSERT INTO products (name, slug, description, spec, file_setup, installation_guide, faq, category_id, subcategory, price, price_per_sqft, min_charge, material, image_url, is_new, is_active, sku, properties, gallery_images, pricing_mode, size_mode, base_unit, min_width, max_width, min_height, max_height, graphic_scenario_enabled, hardware_template_id, weight, weight_per_sqft, length, shipping_length, shipping_width, shipping_height, shipping_weight, production_time, product_highlights)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37::jsonb)
        RETURNING *`,
       [
         name,
@@ -1807,6 +1824,7 @@ const createProduct = async (req, res) => {
         graphicScenarioEnabledVal,
         hardwareTemplateIdVal,
         weightVal,
+        weightPerSqftVal,
         lengthVal,
         shippingLengthVal,
         shippingWidthVal,
@@ -1900,6 +1918,8 @@ const updateProduct = async (req, res) => {
     const isActiveVal = req.body.is_active !== undefined ? (req.body.is_active !== false && req.body.is_active !== 'false') : row.is_active;
     const skuVal = req.body.sku !== undefined ? req.body.sku : row.sku;
     const weightVal = req.body.weight !== undefined ? asNumberOrNull(req.body.weight) : row.weight;
+    const weightPerSqftVal =
+      req.body.weight_per_sqft !== undefined ? asNumberOrNull(req.body.weight_per_sqft) : row.weight_per_sqft;
     const lengthVal = req.body.length !== undefined ? asNumberOrNull(req.body.length) : row.length;
     const shippingLengthVal =
       req.body.shipping_length !== undefined ? asNumberOrNull(req.body.shipping_length) : row.shipping_length;
@@ -1909,11 +1929,9 @@ const updateProduct = async (req, res) => {
       req.body.shipping_height !== undefined ? asNumberOrNull(req.body.shipping_height) : row.shipping_height;
     const shippingWeightVal =
       req.body.shipping_weight !== undefined ? asNumberOrNull(req.body.shipping_weight) : row.shipping_weight;
-    const parsedShippingBoxRules = graphicScenarioEnabledVal
-      ? []
-      : (req.body.shipping_box_rules !== undefined
+    const parsedShippingBoxRules = req.body.shipping_box_rules !== undefined
           ? parseShippingBoxRulesInput(req.body.shipping_box_rules)
-          : null);
+          : null;
     const fedexShippingValidationError = validateFedexShippingDataForHardware({
       isHardware: graphicScenarioEnabledVal,
       shippingLength: shippingLengthVal,
@@ -1943,12 +1961,19 @@ const updateProduct = async (req, res) => {
     if (sizeModeVal === 'predefined' && parsedSizeOptions.length === 0) {
       return res.status(400).json({ message: 'size_options are required when size_mode is predefined.' });
     }
+    const effectiveShippingBoxRuleCount =
+      parsedShippingBoxRules !== null
+        ? parsedShippingBoxRules.length
+        : (graphicScenarioEnabledVal ? 0 : (await getProductShippingBoxRules(id)).length);
+    if (!graphicScenarioEnabledVal && effectiveShippingBoxRuleCount > 0 && !(weightPerSqftVal > 0)) {
+      return res.status(400).json({ message: 'Weight per sq ft is required when shipping box rules are configured.' });
+    }
     const parsedPurchaseOptions = req.body.purchase_options !== undefined
       ? parsePurchaseOptionsInput(req.body.purchase_options)
       : null;
     const result = await pool.query(
-      `UPDATE products SET name = $1, slug = $2, description = $3, spec = $4, file_setup = $5, installation_guide = $6, faq = $7::jsonb, category_id = $8, subcategory = $9, price = $10, price_per_sqft = $11, min_charge = $12, material = $13, image_url = $14, is_new = $15, is_active = $16, sku = $17, properties = $18::jsonb, gallery_images = $19::jsonb, pricing_mode = $20, size_mode = $21, base_unit = $22, min_width = $23, max_width = $24, min_height = $25, max_height = $26, graphic_scenario_enabled = $27, hardware_template_id = $28, weight = $29, length = $30, shipping_length = $31, shipping_width = $32, shipping_height = $33, shipping_weight = $34, production_time = $35, product_highlights = $36::jsonb, updated_at = CURRENT_TIMESTAMP WHERE id = $37 RETURNING *`,
-      [nameVal, slugVal, descriptionVal, specVal, fileSetupVal, installationGuideVal, faqVal, categoryIdVal, subcategoryVal, priceVal, pricePerSqftVal, minChargeVal, materialVal, imageUrlVal, isNewVal, isActiveVal, skuVal, propertiesVal, galleryJson, pricingModeVal, sizeModeVal, baseUnitVal, minWidthVal, maxWidthVal, minHeightVal, maxHeightVal, graphicScenarioEnabledVal, hardwareTemplateIdVal, weightVal, lengthVal, shippingLengthVal, shippingWidthVal, shippingHeightVal, shippingWeightVal, productionTimeVal, highlightsVal, id]
+      `UPDATE products SET name = $1, slug = $2, description = $3, spec = $4, file_setup = $5, installation_guide = $6, faq = $7::jsonb, category_id = $8, subcategory = $9, price = $10, price_per_sqft = $11, min_charge = $12, material = $13, image_url = $14, is_new = $15, is_active = $16, sku = $17, properties = $18::jsonb, gallery_images = $19::jsonb, pricing_mode = $20, size_mode = $21, base_unit = $22, min_width = $23, max_width = $24, min_height = $25, max_height = $26, graphic_scenario_enabled = $27, hardware_template_id = $28, weight = $29, weight_per_sqft = $30, length = $31, shipping_length = $32, shipping_width = $33, shipping_height = $34, shipping_weight = $35, production_time = $36, product_highlights = $37::jsonb, updated_at = CURRENT_TIMESTAMP WHERE id = $38 RETURNING *`,
+      [nameVal, slugVal, descriptionVal, specVal, fileSetupVal, installationGuideVal, faqVal, categoryIdVal, subcategoryVal, priceVal, pricePerSqftVal, minChargeVal, materialVal, imageUrlVal, isNewVal, isActiveVal, skuVal, propertiesVal, galleryJson, pricingModeVal, sizeModeVal, baseUnitVal, minWidthVal, maxWidthVal, minHeightVal, maxHeightVal, graphicScenarioEnabledVal, hardwareTemplateIdVal, weightVal, weightPerSqftVal, lengthVal, shippingLengthVal, shippingWidthVal, shippingHeightVal, shippingWeightVal, productionTimeVal, highlightsVal, id]
     );
     const updated = result.rows[0];
     await replaceProductSizeOptions(id, parsedSizeOptions);
