@@ -3,7 +3,7 @@ const fs = require("fs");
 const sharp = require("sharp");
 const { PDFDocument } = require("pdf-lib");
 const pool = require("../config/database");
-const { uploadFromBuffer, isConfigured: spacesConfigured } = require("../utils/spaces");
+const { uploadFromBuffer, deleteManyByUrl, isConfigured: spacesConfigured } = require("../utils/spaces");
 
 /** Match frontend `artworkProportion.ts` so pass/fail is consistent. */
 const RATIO_TOLERANCE = 0.06;
@@ -220,6 +220,8 @@ const deleteArtwork = async (req, res) => {
           // Keep request successful even when file cleanup fails.
         }
       }
+    } else {
+      await deleteManyByUrl([deletedUrl]);
     }
     return res.json({ ok: true });
   } catch (error) {

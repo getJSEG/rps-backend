@@ -1,7 +1,7 @@
 const pool = require('../config/database');
 const path = require('path');
 const fs = require('fs');
-const { uploadFromBuffer, isConfigured: spacesConfigured } = require('../utils/spaces');
+const { uploadFromBuffer, deleteManyByUrl, isConfigured: spacesConfigured } = require('../utils/spaces');
 const { getProductPricingConfig, validateAndCalculatePricing } = require('../services/pricingService');
 const { normalizeProductionTimeRules, validateProductionTimeRules } = require('../utils/productionTimeRules');
 
@@ -18,6 +18,26 @@ function galleryFromRow(row) {
   if (Array.isArray(g) && g.length) return g.map((u) => String(u || '').trim()).filter(Boolean);
   if (row.image_url) return [String(row.image_url).trim()];
   return [];
+}
+
+async function deleteStoredImageUrls(urls) {
+  const uniqueUrls = [...new Set((urls || []).map((u) => String(u || '').trim()).filter(Boolean))];
+  const spacesUrls = [];
+  for (const url of uniqueUrls) {
+    if (url.startsWith('/uploads/')) {
+      const fullPath = path.join(__dirname, '../../', url.replace(/^\/+/, ''));
+      if (fs.existsSync(fullPath)) {
+        try {
+          fs.unlinkSync(fullPath);
+        } catch {
+          // Keep the API successful even if local cleanup fails.
+        }
+      }
+    } else {
+      spacesUrls.push(url);
+    }
+  }
+  await deleteManyByUrl(spacesUrls);
 }
 
 function asNumberOrNull(value) {
@@ -1648,6 +1668,9 @@ const updateCategory = async (req, res) => {
       `UPDATE categories SET name = $1, slug = $2, parent_id = $3, description = $4, display_order = $5, image_url = $6 WHERE id = $7 RETURNING *`,
       [nameVal, slugVal, parentIdVal, descVal, orderVal, imageUrlVal, id]
     );
+    if (image_url !== undefined && row.image_url && row.image_url !== imageUrlVal) {
+      await deleteStoredImageUrls([row.image_url]);
+    }
     res.json({ category: result.rows[0] });
   } catch (error) {
     if (error.code === '23505') return res.status(400).json({ message: 'Category slug already exists' });
@@ -1672,8 +1695,9 @@ const deleteCategory = async (req, res) => {
     if (parseInt(children_count) > 0) {
       return res.status(400).json({ message: 'Cannot delete category that has subcategories. Delete subcategories first.' });
     }
-    const result = await pool.query('DELETE FROM categories WHERE id = $1 RETURNING id', [id]);
+    const result = await pool.query('DELETE FROM categories WHERE id = $1 RETURNING id, image_url', [id]);
     if (result.rowCount === 0) return res.status(404).json({ message: 'Category not found' });
+    await deleteStoredImageUrls([result.rows[0].image_url]);
     res.json({ message: 'Category deleted', id: result.rows[0].id });
   } catch (error) {
     console.error('Delete category error:', error);
@@ -1992,6 +2016,11 @@ const updateProduct = async (req, res) => {
       [nameVal, slugVal, descriptionVal, specVal, fileSetupVal, installationGuideVal, faqVal, categoryIdVal, subcategoryVal, priceVal, pricePerSqftVal, minChargeVal, materialVal, imageUrlVal, isNewVal, isActiveVal, skuVal, propertiesVal, galleryJson, pricingModeVal, sizeModeVal, baseUnitVal, minWidthVal, maxWidthVal, minHeightVal, maxHeightVal, graphicScenarioEnabledVal, hardwareTemplateIdVal, weightVal, weightPerSqftVal, lengthVal, shippingLengthVal, shippingWidthVal, shippingHeightVal, shippingWeightVal, productionTimeVal, productionTimeRulesVal, highlightsVal, id]
     );
     const updated = result.rows[0];
+    if (req.body.gallery_images !== undefined || req.body.image_url !== undefined) {
+      const previousUrls = galleryFromRow(row);
+      const currentUrls = galleryFromRow(updated);
+      await deleteStoredImageUrls(previousUrls.filter((url) => !currentUrls.includes(url)));
+    }
     await replaceProductSizeOptions(id, parsedSizeOptions);
     if (parsedPurchaseOptions !== null) {
       await replaceProductPurchaseOptions(id, parsedPurchaseOptions);
@@ -2038,10 +2067,11 @@ const getAllProductsAdmin = async (req, res) => {
 const deleteProductAdmin = async (req, res) => {
   try {
     const { id } = req.params;
-    const result = await pool.query('DELETE FROM products WHERE id = $1 RETURNING id', [id]);
+    const result = await pool.query('DELETE FROM products WHERE id = $1 RETURNING id, image_url, gallery_images', [id]);
     if (result.rows.length === 0) {
       return res.status(404).json({ message: 'Product not found' });
     }
+    await deleteStoredImageUrls(galleryFromRow(result.rows[0]));
     res.json({ message: 'Product deleted', id: result.rows[0].id });
   } catch (error) {
     console.error('Delete product error:', error);

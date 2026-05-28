@@ -1,4 +1,4 @@
-const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const crypto = require('crypto');
 
 /** @typedef {{ region: string, bucket: string, accessKey: string, secretKey: string, endpoint: string, publicBase: string | null, objectAcl: string | null }} SpacesConfig */
@@ -112,8 +112,68 @@ async function uploadFromBuffer(buffer, folderPrefix = 'elmer', opts = {}) {
   return publicUrlForKey(key, cfg);
 }
 
+function keyFromPublicUrl(url, cfg) {
+  const raw = String(url || '').trim();
+  if (!raw || !cfg) return null;
+
+  try {
+    const parsed = new URL(raw);
+    if (cfg.publicBase) {
+      const base = new URL(cfg.publicBase.replace(/\/+$/, ''));
+      if (parsed.origin === base.origin) {
+        const basePath = base.pathname.replace(/\/+$/, '');
+        if (!basePath || parsed.pathname === basePath || parsed.pathname.startsWith(`${basePath}/`)) {
+          return decodeURIComponent(parsed.pathname.slice(basePath.length).replace(/^\/+/, '')) || null;
+        }
+      }
+    }
+
+    const defaultHost = `${cfg.bucket}.${cfg.region}.digitaloceanspaces.com`;
+    if (parsed.hostname === defaultHost) {
+      return decodeURIComponent(parsed.pathname.replace(/^\/+/, '')) || null;
+    }
+
+    const endpointHost = new URL(cfg.endpoint).hostname;
+    if (parsed.hostname === endpointHost) {
+      const pathParts = parsed.pathname.replace(/^\/+/, '').split('/');
+      if (pathParts[0] === cfg.bucket && pathParts.length > 1) {
+        return decodeURIComponent(pathParts.slice(1).join('/')) || null;
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+async function deleteByUrl(url) {
+  const cfg = getConfig();
+  const key = keyFromPublicUrl(url, cfg);
+  if (!cfg || !key) return false;
+  const client = getClient();
+  if (!client) return false;
+
+  await client.send(new DeleteObjectCommand({
+    Bucket: cfg.bucket,
+    Key: key,
+  }));
+  return true;
+}
+
+async function deleteManyByUrl(urls) {
+  const uniqueUrls = [...new Set((urls || []).map((u) => String(u || '').trim()).filter(Boolean))];
+  for (const url of uniqueUrls) {
+    try {
+      await deleteByUrl(url);
+    } catch (error) {
+      console.error('Spaces delete failed:', url, error);
+    }
+  }
+}
+
 function isConfigured() {
   return !!getConfig();
 }
 
-module.exports = { uploadFromBuffer, isConfigured, getConfig };
+module.exports = { uploadFromBuffer, deleteByUrl, deleteManyByUrl, isConfigured, getConfig };

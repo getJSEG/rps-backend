@@ -17,6 +17,7 @@ const {
 const crypto = require('crypto');
 const Stripe = require('stripe');
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
+const { deleteManyByUrl } = require('../utils/spaces');
 
 /**
  * Parsed STRIPE_PAYMENT_ENABLED: true | false | null (null = unset / unknown).
@@ -613,6 +614,9 @@ const approveOrderItemArtwork = async (req, res) => {
     if (!row) {
       return res.status(404).json({ message: APPROVE_ARTWORK_BLOCKED_MESSAGE });
     }
+    if (line.customer_artwork_url && line.customer_artwork_url !== row.customer_artwork_url) {
+      await deleteManyByUrl([line.customer_artwork_url]);
+    }
     const advanced = await orderRepository.maybeAdvanceOrderToProcessingAfterArtwork(orderId);
     return res.status(200).json({
       orderItemId: row.id,
@@ -660,6 +664,9 @@ const approveGuestOrderItemArtwork = async (req, res) => {
     const row = await orderRepository.updateCustomerArtworkForOrderItemByOrderId(orderId, itemId, url);
     if (!row) {
       return res.status(404).json({ message: APPROVE_ARTWORK_BLOCKED_MESSAGE });
+    }
+    if (line.customer_artwork_url && line.customer_artwork_url !== row.customer_artwork_url) {
+      await deleteManyByUrl([line.customer_artwork_url]);
     }
     const advanced = await orderRepository.maybeAdvanceOrderToProcessingAfterArtwork(orderId);
     return res.status(200).json({
@@ -765,10 +772,19 @@ const updateOrderTrackingId = async (req, res) => {
 const deleteOrderAdmin = async (req, res) => {
   try {
     const { id } = req.params;
+    const artworkUrls = await pool.query(
+      `SELECT DISTINCT customer_artwork_url
+       FROM order_items
+       WHERE order_id = $1
+         AND customer_artwork_url IS NOT NULL
+         AND TRIM(customer_artwork_url) <> ''`,
+      [id]
+    );
     const deletedId = await orderRepository.deleteOrderById(id);
     if (deletedId == null) {
       return res.status(404).json({ message: 'Order not found' });
     }
+    await deleteManyByUrl(artworkUrls.rows.map((row) => row.customer_artwork_url));
     res.json({ message: 'Order deleted', id: deletedId });
   } catch (error) {
     console.error('Delete order error:', error);

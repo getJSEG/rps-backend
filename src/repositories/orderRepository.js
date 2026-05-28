@@ -453,6 +453,7 @@ const SQL = {
   SELECT_ORDER_ITEM_FOR_CUSTOMER_ARTWORK: `SELECT
     oi.id,
     oi.order_id,
+    oi.customer_artwork_url,
     oi.width_inches,
     oi.height_inches,
     oi.selection_mode,
@@ -469,6 +470,7 @@ const SQL = {
   SELECT_ORDER_ITEM_ARTWORK_LINE_FOR_ORDER: `SELECT
     oi.id,
     oi.order_id,
+    oi.customer_artwork_url,
     oi.width_inches,
     oi.height_inches,
     oi.selection_mode,

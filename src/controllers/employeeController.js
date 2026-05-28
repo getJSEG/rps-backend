@@ -2,7 +2,7 @@ const bcrypt = require('bcryptjs');
 const path = require('path');
 const fs = require('fs');
 const pool = require('../config/database');
-const { uploadFromBuffer, isConfigured: spacesConfigured } = require('../utils/spaces');
+const { uploadFromBuffer, deleteManyByUrl, isConfigured: spacesConfigured } = require('../utils/spaces');
 const STRONG_PASSWORD_REGEX = /^(?=.*[A-Z])(?=.*\d).+$/;
 
 const FIELDS = 'id, email, full_name, telephone, role, is_active, is_approved, profile_image, hire_date, created_at, updated_at';
@@ -145,10 +145,24 @@ const update = async (req, res) => {
     const { id } = req.params;
     const { full_name, email, telephone, is_active, is_approved, password, role, profile_image, hire_date } = req.body;
 
-    const existing = await pool.query(
-      'SELECT id, email FROM users WHERE id = $1 AND role IN (\'admin\', \'employee\')',
-      [id]
-    );
+    let existing;
+    let existingProfileImage = null;
+    try {
+      existing = await pool.query(
+        'SELECT id, email, profile_image FROM users WHERE id = $1 AND role IN (\'admin\', \'employee\')',
+        [id]
+      );
+      existingProfileImage = existing.rows[0]?.profile_image || null;
+    } catch (queryErr) {
+      if (queryErr.message && queryErr.message.includes('does not exist')) {
+        existing = await pool.query(
+          'SELECT id, email FROM users WHERE id = $1 AND role IN (\'admin\', \'employee\')',
+          [id]
+        );
+      } else {
+        throw queryErr;
+      }
+    }
     if (existing.rows.length === 0) {
       return res.status(404).json({ message: 'Employee not found' });
     }
@@ -253,6 +267,9 @@ const update = async (req, res) => {
     if (!row) {
       return res.status(404).json({ message: 'Employee not found' });
     }
+    if (profile_image !== undefined && existingProfileImage && existingProfileImage !== row.profile_image) {
+      await deleteManyByUrl([existingProfileImage]);
+    }
     res.json({ employee: row });
   } catch (error) {
     console.error('Update employee error:', error);
@@ -265,15 +282,28 @@ const remove = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const result = await pool.query(
-      'DELETE FROM users WHERE id = $1 AND role IN (\'admin\', \'employee\') RETURNING id, email, full_name',
-      [id]
-    );
+    let result;
+    try {
+      result = await pool.query(
+        'DELETE FROM users WHERE id = $1 AND role IN (\'admin\', \'employee\') RETURNING id, email, full_name, profile_image',
+        [id]
+      );
+    } catch (deleteErr) {
+      if (deleteErr.message && deleteErr.message.includes('does not exist')) {
+        result = await pool.query(
+          'DELETE FROM users WHERE id = $1 AND role IN (\'admin\', \'employee\') RETURNING id, email, full_name',
+          [id]
+        );
+      } else {
+        throw deleteErr;
+      }
+    }
 
     if (result.rows.length === 0) {
       return res.status(404).json({ message: 'Employee not found' });
     }
 
+    await deleteManyByUrl([result.rows[0].profile_image]);
     res.json({ message: 'Employee deleted successfully', employee: result.rows[0] });
   } catch (error) {
     console.error('Delete employee error:', error);
