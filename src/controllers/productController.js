@@ -1795,7 +1795,7 @@ const createProduct = async (req, res) => {
     const shippingWeightVal = asNumberOrNull(shipping_weight);
     const parsedShippingBoxRules = parseShippingBoxRulesInput(shipping_box_rules);
     const fedexShippingValidationError = validateFedexShippingDataForHardware({
-      isHardware: graphicScenarioEnabledVal,
+      isHardware: graphicScenarioEnabledVal || pricingModeVal === 'fixed',
       shippingLength: shippingLengthVal,
       shippingWidth: shippingWidthVal,
       shippingHeight: shippingHeightVal,
@@ -1817,7 +1817,7 @@ const createProduct = async (req, res) => {
     if (sizeModeVal === 'predefined' && parsedSizeOptions.length === 0) {
       return res.status(400).json({ message: 'size_options are required when size_mode is predefined.' });
     }
-    if (!graphicScenarioEnabledVal && parsedShippingBoxRules.length > 0 && !(weightPerSqftVal > 0)) {
+    if (!graphicScenarioEnabledVal && pricingModeVal !== 'fixed' && parsedShippingBoxRules.length > 0 && !(weightPerSqftVal > 0)) {
       return res.status(400).json({ message: 'Weight per sq ft is required when shipping box rules are configured.' });
     }
 
@@ -1965,7 +1965,7 @@ const updateProduct = async (req, res) => {
           ? parseShippingBoxRulesInput(req.body.shipping_box_rules)
           : null;
     const fedexShippingValidationError = validateFedexShippingDataForHardware({
-      isHardware: graphicScenarioEnabledVal,
+      isHardware: graphicScenarioEnabledVal || pricingModeVal === 'fixed',
       shippingLength: shippingLengthVal,
       shippingWidth: shippingWidthVal,
       shippingHeight: shippingHeightVal,
@@ -2005,7 +2005,7 @@ const updateProduct = async (req, res) => {
       parsedShippingBoxRules !== null
         ? parsedShippingBoxRules.length
         : (graphicScenarioEnabledVal ? 0 : (await getProductShippingBoxRules(id)).length);
-    if (!graphicScenarioEnabledVal && effectiveShippingBoxRuleCount > 0 && !(weightPerSqftVal > 0)) {
+    if (!graphicScenarioEnabledVal && pricingModeVal !== 'fixed' && effectiveShippingBoxRuleCount > 0 && !(weightPerSqftVal > 0)) {
       return res.status(400).json({ message: 'Weight per sq ft is required when shipping box rules are configured.' });
     }
     const parsedPurchaseOptions = req.body.purchase_options !== undefined

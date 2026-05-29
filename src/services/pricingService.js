@@ -456,7 +456,12 @@ function validateAndCalculatePricing(product, input) {
     height = Number(selectedOption.height);
   }
 
-  if (!isGraphicScenario && sizeMode === SIZE_MODE.CUSTOM) {
+  const fixedCustomWithoutCustomerSize =
+    !isGraphicScenario &&
+    pricingMode === PRICING_MODE.FIXED &&
+    sizeMode === SIZE_MODE.CUSTOM;
+
+  if (!isGraphicScenario && sizeMode === SIZE_MODE.CUSTOM && !fixedCustomWithoutCustomerSize) {
     if (!(width > 0) || !(height > 0)) {
       throw new Error('Valid width and height (in inches) are required for custom size mode.');
     }
@@ -464,6 +469,9 @@ function validateAndCalculatePricing(product, input) {
 
   if (isGraphicScenario) {
     width = 1;
+    height = 1;
+  } else if (fixedCustomWithoutCustomerSize && (!(width > 0) || !(height > 0))) {
+    width = 0;
     height = 1;
   } else if (!(width > 0) || !(height > 0)) {
     throw new Error('Resolved width/height must be greater than zero.');
@@ -473,7 +481,7 @@ function validateAndCalculatePricing(product, input) {
   const maxWidth = asNumber(product.max_width);
   const minHeight = asNumber(product.min_height);
   const maxHeight = asNumber(product.max_height);
-  if (!isGraphicScenario) {
+  if (!isGraphicScenario && !fixedCustomWithoutCustomerSize) {
     if (minWidth != null && width < minWidth) throw new Error(`Width must be at least ${minWidth} inches.`);
     if (maxWidth != null && width > maxWidth) throw new Error(`Width must be at most ${maxWidth} inches.`);
     if (minHeight != null && height < minHeight) throw new Error(`Height must be at least ${minHeight} inches.`);
@@ -531,6 +539,7 @@ function validateAndCalculatePricing(product, input) {
     graphicScenarioEnabled: isGraphicScenario,
     purchaseOptionKey: null,
     purchaseOptionLabel: null,
+    fixedPriceShippingOnly: fixedCustomWithoutCustomerSize,
     selectedModifiers: modifierSelection.selected,
     modifierTotal: modifierSelection.total,
     baseUnitPrice: computedUnitPrice - modifierSelection.total,
@@ -575,11 +584,16 @@ function attachShippingSnapshot(result, productRow, input) {
   if (!result || !productRow) return;
   const htRaw = productRow.hardware_template_id ?? input.hardware_template_id ?? input.hardwareTemplateId;
   const htId = htRaw == null || htRaw === '' ? null : Number(htRaw);
+  const pricingMode = String(productRow.pricing_mode || result.pricing_snapshot?.pricing_mode || '').trim().toLowerCase();
   const hasHardware =
     productRow.graphic_scenario_enabled === true ||
     input.graphic_scenario_enabled === true ||
     input.graphicScenarioEnabled === true ||
     Number.isFinite(htId);
+  const fixedPriceShippingOnly =
+    !hasHardware &&
+    pricingMode === 'fixed' &&
+    result.fixed_price_shipping_only === true;
 
   const shippingBoxRules = Array.isArray(productRow.shipping_box_rules)
     ? productRow.shipping_box_rules
@@ -636,20 +650,41 @@ function attachShippingSnapshot(result, productRow, input) {
     return;
   }
 
-  const standardLength = asNumber(input.shipping_length ?? input.shippingLength ?? productRow.length);
-  const standardWeight = asNumber(input.shipping_weight ?? input.shippingWeight ?? productRow.weight);
+  const standardLength = asNumber(
+    input.shipping_length ?? input.shippingLength ?? (fixedPriceShippingOnly ? productRow.shipping_length : productRow.length)
+  );
+  const standardWidth = asNumber(input.shipping_width ?? input.shippingWidth ?? productRow.shipping_width);
+  const standardHeight = asNumber(input.shipping_height ?? input.shippingHeight ?? productRow.shipping_height);
+  const standardWeight = asNumber(
+    input.shipping_weight ?? input.shippingWeight ?? (fixedPriceShippingOnly ? productRow.shipping_weight : productRow.weight)
+  );
+  if (fixedPriceShippingOnly) {
+    result.fixed_price_shipping_only = true;
+    result.fixedPriceShippingOnly = true;
+  }
   if (standardLength > 0) {
     result.shipping_length = standardLength;
     result.shippingLength = standardLength;
+  }
+  if (fixedPriceShippingOnly && standardWidth > 0) {
+    result.shipping_width = standardWidth;
+    result.shippingWidth = standardWidth;
+  }
+  if (fixedPriceShippingOnly && standardHeight > 0) {
+    result.shipping_height = standardHeight;
+    result.shippingHeight = standardHeight;
   }
   if (standardWeight > 0) {
     result.shipping_weight = standardWeight;
     result.shippingWeight = standardWeight;
   }
-  if (standardLength > 0 || standardWeight > 0) {
+  if (standardLength > 0 || standardWeight > 0 || fixedPriceShippingOnly) {
     result.pricing_snapshot = {
       ...result.pricing_snapshot,
+      ...(fixedPriceShippingOnly ? { fixed_price_shipping_only: true } : {}),
       ...(standardLength > 0 ? { shipping_length: standardLength } : {}),
+      ...(fixedPriceShippingOnly && standardWidth > 0 ? { shipping_width: standardWidth } : {}),
+      ...(fixedPriceShippingOnly && standardHeight > 0 ? { shipping_height: standardHeight } : {}),
       ...(standardWeight > 0 ? { shipping_weight: standardWeight } : {}),
     };
   }
@@ -741,6 +776,8 @@ function buildCartSnapshot(pricing, input, productRow) {
     purchase_option_key: pricing.purchaseOptionKey,
     purchaseOptionLabel: pricing.purchaseOptionLabel,
     purchase_option_label: pricing.purchaseOptionLabel,
+    fixedPriceShippingOnly: pricing.fixedPriceShippingOnly === true,
+    fixed_price_shipping_only: pricing.fixedPriceShippingOnly === true,
     productionTime: productionTimeDays,
     production_time: productionTimeDays,
     productionTimeRules: productRow.production_time_rules || [],
@@ -764,6 +801,7 @@ function buildCartSnapshot(pricing, input, productRow) {
       graphic_scenario_enabled: pricing.graphicScenarioEnabled,
       purchase_option_key: pricing.purchaseOptionKey,
       purchase_option_label: pricing.purchaseOptionLabel,
+      fixed_price_shipping_only: pricing.fixedPriceShippingOnly === true,
       production_time: productionTimeDays,
       production_time_rules: productRow.production_time_rules || [],
       width: pricing.width,

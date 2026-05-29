@@ -150,8 +150,18 @@ function isHardwareFedexLine(item) {
   return Number.isFinite(Number(htRaw));
 }
 
+function isFixedPriceShippingLine(item) {
+  const snap = item?.pricing_snapshot && typeof item.pricing_snapshot === 'object' ? item.pricing_snapshot : {};
+  return (
+    item?.fixed_price_shipping_only === true ||
+    item?.fixedPriceShippingOnly === true ||
+    snap.fixed_price_shipping_only === true ||
+    snap.fixedPriceShippingOnly === true
+  );
+}
+
 function hardwareShippingFromCartLine(item) {
-  if (!isHardwareFedexLine(item)) return null;
+  if (!isHardwareFedexLine(item) && !isFixedPriceShippingLine(item)) return null;
   const snap = item?.pricing_snapshot && typeof item.pricing_snapshot === 'object' ? item.pricing_snapshot : {};
 
   const pick = (snake, camel) =>
@@ -182,7 +192,7 @@ function buildFedexPackagesFromShippableCartItems(cartItems) {
     const qty = billableQtyFromItem(item);
     const itemWidth = Number(item.width ?? item.width_inches) || 0;
     const itemHeight = Number(item.height ?? item.height_inches) || 0;
-    const isHardware = isHardwareFedexLine(item);
+    const isHardware = isHardwareFedexLine(item) || isFixedPriceShippingLine(item);
     const hw = hardwareShippingFromCartLine(item);
     const matchedRule = isHardware
       ? firstActiveShippingBoxRuleWithBox(item)

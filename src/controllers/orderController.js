@@ -108,6 +108,15 @@ function itemImageUrlFromCartItem(item) {
 
 /** W×H in inches from cart JSON (shared across jobs on one configuration). */
 function dimensionsFromCartItem(item) {
+  const snap = item && typeof item.pricing_snapshot === 'object' ? item.pricing_snapshot : {};
+  if (
+    item.fixed_price_shipping_only === true ||
+    item.fixedPriceShippingOnly === true ||
+    snap.fixed_price_shipping_only === true ||
+    snap.fixedPriceShippingOnly === true
+  ) {
+    return { width_inches: null, height_inches: null };
+  }
   const rawW = item.width ?? item.width_inches ?? item.widthInches;
   const rawH = item.height ?? item.height_inches ?? item.heightInches;
   const w = rawW != null && rawW !== '' ? Number(rawW) : NaN;
