@@ -471,9 +471,22 @@ async function validateModifierGroup(client, modifierGroupId, label) {
   return groupId;
 }
 
+async function validateModifierOptionIds(client, modifierGroupId, rawIds, label) {
+  const ids = (Array.isArray(rawIds) ? rawIds : [rawIds])
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  const uniqueIds = [...new Set(ids)];
+  const validIds = [];
+  for (const id of uniqueIds) {
+    validIds.push((await validateModifierOptionPair(client, modifierGroupId, id, label)).optId);
+  }
+  return validIds;
+}
+
 async function replaceProductConditionalModifierRules(client, productId, rules) {
   await client.query('DELETE FROM product_conditional_modifier_rules WHERE product_id = $1', [productId]);
   if (!Array.isArray(rules) || rules.length === 0) return;
+  let sortOrder = 0;
   for (let i = 0; i < rules.length; i++) {
     const rule = rules[i] || {};
     const actionType = String(rule.action_type || rule.actionType || '').trim();
@@ -487,26 +500,38 @@ async function replaceProductConditionalModifierRules(client, productId, rules) 
       rule.hardware_option_key ?? rule.hardwareOptionKey
     );
     const sourceGroupId = await validateModifierGroup(client, rule.source_modifier_id ?? rule.sourceModifierId, 'Source');
+    const rawSourceOptionIds = rule.source_option_ids ?? rule.sourceOptionIds;
     const rawSourceOptionId = rule.source_option_id ?? rule.sourceOptionId;
-    const sourceOptionId =
-      rawSourceOptionId == null || rawSourceOptionId === ''
-        ? null
-        : (await validateModifierOptionPair(client, sourceGroupId, rawSourceOptionId, 'Source')).optId;
+    const sourceOptionIds = Array.isArray(rawSourceOptionIds)
+      ? await validateModifierOptionIds(client, sourceGroupId, rawSourceOptionIds, 'Source')
+      : rawSourceOptionId == null || rawSourceOptionId === ''
+        ? [null]
+        : [(await validateModifierOptionPair(client, sourceGroupId, rawSourceOptionId, 'Source')).optId];
     const targetGroupId = await validateModifierGroup(client, rule.target_modifier_id ?? rule.targetModifierId, 'Target');
+    const rawTargetOptionIds = rule.target_option_ids ?? rule.targetOptionIds;
     const rawTargetOptionId = rule.target_option_id ?? rule.targetOptionId;
-    const targetOptionId =
-      rawTargetOptionId == null || rawTargetOptionId === ''
-        ? null
-        : (await validateModifierOptionPair(client, targetGroupId, rawTargetOptionId, 'Target')).optId;
-    if (actionType === 'auto_select' && targetOptionId == null) {
+    const targetOptionIds = Array.isArray(rawTargetOptionIds)
+      ? await validateModifierOptionIds(client, targetGroupId, rawTargetOptionIds, 'Target')
+      : rawTargetOptionId == null || rawTargetOptionId === ''
+        ? [null]
+        : [(await validateModifierOptionPair(client, targetGroupId, rawTargetOptionId, 'Target')).optId];
+    if (actionType === 'auto_select' && targetOptionIds.length === 0) {
       throw new Error('Target option is required for auto-select rules.');
     }
-    await client.query(
-      `INSERT INTO product_conditional_modifier_rules
-       (product_id, hardware_option_id, source_modifier_id, source_option_id, action_type, target_modifier_id, target_option_id, sort_order)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [productId, hardwareOptionId, sourceGroupId, sourceOptionId, actionType, targetGroupId, targetOptionId, i]
-    );
+    const normalizedSourceOptionIds = sourceOptionIds.length > 0 ? sourceOptionIds : [null];
+    const normalizedTargetOptionIds = targetOptionIds.length > 0 ? targetOptionIds : [null];
+    for (const sourceOptionId of normalizedSourceOptionIds) {
+      for (const targetOptionId of normalizedTargetOptionIds) {
+        if (actionType === 'auto_select' && targetOptionId == null) continue;
+        await client.query(
+          `INSERT INTO product_conditional_modifier_rules
+           (product_id, hardware_option_id, source_modifier_id, source_option_id, action_type, target_modifier_id, target_option_id, sort_order)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [productId, hardwareOptionId, sourceGroupId, sourceOptionId, actionType, targetGroupId, targetOptionId, sortOrder]
+        );
+        sortOrder += 1;
+      }
+    }
   }
 }
 
