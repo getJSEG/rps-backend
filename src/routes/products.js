@@ -15,6 +15,8 @@ const {
   deleteProductAdmin,
   uploadProductImage,
   uploadCategoryImage,
+  uploadProductTemplateFile,
+  deleteUploadedProductTemplateFile,
   getProductModifierConfigAdmin,
   updateProductModifierConfigAdmin,
   getModifierCatalogAdmin,
@@ -34,7 +36,11 @@ const {
 } = require('../controllers/productController');
 const { optionalAuth } = require('../middleware/auth');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
-const { uploadProductImage: uploadProductImageMw, uploadCategoryImage: uploadCategoryImageMw } = require('../middleware/upload');
+const {
+  uploadProductImage: uploadProductImageMw,
+  uploadCategoryImage: uploadCategoryImageMw,
+  uploadProductTemplateFile: uploadProductTemplateFileMw,
+} = require('../middleware/upload');
 
 router.get('/', optionalAuth, getAllProducts);
 router.get('/categories', getCategories);
@@ -56,6 +62,13 @@ router.post('/admin/upload-category-image', authenticateToken, requireAdmin, (re
     next();
   });
 }, uploadCategoryImage);
+router.post('/admin/upload-template-file', authenticateToken, requireAdmin, (req, res, next) => {
+  uploadProductTemplateFileMw.single('file')(req, res, (err) => {
+    if (err) return res.status(400).json({ message: err.message || 'File upload failed' });
+    next();
+  });
+}, uploadProductTemplateFile);
+router.delete('/admin/upload-template-file', authenticateToken, requireAdmin, deleteUploadedProductTemplateFile);
 router.put('/admin/products/:id', authenticateToken, requireAdmin, updateProduct);
 router.get('/admin/products/:id/modifiers', authenticateToken, requireAdmin, getProductModifierConfigAdmin);
 router.put('/admin/products/:id/modifiers', authenticateToken, requireAdmin, updateProductModifierConfigAdmin);

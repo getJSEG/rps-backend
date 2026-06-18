@@ -62,6 +62,12 @@ function extFromMime(mime) {
   return '.jpg';
 }
 
+function safeExtension(originalName, mime) {
+  const match = String(originalName || '').trim().match(/(\.[a-z0-9]{1,10})$/i);
+  if (match) return match[1].toLowerCase();
+  return extFromMime(mime);
+}
+
 /**
  * Public URL for an object key (virtual-hosted style if no CDN base set).
  * @param {string} key
@@ -83,7 +89,7 @@ function publicUrlForKey(key, cfg) {
  * @param {{ contentType?: string }} [opts]
  * @returns {Promise<string>} public HTTPS URL
  */
-async function uploadFromBuffer(buffer, folderPrefix = 'elmer', opts = {}) {
+async function uploadObjectFromBuffer(buffer, folderPrefix = 'elmer', opts = {}) {
   const cfg = getConfig();
   if (!cfg) {
     throw new Error(
@@ -95,7 +101,7 @@ async function uploadFromBuffer(buffer, folderPrefix = 'elmer', opts = {}) {
     throw new Error('Spaces S3 client could not be created.');
   }
 
-  const ext = extFromMime(opts.contentType);
+  const ext = safeExtension(opts.originalName, opts.contentType);
   const safeFolder = folderPrefix.replace(/^\/+|\/+$/g, '');
   const key = `${safeFolder}/${Date.now()}-${crypto.randomBytes(8).toString('hex')}${ext}`;
   const contentType = opts.contentType || 'image/jpeg';
@@ -109,7 +115,12 @@ async function uploadFromBuffer(buffer, folderPrefix = 'elmer', opts = {}) {
   if (cfg.objectAcl) input.ACL = cfg.objectAcl;
 
   await client.send(new PutObjectCommand(input));
-  return publicUrlForKey(key, cfg);
+  return { url: publicUrlForKey(key, cfg), key };
+}
+
+async function uploadFromBuffer(buffer, folderPrefix = 'elmer', opts = {}) {
+  const uploaded = await uploadObjectFromBuffer(buffer, folderPrefix, opts);
+  return uploaded.url;
 }
 
 function keyFromPublicUrl(url, cfg) {
@@ -161,6 +172,20 @@ async function deleteByUrl(url) {
   return true;
 }
 
+async function deleteByKey(key) {
+  const cfg = getConfig();
+  const normalizedKey = String(key || '').trim().replace(/^\/+/, '');
+  if (!cfg || !normalizedKey) return false;
+  const client = getClient();
+  if (!client) return false;
+
+  await client.send(new DeleteObjectCommand({
+    Bucket: cfg.bucket,
+    Key: normalizedKey,
+  }));
+  return true;
+}
+
 async function deleteManyByUrl(urls) {
   const uniqueUrls = [...new Set((urls || []).map((u) => String(u || '').trim()).filter(Boolean))];
   for (const url of uniqueUrls) {
@@ -176,4 +201,12 @@ function isConfigured() {
   return !!getConfig();
 }
 
-module.exports = { uploadFromBuffer, deleteByUrl, deleteManyByUrl, isConfigured, getConfig };
+module.exports = {
+  uploadFromBuffer,
+  uploadObjectFromBuffer,
+  deleteByUrl,
+  deleteByKey,
+  deleteManyByUrl,
+  isConfigured,
+  getConfig,
+};

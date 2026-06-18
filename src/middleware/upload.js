@@ -59,6 +59,10 @@ const upload = multer({ storage, fileFilter, limits: limit });
 const memoryStorage = multer.memoryStorage();
 const uploadProductImage = multer({ storage: memoryStorage, fileFilter, limits: limit });
 const uploadCategoryImage = multer({ storage: memoryStorage, fileFilter, limits: limit });
+const uploadProductTemplateFile = multer({
+  storage: memoryStorage,
+  limits: { fileSize: 50 * 1024 * 1024 },
+});
 
 // Employee profile: memory when using Spaces
 const uploadEmployeeMemory = multer({ storage: memoryStorage, fileFilter, limits: limit });
@@ -69,6 +73,7 @@ module.exports = {
   upload,
   uploadProductImage,
   uploadCategoryImage,
+  uploadProductTemplateFile,
   uploadEmployeeMemory,
   uploadArtworkFile,
   uploadGuestArtworkFile,

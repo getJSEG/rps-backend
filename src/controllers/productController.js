@@ -1,7 +1,13 @@
 const pool = require('../config/database');
 const path = require('path');
 const fs = require('fs');
-const { uploadFromBuffer, deleteManyByUrl, isConfigured: spacesConfigured } = require('../utils/spaces');
+const {
+  uploadFromBuffer,
+  uploadObjectFromBuffer,
+  deleteByKey,
+  deleteManyByUrl,
+  isConfigured: spacesConfigured,
+} = require('../utils/spaces');
 const { getProductPricingConfig, validateAndCalculatePricing } = require('../services/pricingService');
 const { normalizeProductionTimeRules, validateProductionTimeRules } = require('../utils/productionTimeRules');
 
@@ -38,6 +44,151 @@ async function deleteStoredImageUrls(urls) {
     }
   }
   await deleteManyByUrl(spacesUrls);
+}
+
+async function getProductTemplateFiles(productId) {
+  const result = await pool.query(
+    `SELECT id, product_id, group_label, group_value, file_type, template_name,
+            file_url, storage_key, sort_order, created_at, updated_at
+     FROM product_template_files
+     WHERE product_id = $1
+     ORDER BY sort_order ASC, id ASC`,
+    [productId]
+  );
+  return result.rows;
+}
+
+function parseProductTemplateFilesInput(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item, index) => ({
+    id: item?.id == null || item.id === '' ? null : Number(item.id),
+    group_label: String(item?.group_label || '').trim(),
+    group_value: String(item?.group_value || '').trim(),
+    file_type: String(item?.file_type || '').trim(),
+    template_name: String(item?.template_name || '').trim(),
+    file_url: String(item?.file_url || '').trim(),
+    storage_key: String(item?.storage_key || '').trim(),
+    sort_order: Number.isFinite(Number(item?.sort_order)) ? Number(item.sort_order) : index,
+  }));
+}
+
+function validateProductTemplateFiles(files) {
+  const allowedExtensions = {
+    PDF: ['.pdf'],
+    Photoshop: ['.psd', '.psb'],
+    AI: ['.ai'],
+    Image: ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.tif', '.tiff', '.bmp'],
+  };
+  for (const file of files) {
+    if (!file.group_label || !file.group_value || !file.file_type || !file.template_name || !file.file_url || !file.storage_key) {
+      return 'Each template file requires a first column label, row value, file type, template name, and uploaded file.';
+    }
+    if (!file.storage_key.startsWith('elmer/product-templates/')) {
+      return 'Template files must be uploaded through the product template uploader.';
+    }
+    const extension = path.extname(file.storage_key).toLowerCase();
+    if (allowedExtensions[file.file_type] && !allowedExtensions[file.file_type].includes(extension)) {
+      return `${file.file_type} files must use: ${allowedExtensions[file.file_type].join(', ')}`;
+    }
+  }
+  return null;
+}
+
+async function replaceProductTemplateFiles(productId, files) {
+  const client = await pool.connect();
+  let removedFiles = [];
+  let previousFiles = [];
+  try {
+    await client.query('BEGIN');
+    const previous = await client.query(
+      'SELECT id, file_url, storage_key FROM product_template_files WHERE product_id = $1',
+      [productId]
+    );
+    previousFiles = previous.rows;
+    const keptIds = [];
+
+    for (const file of files) {
+      if (file.id != null && Number.isFinite(file.id)) {
+        const updated = await client.query(
+          `UPDATE product_template_files
+           SET group_label = $1, group_value = $2, file_type = $3, template_name = $4,
+               file_url = $5, storage_key = $6, sort_order = $7, updated_at = CURRENT_TIMESTAMP
+           WHERE id = $8 AND product_id = $9
+           RETURNING id`,
+          [
+            file.group_label,
+            file.group_value,
+            file.file_type,
+            file.template_name,
+            file.file_url,
+            file.storage_key,
+            file.sort_order,
+            file.id,
+            productId,
+          ]
+        );
+        if (updated.rowCount > 0) {
+          keptIds.push(updated.rows[0].id);
+          continue;
+        }
+      }
+
+      const inserted = await client.query(
+        `INSERT INTO product_template_files
+          (product_id, group_label, group_value, file_type, template_name, file_url, storage_key, sort_order)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING id`,
+        [
+          productId,
+          file.group_label,
+          file.group_value,
+          file.file_type,
+          file.template_name,
+          file.file_url,
+          file.storage_key,
+          file.sort_order,
+        ]
+      );
+      keptIds.push(inserted.rows[0].id);
+    }
+
+    removedFiles = previous.rows.filter((row) => !keptIds.includes(row.id));
+    if (keptIds.length > 0) {
+      await client.query(
+        'DELETE FROM product_template_files WHERE product_id = $1 AND NOT (id = ANY($2::int[]))',
+        [productId, keptIds]
+      );
+    } else {
+      await client.query('DELETE FROM product_template_files WHERE product_id = $1', [productId]);
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  const currentKeys = new Set(files.map((file) => file.storage_key));
+  for (const removed of removedFiles) {
+    if (removed.storage_key && !currentKeys.has(removed.storage_key)) {
+      try {
+        await deleteByKey(removed.storage_key);
+      } catch (error) {
+        console.error('Spaces template file delete failed:', removed.storage_key, error);
+      }
+    }
+  }
+  for (const previous of previousFiles) {
+    const current = files.find((file) => file.id === previous.id);
+    if (current && previous.storage_key && previous.storage_key !== current.storage_key && !currentKeys.has(previous.storage_key)) {
+      try {
+        await deleteByKey(previous.storage_key);
+      } catch (error) {
+        console.error('Spaces replaced template file delete failed:', previous.storage_key, error);
+      }
+    }
+  }
 }
 
 function asNumberOrNull(value) {
@@ -900,6 +1051,7 @@ const getProductById = async (req, res) => {
     product.modifier_groups = await getProductModifierGroups(product.id);
     product.conditional_modifier_rules = await getProductConditionalModifierRules(product.id);
     product.shipping_box_rules = await getProductShippingBoxRules(product.id);
+    product.template_files = await getProductTemplateFiles(product.id);
     const sm = product.size_mode != null ? String(product.size_mode).trim() : '';
     if (!sm && Array.isArray(product.size_options) && product.size_options.length > 0) {
       product.size_mode = 'predefined';
@@ -1774,6 +1926,7 @@ const createProduct = async (req, res) => {
       production_time,
       production_time_rules,
       product_highlights,
+      template_files,
     } = req.body;
     if (!name) return res.status(400).json({ message: 'Product name is required' });
     const slugVal = slug || name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') + '-' + Date.now();
@@ -1839,6 +1992,9 @@ const createProduct = async (req, res) => {
       ? JSON.stringify(product_highlights.map(String).filter((s) => s.trim()))
       : '[]';
     const parsedSizeOptions = parseSizeOptionsInput(size_options);
+    const parsedTemplateFiles = parseProductTemplateFilesInput(template_files);
+    const templateFilesError = validateProductTemplateFiles(parsedTemplateFiles);
+    if (templateFilesError) return res.status(400).json({ message: templateFilesError });
     if (sizeModeVal === 'predefined' && parsedSizeOptions.length === 0) {
       return res.status(400).json({ message: 'size_options are required when size_mode is predefined.' });
     }
@@ -1896,8 +2052,10 @@ const createProduct = async (req, res) => {
     await replaceProductShippingBoxRules(created.id, parsedShippingBoxRules);
     const parsedPurchaseOptions = parsePurchaseOptionsInput(purchase_options);
     await replaceProductPurchaseOptions(created.id, parsedPurchaseOptions);
+    await replaceProductTemplateFiles(created.id, parsedTemplateFiles);
     created.size_options = await getProductSizeOptions(created.id);
     created.purchase_options = await getProductPurchaseOptions(created.id);
+    created.template_files = await getProductTemplateFiles(created.id);
     res.status(201).json({ product: created });
   } catch (error) {
     if (error.code === '23505') return res.status(400).json({ message: 'Product slug already exists' });
@@ -2036,6 +2194,11 @@ const updateProduct = async (req, res) => {
     const parsedPurchaseOptions = req.body.purchase_options !== undefined
       ? parsePurchaseOptionsInput(req.body.purchase_options)
       : null;
+    const parsedTemplateFiles = req.body.template_files !== undefined
+      ? parseProductTemplateFilesInput(req.body.template_files)
+      : null;
+    const templateFilesError = parsedTemplateFiles === null ? null : validateProductTemplateFiles(parsedTemplateFiles);
+    if (templateFilesError) return res.status(400).json({ message: templateFilesError });
     const result = await pool.query(
       `UPDATE products SET name = $1, slug = $2, description = $3, spec = $4, file_setup = $5, installation_guide = $6, faq = $7::jsonb, category_id = $8, subcategory = $9, price = $10, price_per_sqft = $11, min_charge = $12, material = $13, image_url = $14, is_new = $15, is_active = $16, sku = $17, properties = $18::jsonb, gallery_images = $19::jsonb, pricing_mode = $20, size_mode = $21, base_unit = $22, min_width = $23, max_width = $24, min_height = $25, max_height = $26, graphic_scenario_enabled = $27, hardware_template_id = $28, weight = $29, weight_per_sqft = $30, length = $31, shipping_length = $32, shipping_width = $33, shipping_height = $34, shipping_weight = $35, production_time = $36, production_time_rules = $37::jsonb, product_highlights = $38::jsonb, updated_at = CURRENT_TIMESTAMP WHERE id = $39 RETURNING *`,
       [nameVal, slugVal, descriptionVal, specVal, fileSetupVal, installationGuideVal, faqVal, categoryIdVal, subcategoryVal, priceVal, pricePerSqftVal, minChargeVal, materialVal, imageUrlVal, isNewVal, isActiveVal, skuVal, propertiesVal, galleryJson, pricingModeVal, sizeModeVal, baseUnitVal, minWidthVal, maxWidthVal, minHeightVal, maxHeightVal, graphicScenarioEnabledVal, hardwareTemplateIdVal, weightVal, weightPerSqftVal, lengthVal, shippingLengthVal, shippingWidthVal, shippingHeightVal, shippingWeightVal, productionTimeVal, productionTimeRulesVal, highlightsVal, id]
@@ -2053,9 +2216,13 @@ const updateProduct = async (req, res) => {
     if (parsedShippingBoxRules !== null) {
       await replaceProductShippingBoxRules(id, parsedShippingBoxRules);
     }
+    if (parsedTemplateFiles !== null) {
+      await replaceProductTemplateFiles(id, parsedTemplateFiles);
+    }
     updated.size_options = await getProductSizeOptions(id);
     updated.purchase_options = await getProductPurchaseOptions(id);
     updated.shipping_box_rules = await getProductShippingBoxRules(id);
+    updated.template_files = await getProductTemplateFiles(id);
     res.json({ product: updated });
   } catch (error) {
     if (error.code === '23505') return res.status(400).json({ message: 'Product slug already exists' });
@@ -2073,7 +2240,15 @@ const getAllProductsAdmin = async (req, res) => {
     const { page = 1, limit = 100 } = req.query;
     const offset = (page - 1) * limit;
     const result = await pool.query(
-      `SELECT p.*, c.name as category_name, c.slug as category_slug FROM products p LEFT JOIN categories c ON p.category_id = c.id ORDER BY p.created_at DESC LIMIT $1 OFFSET $2`,
+      `SELECT p.*, c.name as category_name, c.slug as category_slug,
+        COALESCE((
+          SELECT json_agg(tf ORDER BY tf.sort_order ASC, tf.id ASC)
+          FROM product_template_files tf
+          WHERE tf.product_id = p.id
+        ), '[]'::json) AS template_files
+       FROM products p
+       LEFT JOIN categories c ON p.category_id = c.id
+       ORDER BY p.created_at DESC LIMIT $1 OFFSET $2`,
       [limit, offset]
     );
     const countResult = await pool.query('SELECT COUNT(*) FROM products');
@@ -2092,11 +2267,19 @@ const getAllProductsAdmin = async (req, res) => {
 const deleteProductAdmin = async (req, res) => {
   try {
     const { id } = req.params;
+    const templateFiles = await getProductTemplateFiles(id);
     const result = await pool.query('DELETE FROM products WHERE id = $1 RETURNING id, image_url, gallery_images', [id]);
     if (result.rows.length === 0) {
       return res.status(404).json({ message: 'Product not found' });
     }
     await deleteStoredImageUrls(galleryFromRow(result.rows[0]));
+    for (const file of templateFiles) {
+      try {
+        await deleteByKey(file.storage_key);
+      } catch (error) {
+        console.error('Spaces template file delete failed:', file.storage_key, error);
+      }
+    }
     res.json({ message: 'Product deleted', id: result.rows[0].id });
   } catch (error) {
     console.error('Delete product error:', error);
@@ -2155,6 +2338,66 @@ const uploadCategoryImage = async (req, res) => {
   }
 };
 
+const uploadProductTemplateFile = async (req, res) => {
+  if (!req.file || !req.file.buffer) {
+    return res.status(400).json({ message: 'No template file uploaded' });
+  }
+  if (!spacesConfigured()) {
+    return res.status(503).json({ message: 'DigitalOcean Spaces is not configured.' });
+  }
+  const fileType = String(req.body?.file_type || '').trim();
+  const extension = path.extname(String(req.file.originalname || '')).toLowerCase();
+  const allowedExtensions = {
+    PDF: ['.pdf'],
+    Photoshop: ['.psd', '.psb'],
+    AI: ['.ai'],
+    Image: ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.tif', '.tiff', '.bmp'],
+  };
+  if (!['PDF', 'Photoshop', 'AI', 'Image', 'Other'].includes(fileType)) {
+    return res.status(400).json({ message: 'Select a valid template file type.' });
+  }
+  if (allowedExtensions[fileType] && !allowedExtensions[fileType].includes(extension)) {
+    return res.status(400).json({
+      message: `${fileType} files must use: ${allowedExtensions[fileType].join(', ')}`,
+    });
+  }
+  try {
+    const uploaded = await uploadObjectFromBuffer(req.file.buffer, 'elmer/product-templates', {
+      contentType: req.file.mimetype || 'application/octet-stream',
+      originalName: req.file.originalname,
+    });
+    res.json({
+      url: uploaded.url,
+      storage_key: uploaded.key,
+      original_name: req.file.originalname,
+    });
+  } catch (err) {
+    console.error('Upload product template file error:', err);
+    res.status(500).json({ message: 'Template file upload failed' });
+  }
+};
+
+const deleteUploadedProductTemplateFile = async (req, res) => {
+  const storageKey = String(req.body?.storage_key || '').trim();
+  if (!storageKey || !storageKey.startsWith('elmer/product-templates/')) {
+    return res.status(400).json({ message: 'A valid template storage key is required.' });
+  }
+  try {
+    const inUse = await pool.query(
+      'SELECT 1 FROM product_template_files WHERE storage_key = $1 LIMIT 1',
+      [storageKey]
+    );
+    if (inUse.rowCount > 0) {
+      return res.status(409).json({ message: 'This template file is attached to a product.' });
+    }
+    await deleteByKey(storageKey);
+    res.json({ message: 'Template upload deleted.' });
+  } catch (err) {
+    console.error('Delete uploaded product template file error:', err);
+    res.status(500).json({ message: 'Template file delete failed' });
+  }
+};
+
 module.exports = {
   getAllProducts,
   getProductById,
@@ -2170,6 +2413,8 @@ module.exports = {
   deleteProductAdmin,
   uploadProductImage,
   uploadCategoryImage,
+  uploadProductTemplateFile,
+  deleteUploadedProductTemplateFile,
   getProductModifierConfigAdmin,
   updateProductModifierConfigAdmin,
   getModifierCatalogAdmin,
