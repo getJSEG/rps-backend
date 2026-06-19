@@ -22,6 +22,13 @@ const {
   getModifierCatalogAdmin,
   updateModifierCatalogAdmin,
   deleteModifierCatalogGroupAdmin,
+  getModifierTaxonomyAdmin,
+  createModifierCategoryAdmin,
+  updateModifierCategoryAdmin,
+  deleteModifierCategoryAdmin,
+  createModifierSubcategoryAdmin,
+  updateModifierSubcategoryAdmin,
+  deleteModifierSubcategoryAdmin,
   getModifierPresetsAdmin,
   createModifierPresetAdmin,
   updateModifierPresetAdmin,
@@ -84,6 +91,13 @@ router.delete('/admin/products/:id', authenticateToken, requireAdmin, deleteProd
 router.get('/admin/modifier-catalog', authenticateToken, requireAdmin, getModifierCatalogAdmin);
 router.put('/admin/modifier-catalog', authenticateToken, requireAdmin, updateModifierCatalogAdmin);
 router.delete('/admin/modifier-catalog/:key', authenticateToken, requireAdmin, deleteModifierCatalogGroupAdmin);
+router.get('/admin/modifier-taxonomy', authenticateToken, requireAdmin, getModifierTaxonomyAdmin);
+router.post('/admin/modifier-categories', authenticateToken, requireAdmin, createModifierCategoryAdmin);
+router.put('/admin/modifier-categories/:id', authenticateToken, requireAdmin, updateModifierCategoryAdmin);
+router.delete('/admin/modifier-categories/:id', authenticateToken, requireAdmin, deleteModifierCategoryAdmin);
+router.post('/admin/modifier-subcategories', authenticateToken, requireAdmin, createModifierSubcategoryAdmin);
+router.put('/admin/modifier-subcategories/:id', authenticateToken, requireAdmin, updateModifierSubcategoryAdmin);
+router.delete('/admin/modifier-subcategories/:id', authenticateToken, requireAdmin, deleteModifierSubcategoryAdmin);
 router.get('/admin/modifier-presets', authenticateToken, requireAdmin, getModifierPresetsAdmin);
 router.post('/admin/modifier-presets', authenticateToken, requireAdmin, createModifierPresetAdmin);
 router.put('/admin/modifier-presets/:id', authenticateToken, requireAdmin, updateModifierPresetAdmin);

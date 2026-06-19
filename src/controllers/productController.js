@@ -780,6 +780,10 @@ async function getModifierCatalog({ includeInactive = true } = {}) {
       mg.name AS group_name,
       mg.key AS group_key,
       mg.input_type,
+      mg.category_id,
+      mg.subcategory_id,
+      mc.name AS category_name,
+      ms.name AS subcategory_name,
       mg.sort_order AS group_sort_order,
       mg.is_active AS group_active,
       mo.id AS option_id,
@@ -791,8 +795,16 @@ async function getModifierCatalog({ includeInactive = true } = {}) {
       mo.sort_order AS option_sort_order,
       mo.is_active AS option_active
     FROM modifier_groups mg
+    LEFT JOIN modifier_categories mc ON mc.id = mg.category_id
+    LEFT JOIN modifier_subcategories ms ON ms.id = mg.subcategory_id
     LEFT JOIN modifier_options mo ON mo.modifier_group_id = mg.id
-    ORDER BY mg.sort_order ASC, mg.id ASC, mo.sort_order ASC, mo.id ASC`
+    ORDER BY
+      COALESCE(mc.name, 'Uncategorized') ASC,
+      COALESCE(ms.name, 'General') ASC,
+      mg.sort_order ASC,
+      mg.id ASC,
+      mo.sort_order ASC,
+      mo.id ASC`
   );
   const groupsByKey = new Map();
   for (const row of result.rows) {
@@ -805,6 +817,10 @@ async function getModifierCatalog({ includeInactive = true } = {}) {
         key,
         name: String(row.group_name || key),
         input_type: String(row.input_type || 'dropdown'),
+        category_id: row.category_id == null ? null : Number(row.category_id),
+        subcategory_id: row.subcategory_id == null ? null : Number(row.subcategory_id),
+        category_name: row.category_name == null ? 'Uncategorized' : String(row.category_name),
+        subcategory_name: row.subcategory_name == null ? 'General' : String(row.subcategory_name),
         sort_order: Number(row.group_sort_order || 0),
         is_active: !!row.group_active,
         options: [],
@@ -837,13 +853,47 @@ async function replaceModifierCatalog(payload) {
       const key = String(g.key || '').trim().toLowerCase();
       const name = String(g.name || '').trim();
       if (!key || !name) continue;
+      const categoryId =
+        g.category_id == null || g.category_id === '' ? null : Number(g.category_id);
+      const subcategoryId =
+        g.subcategory_id == null || g.subcategory_id === '' ? null : Number(g.subcategory_id);
+      if (categoryId != null && (!Number.isInteger(categoryId) || categoryId <= 0)) {
+        throw new Error(`Invalid category for modifier "${name}".`);
+      }
+      if (subcategoryId != null && (!Number.isInteger(subcategoryId) || subcategoryId <= 0)) {
+        throw new Error(`Invalid subcategory for modifier "${name}".`);
+      }
+      if (subcategoryId != null && categoryId == null) {
+        throw new Error(`Select a category for modifier "${name}" before selecting a subcategory.`);
+      }
+      if (categoryId != null) {
+        const categoryCheck = await client.query(
+          'SELECT id FROM modifier_categories WHERE id = $1',
+          [categoryId]
+        );
+        if (categoryCheck.rowCount === 0) {
+          throw new Error(`Selected category does not exist for modifier "${name}".`);
+        }
+      }
+      if (subcategoryId != null) {
+        const subcategoryCheck = await client.query(
+          'SELECT id FROM modifier_subcategories WHERE id = $1 AND category_id = $2',
+          [subcategoryId, categoryId]
+        );
+        if (subcategoryCheck.rowCount === 0) {
+          throw new Error(`Selected subcategory does not belong to the category for modifier "${name}".`);
+        }
+      }
       const groupRes = await client.query(
-        `INSERT INTO modifier_groups (name, key, input_type, sort_order, is_active)
-         VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO modifier_groups
+           (name, key, input_type, category_id, subcategory_id, sort_order, is_active)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (key)
          DO UPDATE SET
            name = EXCLUDED.name,
            input_type = EXCLUDED.input_type,
+           category_id = EXCLUDED.category_id,
+           subcategory_id = EXCLUDED.subcategory_id,
            sort_order = EXCLUDED.sort_order,
            is_active = EXCLUDED.is_active,
            updated_at = NOW()
@@ -852,6 +902,8 @@ async function replaceModifierCatalog(payload) {
           name,
           key,
           String(g.input_type || 'dropdown'),
+          categoryId,
+          subcategoryId,
           g.sort_order != null ? Number(g.sort_order) : i,
           g.is_active !== false,
         ]
@@ -1139,6 +1191,187 @@ const deleteModifierCatalogGroupAdmin = async (req, res) => {
   }
 };
 
+async function fetchModifierTaxonomy() {
+  const [categoriesResult, subcategoriesResult] = await Promise.all([
+    pool.query(
+      `SELECT id, name, created_at, updated_at
+       FROM modifier_categories
+       ORDER BY LOWER(name) ASC, id ASC`
+    ),
+    pool.query(
+      `SELECT ms.id, ms.category_id, ms.name, ms.created_at, ms.updated_at,
+              mc.name AS category_name
+       FROM modifier_subcategories ms
+       INNER JOIN modifier_categories mc ON mc.id = ms.category_id
+       ORDER BY LOWER(mc.name) ASC, LOWER(ms.name) ASC, ms.id ASC`
+    ),
+  ]);
+  return {
+    categories: categoriesResult.rows.map((row) => ({
+      ...row,
+      id: Number(row.id),
+    })),
+    subcategories: subcategoriesResult.rows.map((row) => ({
+      ...row,
+      id: Number(row.id),
+      category_id: Number(row.category_id),
+    })),
+  };
+}
+
+const getModifierTaxonomyAdmin = async (req, res) => {
+  try {
+    res.json(await fetchModifierTaxonomy());
+  } catch (error) {
+    console.error('Get modifier taxonomy error:', error);
+    res.status(500).json({ message: 'Failed to fetch modifier categories' });
+  }
+};
+
+const createModifierCategoryAdmin = async (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  if (!name) return res.status(400).json({ message: 'Category name is required.' });
+  try {
+    const result = await pool.query(
+      `INSERT INTO modifier_categories (name) VALUES ($1)
+       RETURNING id, name, created_at, updated_at`,
+      [name]
+    );
+    res.status(201).json({ category: { ...result.rows[0], id: Number(result.rows[0].id) } });
+  } catch (error) {
+    if (error?.code === '23505') {
+      return res.status(409).json({ message: 'A modifier category with this name already exists.' });
+    }
+    console.error('Create modifier category error:', error);
+    res.status(500).json({ message: 'Failed to create modifier category' });
+  }
+};
+
+const updateModifierCategoryAdmin = async (req, res) => {
+  const id = Number(req.params?.id);
+  const name = String(req.body?.name || '').trim();
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ message: 'Invalid category id.' });
+  if (!name) return res.status(400).json({ message: 'Category name is required.' });
+  try {
+    const result = await pool.query(
+      `UPDATE modifier_categories
+       SET name = $1, updated_at = NOW()
+       WHERE id = $2
+       RETURNING id, name, created_at, updated_at`,
+      [name, id]
+    );
+    if (result.rowCount === 0) return res.status(404).json({ message: 'Modifier category not found.' });
+    res.json({ category: { ...result.rows[0], id: Number(result.rows[0].id) } });
+  } catch (error) {
+    if (error?.code === '23505') {
+      return res.status(409).json({ message: 'A modifier category with this name already exists.' });
+    }
+    console.error('Update modifier category error:', error);
+    res.status(500).json({ message: 'Failed to update modifier category' });
+  }
+};
+
+const deleteModifierCategoryAdmin = async (req, res) => {
+  const id = Number(req.params?.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ message: 'Invalid category id.' });
+  try {
+    const result = await pool.query(
+      'DELETE FROM modifier_categories WHERE id = $1 RETURNING id, name',
+      [id]
+    );
+    if (result.rowCount === 0) return res.status(404).json({ message: 'Modifier category not found.' });
+    res.json({ message: 'Modifier category deleted.', category: result.rows[0] });
+  } catch (error) {
+    console.error('Delete modifier category error:', error);
+    res.status(500).json({ message: 'Failed to delete modifier category' });
+  }
+};
+
+const createModifierSubcategoryAdmin = async (req, res) => {
+  const categoryId = Number(req.body?.category_id ?? req.body?.categoryId);
+  const name = String(req.body?.name || '').trim();
+  if (!Number.isInteger(categoryId) || categoryId <= 0) {
+    return res.status(400).json({ message: 'Parent category is required.' });
+  }
+  if (!name) return res.status(400).json({ message: 'Subcategory name is required.' });
+  try {
+    const result = await pool.query(
+      `INSERT INTO modifier_subcategories (category_id, name) VALUES ($1, $2)
+       RETURNING id, category_id, name, created_at, updated_at`,
+      [categoryId, name]
+    );
+    res.status(201).json({
+      subcategory: {
+        ...result.rows[0],
+        id: Number(result.rows[0].id),
+        category_id: Number(result.rows[0].category_id),
+      },
+    });
+  } catch (error) {
+    if (error?.code === '23503') {
+      return res.status(400).json({ message: 'Selected parent category does not exist.' });
+    }
+    if (error?.code === '23505') {
+      return res.status(409).json({ message: 'This subcategory already exists in the selected category.' });
+    }
+    console.error('Create modifier subcategory error:', error);
+    res.status(500).json({ message: 'Failed to create modifier subcategory' });
+  }
+};
+
+const updateModifierSubcategoryAdmin = async (req, res) => {
+  const id = Number(req.params?.id);
+  const categoryId = Number(req.body?.category_id ?? req.body?.categoryId);
+  const name = String(req.body?.name || '').trim();
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ message: 'Invalid subcategory id.' });
+  if (!Number.isInteger(categoryId) || categoryId <= 0) {
+    return res.status(400).json({ message: 'Parent category is required.' });
+  }
+  if (!name) return res.status(400).json({ message: 'Subcategory name is required.' });
+  try {
+    const result = await pool.query(
+      `UPDATE modifier_subcategories
+       SET category_id = $1, name = $2, updated_at = NOW()
+       WHERE id = $3
+       RETURNING id, category_id, name, created_at, updated_at`,
+      [categoryId, name, id]
+    );
+    if (result.rowCount === 0) return res.status(404).json({ message: 'Modifier subcategory not found.' });
+    res.json({
+      subcategory: {
+        ...result.rows[0],
+        id: Number(result.rows[0].id),
+        category_id: Number(result.rows[0].category_id),
+      },
+    });
+  } catch (error) {
+    if (error?.code === '23503') {
+      return res.status(400).json({ message: 'Selected parent category does not exist.' });
+    }
+    if (error?.code === '23505') {
+      return res.status(409).json({ message: 'This subcategory already exists in the selected category.' });
+    }
+    console.error('Update modifier subcategory error:', error);
+    res.status(500).json({ message: 'Failed to update modifier subcategory' });
+  }
+};
+
+const deleteModifierSubcategoryAdmin = async (req, res) => {
+  const id = Number(req.params?.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ message: 'Invalid subcategory id.' });
+  try {
+    const result = await pool.query(
+      'DELETE FROM modifier_subcategories WHERE id = $1 RETURNING id, category_id, name',
+      [id]
+    );
+    if (result.rowCount === 0) return res.status(404).json({ message: 'Modifier subcategory not found.' });
+    res.json({ message: 'Modifier subcategory deleted.', subcategory: result.rows[0] });
+  } catch (error) {
+    console.error('Delete modifier subcategory error:', error);
+    res.status(500).json({ message: 'Failed to delete modifier subcategory' });
+  }
+};
+
 function parsePresetModifierGroupIds(body) {
   const raw = body?.modifier_group_ids ?? body?.modifierGroupIds;
   if (!Array.isArray(raw)) return [];
@@ -1164,9 +1397,13 @@ async function fetchModifierPresetsPayload() {
   const presetIds = presetsRes.rows.map((r) => Number(r.id));
   const itemsRes = await pool.query(
     `SELECT mpi.id, mpi.modifier_preset_id, mpi.modifier_group_id, mpi.sort_order,
-            mg.key AS group_key, mg.name AS group_name
+            mg.key AS group_key, mg.name AS group_name,
+            mg.category_id, mg.subcategory_id,
+            mc.name AS category_name, ms.name AS subcategory_name
      FROM modifier_preset_items mpi
      INNER JOIN modifier_groups mg ON mg.id = mpi.modifier_group_id
+     LEFT JOIN modifier_categories mc ON mc.id = mg.category_id
+     LEFT JOIN modifier_subcategories ms ON ms.id = mg.subcategory_id
      WHERE mpi.modifier_preset_id = ANY($1::int[])
      ORDER BY mpi.modifier_preset_id ASC, mpi.sort_order ASC, mpi.id ASC`,
     [presetIds]
@@ -1181,6 +1418,10 @@ async function fetchModifierPresetsPayload() {
       sort_order: Number(row.sort_order || 0),
       key: String(row.group_key || ''),
       name: String(row.group_name || ''),
+      category_id: row.category_id == null ? null : Number(row.category_id),
+      subcategory_id: row.subcategory_id == null ? null : Number(row.subcategory_id),
+      category_name: row.category_name == null ? 'Uncategorized' : String(row.category_name),
+      subcategory_name: row.subcategory_name == null ? 'General' : String(row.subcategory_name),
     });
   }
   return presetsRes.rows.map((p) => ({
@@ -2420,6 +2661,13 @@ module.exports = {
   getModifierCatalogAdmin,
   updateModifierCatalogAdmin,
   deleteModifierCatalogGroupAdmin,
+  getModifierTaxonomyAdmin,
+  createModifierCategoryAdmin,
+  updateModifierCategoryAdmin,
+  deleteModifierCategoryAdmin,
+  createModifierSubcategoryAdmin,
+  updateModifierSubcategoryAdmin,
+  deleteModifierSubcategoryAdmin,
   getModifierPresetsAdmin,
   createModifierPresetAdmin,
   updateModifierPresetAdmin,
