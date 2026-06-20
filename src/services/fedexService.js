@@ -253,12 +253,25 @@ function addressResidentialCacheKey(address) {
   });
 }
 
+/**
+ * FedEx address resolve expects up to 3 positional street lines. Sending fewer than 3
+ * can make the resolver route US addresses to a foreign postal authority and skip the
+ * USPS residential classification, so we pad with empty strings to a fixed length of 3.
+ */
+function padStreetLinesTo3(streetLines) {
+  const lines = (Array.isArray(streetLines) ? streetLines : [])
+    .map((s) => String(s || ''))
+    .slice(0, 3);
+  while (lines.length < 3) lines.push('');
+  return lines;
+}
+
 function fedexAddressValidationPayload(address) {
   return {
     addressesToValidate: [
       {
         address: {
-          streetLines: Array.isArray(address?.streetLines) ? address.streetLines : [],
+          streetLines: padStreetLinesTo3(address?.streetLines),
           ...(address?.city ? { city: address.city } : {}),
           ...(address?.stateOrProvinceCode ? { stateOrProvinceCode: address.stateOrProvinceCode } : {}),
           postalCode: address?.postalCode,
@@ -360,10 +373,19 @@ async function resolveRecipientAddressResidential(address) {
   }
 
   try {
+    const resolveRequestPayload = fedexAddressValidationPayload(normalized);
+    console.log(
+      '[FedEx address validation] resolve REQUEST payload:\n',
+      JSON.stringify(resolveRequestPayload, null, 2)
+    );
     const data = await fedexRequest(
       '/address/v1/addresses/resolve',
-      fedexAddressValidationPayload(normalized),
+      resolveRequestPayload,
       { retryOnceOn5xx: true }
+    );
+    console.log(
+      '[FedEx address validation] resolve RESPONSE payload:\n',
+      JSON.stringify(data, null, 2)
     );
     const parsed = parseFedexResidentialClassification(data);
     const isResidential = parsed == null ? true : parsed;
