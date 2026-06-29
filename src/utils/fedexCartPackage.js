@@ -1,8 +1,9 @@
 /**
  * Builds one consolidated FedEx rating package from cart lines.
  * Hardware products (graphic_scenario_enabled or hardware_template_id + shipping_* on line or snapshot)
- * use DB dimensions and shipping_weight × billable qty.
- * Standard products use product length/weight plus customer-entered width/height.
+ * use their option shipping box and per-item weight. Fixed-price products use
+ * product shipping box rules and product weight. Area products use product
+ * length/weight plus customer-entered width/height.
  */
 
 function billableQtyFromItem(item) {
@@ -97,6 +98,7 @@ function unitWeightForBoxRuleItem(item, widthInches, heightInches) {
     item.shipping_weight ??
       item.shippingWeight ??
       item.weight ??
+      item.pricing_snapshot?.weight ??
       item.pricing_snapshot?.shipping_weight ??
       item.pricing_snapshot?.shippingWeight
   ) ?? 1;
@@ -108,25 +110,22 @@ function buildPackagesForMatchedBoxRule(rule, qty, unitWeight) {
   const maxQty = parsePositiveNumber(rule?.max_quantity_per_box);
   const maxWeight = parsePositiveNumber(rule?.max_weight_per_box);
   const totalQty = Math.max(1, Math.trunc(qty));
-  const totalWeight = Math.max(1, unitWeight * totalQty);
+  const perItemWeight = Math.max(0.01, Number(unitWeight) || 1);
   const qtyLimit = maxQty != null ? Math.max(1, Math.trunc(maxQty)) : totalQty;
-  const boxesByQty = Math.max(1, Math.ceil(totalQty / qtyLimit));
-  const boxesByWeight = maxWeight != null ? Math.max(1, Math.ceil(totalWeight / maxWeight)) : 1;
-  const boxCount = Math.max(boxesByQty, boxesByWeight);
+  const weightQtyLimit = maxWeight != null ? Math.max(1, Math.floor(maxWeight / perItemWeight)) : totalQty;
+  const perBoxQtyLimit = Math.max(1, Math.min(qtyLimit, weightQtyLimit || 1));
   const packages = [];
-  let remainingWeight = totalWeight;
-  for (let i = 0; i < boxCount; i += 1) {
-    const remainingBoxes = boxCount - i;
-    const idealWeight = remainingWeight / remainingBoxes;
-    const cappedWeight = maxWeight != null ? Math.min(maxWeight, idealWeight) : idealWeight;
-    const weight = Math.max(1, Math.round(cappedWeight * 100) / 100);
+  let remainingQty = totalQty;
+  while (remainingQty > 0) {
+    const boxQty = Math.min(perBoxQtyLimit, remainingQty);
+    const weight = Math.max(1, Math.round(boxQty * perItemWeight * 100) / 100);
     packages.push({
       weight,
       length: Math.max(1, Math.ceil(box.length)),
       width: Math.max(1, Math.ceil(box.width)),
       height: Math.max(1, Math.ceil(box.height)),
     });
-    remainingWeight = Math.max(0, remainingWeight - cappedWeight);
+    remainingQty -= boxQty;
   }
   return packages;
 }
@@ -167,6 +166,16 @@ function hardwareShippingFromCartLine(item) {
   const pick = (snake, camel) =>
     item?.[snake] ?? item?.[camel] ?? snap[snake] ?? snap[camel];
 
+  const isHardware = isHardwareFedexLine(item);
+  if (isHardware) {
+    const swt = parsePositiveNumber(pick('hardware_weight_per_item', 'hardwareWeightPerItem'));
+    if (!swt) return null;
+    return { weightPerUnit: swt };
+  }
+
+  const fixedWeight = parsePositiveNumber(pick('weight', 'weight'));
+  if (fixedWeight) return { weightPerUnit: fixedWeight };
+
   const sl = parsePositiveNumber(pick('shipping_length', 'shippingLength'));
   const sw = parsePositiveNumber(pick('shipping_width', 'shippingWidth'));
   const sh = parsePositiveNumber(pick('shipping_height', 'shippingHeight'));
@@ -205,8 +214,14 @@ function buildFedexPackagesFromShippableCartItems(cartItems) {
     if (!isHardware && hasActiveShippingBoxRules(item)) {
       throw new Error('Shipping box is not configured for this size. Please contact admin.');
     }
+    if (isHardwareFedexLine(item)) {
+      throw new Error('Hardware shipping box is not configured for this option. Please contact admin.');
+    }
+    if (isFixedPriceShippingLine(item)) {
+      throw new Error('Fixed price shipping box is not configured for this product. Please contact admin.');
+    }
 
-    if (hw) {
+    if (hw && !isHardwareFedexLine(item)) {
       maxLen = Math.max(maxLen, Math.ceil(hw.length));
       maxWid = Math.max(maxWid, Math.ceil(hw.width));
       maxHt = Math.max(maxHt, Math.ceil(hw.height));

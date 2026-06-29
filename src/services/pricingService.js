@@ -44,6 +44,26 @@ function optionEffectiveValue(option) {
   return String(option?.value || option?.label || '').trim();
 }
 
+function normalizeShippingRule(row) {
+  return {
+    id: Number(row.id),
+    shipping_box_id: Number(row.shipping_box_id),
+    min_smallest_side: row.min_smallest_side == null ? null : Number(row.min_smallest_side),
+    max_smallest_side: row.max_smallest_side == null ? null : Number(row.max_smallest_side),
+    max_quantity_per_box: row.max_quantity_per_box == null ? null : Number(row.max_quantity_per_box),
+    max_weight_per_box: row.max_weight_per_box == null ? null : Number(row.max_weight_per_box),
+    sort_order: Number(row.sort_order || 0),
+    is_active: row.is_active !== false,
+    box: {
+      id: Number(row.shipping_box_id),
+      name: String(row.box_name || ''),
+      length: Number(row.box_length) || 0,
+      width: Number(row.box_width) || 0,
+      height: Number(row.box_height) || 0,
+    },
+  };
+}
+
 function normalizeShippingMode(value) {
   const s = String(value || '').trim().toLowerCase();
   if (s === 'store_pickup' || s === 'store-pickup' || s === 'store pickup') {
@@ -118,7 +138,7 @@ async function getProductPricingConfig(productId) {
   );
 
   // Load purchase options (the new dynamic option system)
-  const purchaseOptionsResult = await pool.query(
+  let purchaseOptionsResult = await pool.query(
     `SELECT id, label, option_key, pricing_mode, unit_price, price_per_sqft, min_charge, sort_order, is_default
      FROM product_purchase_options
      WHERE product_id = $1 AND is_active = true
@@ -126,7 +146,7 @@ async function getProductPricingConfig(productId) {
     [productId]
   );
 
-  const modifierGroupsResult = await pool.query(
+  let modifierGroupsResult = await pool.query(
     `SELECT
       pm.id AS product_modifier_id,
       pm.is_required,
@@ -175,25 +195,151 @@ async function getProductPricingConfig(productId) {
      ORDER BY r.sort_order ASC, r.id ASC`,
     [productId]
   );
+  const hardwareTemplateId = asNumber(product.hardware_template_id);
+  let hardwareModifierOverrides = {};
+  let hardwareOptionsByKey = {};
+  if (hardwareTemplateId != null) {
+    const hardwareOptionsRes = await pool.query(
+      `SELECT id, label, option_key, unit_price, weight_per_item, is_default, sort_order
+       FROM hardware_template_options
+       WHERE hardware_template_id = $1 AND is_active = true
+       ORDER BY sort_order ASC, id ASC`,
+      [hardwareTemplateId]
+    );
+    const optionIds = hardwareOptionsRes.rows.map((row) => Number(row.id));
+    let optionShippingRules = [];
+    if (optionIds.length > 0) {
+      const rulesRes = await pool.query(
+        `SELECT
+           r.id,
+           r.hardware_template_option_id,
+           r.shipping_box_id,
+           NULL::numeric AS min_smallest_side,
+           NULL::numeric AS max_smallest_side,
+           r.max_quantity_per_box,
+           r.max_weight_per_box,
+           r.sort_order,
+           r.is_active,
+           b.name AS box_name,
+           b.length AS box_length,
+           b.width AS box_width,
+           b.height AS box_height
+         FROM hardware_template_option_shipping_box_rules r
+         INNER JOIN shipping_boxes b ON b.id = r.shipping_box_id
+         WHERE r.hardware_template_option_id = ANY($1::int[])
+           AND r.is_active = true
+           AND b.is_active = true
+         ORDER BY r.hardware_template_option_id ASC, r.sort_order ASC, r.id ASC`,
+        [optionIds]
+      );
+      optionShippingRules = rulesRes.rows;
+    }
+    const rulesByOptionId = new Map();
+    for (const row of optionShippingRules) {
+      const optionId = Number(row.hardware_template_option_id);
+      if (!rulesByOptionId.has(optionId)) rulesByOptionId.set(optionId, []);
+      rulesByOptionId.get(optionId).push(normalizeShippingRule(row));
+    }
+    const optionKeyById = new Map();
+    const purchaseRows = hardwareOptionsRes.rows.map((row) => {
+      const optionKey = String(row.option_key || '').trim().toLowerCase();
+      optionKeyById.set(Number(row.id), optionKey);
+      const normalized = {
+        id: Number(row.id),
+        label: String(row.label || ''),
+        option_key: optionKey,
+        pricing_mode: PRICING_MODE.FIXED,
+        unit_price: asNumber(row.unit_price) ?? 0,
+        price_per_sqft: null,
+        min_charge: null,
+        sort_order: Number(row.sort_order || 0),
+        is_default: !!row.is_default,
+        weight_per_item: row.weight_per_item == null ? null : Number(row.weight_per_item),
+        shipping_box_rules: rulesByOptionId.get(Number(row.id)) || [],
+      };
+      hardwareOptionsByKey[optionKey] = normalized;
+      return normalized;
+    });
+    if (purchaseRows.length > 0) {
+      purchaseOptionsResult = { rows: purchaseRows };
+      const hardwareModifierRows = await pool.query(
+        `SELECT
+           htom.hardware_template_option_id,
+           htom.is_required,
+           htom.sort_order AS template_sort_order,
+           mg.id AS modifier_group_id,
+           mg.key AS group_key,
+           mg.name AS group_name,
+           mg.input_type,
+           mo.id AS option_id,
+           mo.label AS option_label,
+           mo.value AS option_value,
+           COALESCE(htomoo.price_adjustment_override, mo.price_adjustment, 0) AS option_price_adjustment,
+           htomoo.price_adjustment_override AS option_price_adjustment_override,
+           mo.price_type AS option_price_type,
+           mo.is_default AS option_is_default,
+           mo.is_active AS option_active
+         FROM hardware_template_option_modifiers htom
+         INNER JOIN modifier_groups mg ON mg.id = htom.modifier_group_id AND mg.is_active = true
+         INNER JOIN hardware_template_option_modifier_options htomoo ON htomoo.hardware_template_option_modifier_id = htom.id AND htomoo.is_active = true
+         INNER JOIN modifier_options mo ON mo.id = htomoo.modifier_option_id AND mo.is_active = true
+         WHERE htom.hardware_template_option_id = ANY($1::int[])
+           AND htom.is_active = true
+         ORDER BY htom.sort_order ASC, mg.sort_order ASC, mo.is_default DESC, mo.sort_order ASC, mo.id ASC`,
+        [optionIds]
+      );
+      modifierGroupsResult = { rows: hardwareModifierRows.rows.map((row) => {
+        const optionKey = optionKeyById.get(Number(row.hardware_template_option_id)) || 'all';
+        const groupKey = String(row.group_key || '').trim();
+        if (!hardwareModifierOverrides[optionKey]) hardwareModifierOverrides[optionKey] = {};
+        if (!hardwareModifierOverrides[optionKey][groupKey]) hardwareModifierOverrides[optionKey][groupKey] = {};
+        if (row.option_price_adjustment_override != null) {
+          hardwareModifierOverrides[optionKey][groupKey][String(row.option_id)] = Number(row.option_price_adjustment_override);
+          hardwareModifierOverrides[optionKey][groupKey][String(row.option_value || '')] = Number(row.option_price_adjustment_override);
+        }
+        return {
+          ...row,
+          product_modifier_id: null,
+          product_sort_order: row.template_sort_order,
+          mode_scope: optionKey,
+          option_price_adjustment: row.option_price_adjustment,
+          product_option_active: true,
+        };
+      }) };
+    }
+  }
+
   const groupsByKey = new Map();
+  const groupScopesByKey = new Map();
+  const groupRequiredByKey = new Map();
   for (const row of modifierGroupsResult.rows) {
     if (!row.option_active || !row.product_option_active) continue;
     const key = String(row.group_key || '').trim();
     if (!key) continue;
-    if (!groupsByKey.has(key)) {
-      groupsByKey.set(key, {
+    const scope = normalizeModeScope(row.mode_scope);
+    const mapKey = key;
+    if (!groupScopesByKey.has(mapKey)) groupScopesByKey.set(mapKey, new Set());
+    groupScopesByKey.get(mapKey).add(scope);
+    if (row.is_required) groupRequiredByKey.set(mapKey, true);
+    if (!groupsByKey.has(mapKey)) {
+      groupsByKey.set(mapKey, {
         id: Number(row.modifier_group_id),
         key,
         name: String(row.group_name || key),
         input_type: String(row.input_type || 'dropdown'),
         is_required: !!row.is_required,
-        mode_scope: normalizeModeScope(row.mode_scope),
+        mode_scope: scope,
         sort_order: Number(row.product_sort_order || 0),
         options: [],
+        _option_ids: new Set(),
       });
     }
-    groupsByKey.get(key).options.push({
-      id: Number(row.option_id),
+    const group = groupsByKey.get(mapKey);
+    const optionId = Number(row.option_id);
+    if (group._option_ids.has(optionId)) continue;
+    group._option_ids.add(optionId);
+    group.options.push({
+      id: optionId,
       label: String(row.option_label || ''),
       value: String(row.option_value || ''),
       price_adjustment: asNumber(row.option_price_adjustment) ?? 0,
@@ -201,12 +347,20 @@ async function getProductPricingConfig(productId) {
       is_default: !!row.option_is_default,
     });
   }
+  for (const [mapKey, group] of groupsByKey.entries()) {
+    const scopes = Array.from(groupScopesByKey.get(mapKey) || []);
+    group.mode_scope = scopes.length === 1 ? scopes[0] : 'all';
+    group.is_required = !!groupRequiredByKey.get(mapKey);
+    delete group._option_ids;
+  }
   const modifier_groups = Array.from(groupsByKey.values()).filter((g) => g.options.length > 0);
   return {
     ...product,
     size_options: optionsResult.rows,
     purchase_options: purchaseOptionsResult.rows,
     modifier_groups,
+    hardware_options_by_key: hardwareOptionsByKey,
+    hardware_modifier_overrides: hardwareModifierOverrides,
     shipping_box_rules: shippingBoxRulesResult.rows.map((row) => ({
       id: Number(row.id),
       shipping_box_id: Number(row.shipping_box_id),
@@ -291,10 +445,17 @@ function resolveSelectedModifiers(product, input, baseUnitPrice, activePurchaseO
     }
     if (!option) continue;
     const priceType = String(option.price_type || 'fixed').toLowerCase();
-    const adjustment = asNumber(option.price_adjustment) ?? 0;
+    let adjustment = asNumber(option.price_adjustment) ?? 0;
     if (priceType !== 'fixed' && priceType !== 'percent') {
       throw new Error(`Unsupported price type for ${group.name}.`);
     }
+    const optionOverrideMap =
+      product?.hardware_modifier_overrides?.[String(effectiveScopeKey || '').trim().toLowerCase()]?.[group.key];
+    const optionOverride =
+      optionOverrideMap && typeof optionOverrideMap === 'object'
+        ? (asNumber(optionOverrideMap[String(option.id)]) ?? asNumber(optionOverrideMap[optionEffectiveValue(option)]))
+        : null;
+    if (optionOverride != null) adjustment = optionOverride;
     if (priceType === 'percent') {
       percentTotal += adjustment;
     } else {
@@ -416,6 +577,11 @@ function validateAndCalculatePricing(product, input) {
       graphicScenarioEnabled: isGraphicScenario,
       purchaseOptionKey: activePurchaseOptionKey,
       purchaseOptionLabel: String(selectedPurchaseOption.label || ''),
+      hardwareOption: {
+        option_key: activePurchaseOptionKey,
+        weight_per_item: selectedPurchaseOption.weight_per_item == null ? null : Number(selectedPurchaseOption.weight_per_item),
+        shipping_box_rules: Array.isArray(selectedPurchaseOption.shipping_box_rules) ? selectedPurchaseOption.shipping_box_rules : [],
+      },
       selectedModifiers: modifierSelection.selected,
       modifierTotal: modifierSelection.total,
       baseUnitPrice: computedUnitPrice - modifierSelection.total,
@@ -598,93 +764,83 @@ function attachShippingSnapshot(result, productRow, input) {
   const shippingBoxRules = Array.isArray(productRow.shipping_box_rules)
     ? productRow.shipping_box_rules
     : [];
-  if (shippingBoxRules.length > 0) {
+  if (!hasHardware && shippingBoxRules.length > 0) {
     result.shipping_box_rules = shippingBoxRules;
     result.shippingBoxRules = shippingBoxRules;
     const weightPerSqft = asNumber(productRow.weight_per_sqft);
-    if (!hasHardware && weightPerSqft > 0) {
+    const productWeight = asNumber(productRow.weight);
+    if (!fixedPriceShippingOnly && weightPerSqft > 0) {
       result.weight_per_sqft = weightPerSqft;
       result.weightPerSqft = weightPerSqft;
+    }
+    if (fixedPriceShippingOnly && productWeight > 0) {
+      result.weight = productWeight;
     }
     result.pricing_snapshot = {
       ...result.pricing_snapshot,
       shipping_box_rules: shippingBoxRules,
-      ...(!hasHardware && weightPerSqft > 0 ? { weight_per_sqft: weightPerSqft } : {}),
+      ...(!fixedPriceShippingOnly && weightPerSqft > 0 ? { weight_per_sqft: weightPerSqft } : {}),
+      ...(fixedPriceShippingOnly && productWeight > 0 ? { weight: productWeight } : {}),
     };
   }
 
   if (hasHardware) {
-    const sl = asNumber(input.shipping_length ?? input.shippingLength ?? productRow.shipping_length);
-    const sw = asNumber(input.shipping_width ?? input.shippingWidth ?? productRow.shipping_width);
-    const sh = asNumber(input.shipping_height ?? input.shippingHeight ?? productRow.shipping_height);
-    const swt = asNumber(input.shipping_weight ?? input.shippingWeight ?? productRow.shipping_weight);
-
+    const optionKey = String(result.purchaseOptionKey ?? result.purchase_option_key ?? '').trim().toLowerCase();
+    const hwOption = optionKey ? productRow.hardware_options_by_key?.[optionKey] : null;
+    const weightPerItem = asNumber(hwOption?.weight_per_item);
+    const optionBoxRules = Array.isArray(hwOption?.shipping_box_rules) ? hwOption.shipping_box_rules : [];
     if (Number.isFinite(htId)) {
       result.hardware_template_id = htId;
       result.hardwareTemplateId = htId;
     }
     result.graphic_scenario_enabled = true;
     result.graphicScenarioEnabled = true;
-    if (sl > 0 && sw > 0 && sh > 0) {
-      result.shipping_length = sl;
-      result.shipping_width = sw;
-      result.shipping_height = sh;
-      result.shippingLength = sl;
-      result.shippingWidth = sw;
-      result.shippingHeight = sh;
+    if (weightPerItem > 0) {
+      result.hardware_weight_per_item = weightPerItem;
+      result.hardwareWeightPerItem = weightPerItem;
     }
-    if (swt > 0) {
-      result.shipping_weight = swt;
-      result.shippingWeight = swt;
+    if (optionBoxRules.length > 0) {
+      result.shipping_box_rules = optionBoxRules;
+      result.shippingBoxRules = optionBoxRules;
     }
 
     result.pricing_snapshot = {
       ...result.pricing_snapshot,
       graphic_scenario_enabled: true,
       ...(Number.isFinite(htId) ? { hardware_template_id: htId } : {}),
-      ...(sl > 0 && sw > 0 && sh > 0
-        ? { shipping_length: sl, shipping_width: sw, shipping_height: sh }
-        : {}),
-      ...(swt > 0 ? { shipping_weight: swt } : {}),
+      ...(weightPerItem > 0 ? { hardware_weight_per_item: weightPerItem } : {}),
+      ...(optionBoxRules.length > 0 ? { shipping_box_rules: optionBoxRules } : {}),
     };
     return;
   }
 
-  const standardLength = asNumber(
-    input.shipping_length ?? input.shippingLength ?? (fixedPriceShippingOnly ? productRow.shipping_length : productRow.length)
-  );
-  const standardWidth = asNumber(input.shipping_width ?? input.shippingWidth ?? productRow.shipping_width);
-  const standardHeight = asNumber(input.shipping_height ?? input.shippingHeight ?? productRow.shipping_height);
-  const standardWeight = asNumber(
-    input.shipping_weight ?? input.shippingWeight ?? (fixedPriceShippingOnly ? productRow.shipping_weight : productRow.weight)
-  );
   if (fixedPriceShippingOnly) {
+    const productWeight = asNumber(productRow.weight);
     result.fixed_price_shipping_only = true;
     result.fixedPriceShippingOnly = true;
+    if (productWeight > 0) result.weight = productWeight;
+    result.pricing_snapshot = {
+      ...result.pricing_snapshot,
+      fixed_price_shipping_only: true,
+      ...(productWeight > 0 ? { weight: productWeight } : {}),
+    };
+    return;
   }
+
+  const standardLength = asNumber(input.shipping_length ?? input.shippingLength ?? productRow.length);
+  const standardWeight = asNumber(input.shipping_weight ?? input.shippingWeight ?? productRow.weight);
   if (standardLength > 0) {
     result.shipping_length = standardLength;
     result.shippingLength = standardLength;
-  }
-  if (fixedPriceShippingOnly && standardWidth > 0) {
-    result.shipping_width = standardWidth;
-    result.shippingWidth = standardWidth;
-  }
-  if (fixedPriceShippingOnly && standardHeight > 0) {
-    result.shipping_height = standardHeight;
-    result.shippingHeight = standardHeight;
   }
   if (standardWeight > 0) {
     result.shipping_weight = standardWeight;
     result.shippingWeight = standardWeight;
   }
-  if (standardLength > 0 || standardWeight > 0 || fixedPriceShippingOnly) {
+  if (standardLength > 0 || standardWeight > 0) {
     result.pricing_snapshot = {
       ...result.pricing_snapshot,
-      ...(fixedPriceShippingOnly ? { fixed_price_shipping_only: true } : {}),
       ...(standardLength > 0 ? { shipping_length: standardLength } : {}),
-      ...(fixedPriceShippingOnly && standardWidth > 0 ? { shipping_width: standardWidth } : {}),
-      ...(fixedPriceShippingOnly && standardHeight > 0 ? { shipping_height: standardHeight } : {}),
       ...(standardWeight > 0 ? { shipping_weight: standardWeight } : {}),
     };
   }
@@ -801,6 +957,7 @@ function buildCartSnapshot(pricing, input, productRow) {
       graphic_scenario_enabled: pricing.graphicScenarioEnabled,
       purchase_option_key: pricing.purchaseOptionKey,
       purchase_option_label: pricing.purchaseOptionLabel,
+      hardware_option: pricing.hardwareOption || null,
       fixed_price_shipping_only: pricing.fixedPriceShippingOnly === true,
       production_time: productionTimeDays,
       production_time_rules: productRow.production_time_rules || [],

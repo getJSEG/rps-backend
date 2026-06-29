@@ -271,6 +271,26 @@ function parseShippingBoxRulesInput(value) {
     .filter((item) => item.shipping_box_id != null);
 }
 
+function normalizeShippingBoxRuleForOutput(row) {
+  return {
+    id: Number(row.id),
+    shipping_box_id: Number(row.shipping_box_id),
+    min_smallest_side: row.min_smallest_side == null ? null : Number(row.min_smallest_side),
+    max_smallest_side: row.max_smallest_side == null ? null : Number(row.max_smallest_side),
+    max_quantity_per_box: row.max_quantity_per_box == null ? null : Number(row.max_quantity_per_box),
+    max_weight_per_box: row.max_weight_per_box == null ? null : Number(row.max_weight_per_box),
+    sort_order: Number(row.sort_order || 0),
+    is_active: row.is_active !== false,
+    box: {
+      id: Number(row.shipping_box_id),
+      name: String(row.box_name || ''),
+      length: Number(row.box_length) || 0,
+      width: Number(row.box_width) || 0,
+      height: Number(row.box_height) || 0,
+    },
+  };
+}
+
 async function replaceProductShippingBoxRules(productId, rules) {
   await pool.query('DELETE FROM product_shipping_box_rules WHERE product_id = $1', [productId]);
   if (!Array.isArray(rules) || rules.length === 0) return;
@@ -337,22 +357,8 @@ async function getProductShippingBoxRules(productId) {
     [productId]
   );
   return result.rows.map((row) => ({
-    id: Number(row.id),
+    ...normalizeShippingBoxRuleForOutput(row),
     product_id: Number(row.product_id),
-    shipping_box_id: Number(row.shipping_box_id),
-    min_smallest_side: row.min_smallest_side == null ? null : Number(row.min_smallest_side),
-    max_smallest_side: row.max_smallest_side == null ? null : Number(row.max_smallest_side),
-    max_quantity_per_box: row.max_quantity_per_box == null ? null : Number(row.max_quantity_per_box),
-    max_weight_per_box: row.max_weight_per_box == null ? null : Number(row.max_weight_per_box),
-    sort_order: Number(row.sort_order || 0),
-    is_active: row.is_active !== false,
-    box: {
-      id: Number(row.shipping_box_id),
-      name: String(row.box_name || ''),
-      length: Number(row.box_length) || 0,
-      width: Number(row.box_width) || 0,
-      height: Number(row.box_height) || 0,
-    },
   }));
 }
 
@@ -1103,6 +1109,15 @@ const getProductById = async (req, res) => {
     product.modifier_groups = await getProductModifierGroups(product.id);
     product.conditional_modifier_rules = await getProductConditionalModifierRules(product.id);
     product.shipping_box_rules = await getProductShippingBoxRules(product.id);
+    if (product.hardware_template_id != null) {
+      const effectiveConfig = await getProductPricingConfig(product.id);
+      if (effectiveConfig) {
+        product.purchase_options = effectiveConfig.purchase_options || product.purchase_options;
+        product.modifier_groups = effectiveConfig.modifier_groups || product.modifier_groups;
+        product.hardware_options_by_key = effectiveConfig.hardware_options_by_key || {};
+        product.hardware_modifier_overrides = effectiveConfig.hardware_modifier_overrides || {};
+      }
+    }
     product.template_files = await getProductTemplateFiles(product.id);
     const sm = product.size_mode != null ? String(product.size_mode).trim() : '';
     if (!sm && Array.isArray(product.size_options) && product.size_options.length > 0) {
@@ -1664,6 +1679,8 @@ function parseHardwareTemplatePayload(body) {
       label: String(opt?.label || '').trim(),
       option_key: normalizeHardwareOptionKey(opt?.option_key || opt?.label, index),
       unit_price: asNumberOrNull(opt?.unit_price ?? opt?.unitPrice) ?? 0,
+      weight_per_item: asNumberOrNull(opt?.weight_per_item ?? opt?.weightPerItem),
+      shipping_box_rules: parseShippingBoxRulesInput(opt?.shipping_box_rules ?? opt?.shippingBoxRules),
       is_default: opt?.is_default === true || opt?.isDefault === true,
       sort_order: index,
       modifiers: Array.isArray(opt?.modifiers) ? opt.modifiers : [],
@@ -1684,6 +1701,8 @@ function parseHardwareTemplatePayload(body) {
   const keySet = new Set();
   for (const opt of options) {
     if (opt.unit_price < 0) throw new Error('Option price must be zero or greater.');
+    if (opt.weight_per_item != null && opt.weight_per_item <= 0) throw new Error('Weight per item must be greater than zero.');
+    if (opt.shipping_box_rules.length > 1) throw new Error('Only one shipping box rule is supported per hardware option.');
     if (keySet.has(opt.option_key)) throw new Error('Option keys must be unique.');
     keySet.add(opt.option_key);
   }
@@ -1691,34 +1710,39 @@ function parseHardwareTemplatePayload(body) {
   return { name, options };
 }
 
-async function computeHardwareOptionPricing(client, baseUnitPrice, modifierGroupIds) {
+async function computeHardwareOptionPricing(client, baseUnitPrice, modifierRows) {
   const base = asNumberOrNull(baseUnitPrice) ?? 0;
-  if (!Array.isArray(modifierGroupIds) || modifierGroupIds.length === 0) {
+  if (!Array.isArray(modifierRows) || modifierRows.length === 0) {
     return { base_unit_price: base, modifier_total: 0, computed_unit_price: base };
   }
 
   let modifierTotal = 0;
-  const uniqueGroupIds = Array.from(
-    new Set(
-      modifierGroupIds
-        .map((id) => Number(id))
-        .filter((id) => Number.isFinite(id))
-    )
-  );
+  const byGroupId = new Map();
+  for (const row of modifierRows) {
+    const id = Number(row?.modifier_group_id);
+    if (Number.isFinite(id) && !byGroupId.has(id)) byGroupId.set(id, row);
+  }
 
-  for (const groupId of uniqueGroupIds) {
+  for (const [groupId, modifierRow] of byGroupId.entries()) {
+    const selectedOptions = Array.isArray(modifierRow?.options) ? modifierRow.options : [];
+    const selectedOptionIds = selectedOptions
+          .map((opt) => Number(opt?.option_id ?? opt?.optionId))
+          .filter((id) => Number.isFinite(id));
     const optRes = await client.query(
-      `SELECT price_adjustment, price_type
+      `SELECT id, price_adjustment, price_type, is_default, sort_order
        FROM modifier_options
        WHERE modifier_group_id = $1
          AND is_active = true
+         ${selectedOptionIds.length > 0 ? 'AND id = ANY($2::int[])' : ''}
        ORDER BY is_default DESC, sort_order ASC, id ASC
        LIMIT 1`,
-      [groupId]
+      selectedOptionIds.length > 0 ? [groupId, selectedOptionIds] : [groupId]
     );
     if (optRes.rows.length === 0) continue;
     const row = optRes.rows[0];
-    const adjustment = asNumberOrNull(row.price_adjustment) ?? 0;
+    const selectedOverride = selectedOptions.find((opt) => Number(opt?.option_id ?? opt?.optionId) === Number(row.id))?.price_adjustment_override;
+    const override = asNumberOrNull(selectedOverride ?? modifierRow?.price_adjustment_override);
+    const adjustment = override != null ? override : (asNumberOrNull(row.price_adjustment) ?? 0);
     const priceType = String(row.price_type || 'percent').trim().toLowerCase();
     if (priceType === 'fixed') {
       modifierTotal += adjustment;
@@ -1743,7 +1767,7 @@ async function getHardwareTemplatesNested(client) {
   if (templatesRes.rows.length === 0) return [];
 
   const optionsRes = await client.query(
-    `SELECT id, hardware_template_id, label, option_key, unit_price, base_unit_price, modifier_total, computed_unit_price, is_default, sort_order, is_active
+    `SELECT id, hardware_template_id, label, option_key, unit_price, base_unit_price, modifier_total, computed_unit_price, weight_per_item, is_default, sort_order, is_active
      FROM hardware_template_options
      ORDER BY hardware_template_id ASC, sort_order ASC, id ASC`
   );
@@ -1755,8 +1779,10 @@ async function getHardwareTemplatesNested(client) {
   if (optionIds.length > 0) {
     modifiersRes = await client.query(
       `SELECT
+         htom.id AS hardware_template_option_modifier_id,
          htom.hardware_template_option_id,
          htom.is_required,
+         htom.price_adjustment_override,
          htom.sort_order,
          mg.id AS modifier_group_id,
          mg.key AS modifier_key,
@@ -1771,6 +1797,74 @@ async function getHardwareTemplatesNested(client) {
     );
   }
 
+  let modifierOptionsRes = { rows: [] };
+  const hardwareTemplateOptionModifierIds = modifiersRes.rows.map((row) => Number(row.hardware_template_option_modifier_id));
+  if (hardwareTemplateOptionModifierIds.length > 0) {
+    modifierOptionsRes = await client.query(
+      `SELECT
+         htomoo.hardware_template_option_modifier_id,
+         htomoo.price_adjustment_override,
+         htomoo.is_active AS template_option_active,
+         mo.id AS modifier_option_id,
+         mo.label,
+         mo.value,
+         mo.price_adjustment,
+         mo.price_type,
+         mo.is_default,
+         mo.sort_order,
+         mo.is_active AS modifier_option_active
+       FROM hardware_template_option_modifier_options htomoo
+       INNER JOIN modifier_options mo ON mo.id = htomoo.modifier_option_id
+       WHERE htomoo.hardware_template_option_modifier_id = ANY($1::int[])
+       ORDER BY htomoo.hardware_template_option_modifier_id ASC, mo.sort_order ASC, mo.id ASC`,
+      [hardwareTemplateOptionModifierIds]
+    );
+  }
+
+  const modifierOptionsByModifierId = new Map();
+  for (const row of modifierOptionsRes.rows) {
+    if (!row.template_option_active || !row.modifier_option_active) continue;
+    const modifierId = Number(row.hardware_template_option_modifier_id);
+    if (!modifierOptionsByModifierId.has(modifierId)) modifierOptionsByModifierId.set(modifierId, []);
+    modifierOptionsByModifierId.get(modifierId).push({
+      option_id: Number(row.modifier_option_id),
+      value: String(row.value || ''),
+      label: String(row.label || ''),
+      price_adjustment: asNumberOrNull(row.price_adjustment) ?? 0,
+      price_type: String(row.price_type || 'fixed').toLowerCase(),
+      is_default: !!row.is_default,
+      price_adjustment_override: row.price_adjustment_override == null ? null : Number(row.price_adjustment_override),
+      sort_order: Number(row.sort_order || 0),
+    });
+  }
+
+  let shippingRulesRes = { rows: [] };
+  if (optionIds.length > 0) {
+    shippingRulesRes = await client.query(
+      `SELECT
+         r.id,
+         r.hardware_template_option_id,
+         r.shipping_box_id,
+         NULL::numeric AS min_smallest_side,
+         NULL::numeric AS max_smallest_side,
+         r.max_quantity_per_box,
+         r.max_weight_per_box,
+         r.sort_order,
+         r.is_active,
+         b.name AS box_name,
+         b.length AS box_length,
+         b.width AS box_width,
+         b.height AS box_height
+       FROM hardware_template_option_shipping_box_rules r
+       INNER JOIN shipping_boxes b ON b.id = r.shipping_box_id
+       WHERE r.hardware_template_option_id = ANY($1::int[])
+         AND r.is_active = true
+         AND b.is_active = true
+       ORDER BY r.hardware_template_option_id ASC, r.sort_order ASC, r.id ASC`,
+      [optionIds]
+    );
+  }
+
   const modsByOptionId = new Map();
   for (const row of modifiersRes.rows) {
     const optionId = Number(row.hardware_template_option_id);
@@ -1780,8 +1874,17 @@ async function getHardwareTemplatesNested(client) {
       key: String(row.modifier_key || ''),
       name: String(row.modifier_name || ''),
       is_required: !!row.is_required,
+      price_adjustment_override: row.price_adjustment_override == null ? null : Number(row.price_adjustment_override),
       sort_order: Number(row.sort_order || 0),
+      options: modifierOptionsByModifierId.get(Number(row.hardware_template_option_modifier_id)) || [],
     });
+  }
+
+  const shippingRulesByOptionId = new Map();
+  for (const row of shippingRulesRes.rows) {
+    const optionId = Number(row.hardware_template_option_id);
+    if (!shippingRulesByOptionId.has(optionId)) shippingRulesByOptionId.set(optionId, []);
+    shippingRulesByOptionId.get(optionId).push(normalizeShippingBoxRuleForOutput(row));
   }
 
   const optionsByTemplateId = new Map();
@@ -1797,6 +1900,8 @@ async function getHardwareTemplatesNested(client) {
       base_unit_price: asNumberOrNull(row.base_unit_price) ?? asNumberOrNull(row.unit_price) ?? 0,
       modifier_total: asNumberOrNull(row.modifier_total) ?? 0,
       computed_unit_price: asNumberOrNull(row.computed_unit_price) ?? asNumberOrNull(row.unit_price) ?? 0,
+      weight_per_item: row.weight_per_item == null ? null : Number(row.weight_per_item),
+      shipping_box_rules: shippingRulesByOptionId.get(Number(row.id)) || [],
       is_default: !!row.is_default,
       sort_order: Number(row.sort_order || 0),
       is_active: !!row.is_active,
@@ -1845,7 +1950,9 @@ const upsertHardwareTemplateAdmin = async (req, res) => {
          WHERE id = $2`,
         [name, activeTemplateId]
       );
+      await client.query('DELETE FROM hardware_template_option_modifier_options WHERE hardware_template_option_modifier_id IN (SELECT htom.id FROM hardware_template_option_modifiers htom INNER JOIN hardware_template_options hto ON hto.id = htom.hardware_template_option_id WHERE hto.hardware_template_id = $1)', [activeTemplateId]);
       await client.query('DELETE FROM hardware_template_option_modifiers WHERE hardware_template_option_id IN (SELECT id FROM hardware_template_options WHERE hardware_template_id = $1)', [activeTemplateId]);
+      await client.query('DELETE FROM hardware_template_option_shipping_box_rules WHERE hardware_template_option_id IN (SELECT id FROM hardware_template_options WHERE hardware_template_id = $1)', [activeTemplateId]);
       await client.query('DELETE FROM hardware_template_options WHERE hardware_template_id = $1', [activeTemplateId]);
     } else {
       const insertTemplate = await client.query(
@@ -1860,12 +1967,39 @@ const upsertHardwareTemplateAdmin = async (req, res) => {
     for (let i = 0; i < options.length; i++) {
       const opt = options[i];
       const optionRes = await client.query(
-        `INSERT INTO hardware_template_options (hardware_template_id, label, option_key, unit_price, base_unit_price, modifier_total, computed_unit_price, is_default, sort_order, is_active)
-         VALUES ($1, $2, $3, $4, $5, 0, $4, $6, $7, true)
+        `INSERT INTO hardware_template_options (hardware_template_id, label, option_key, unit_price, base_unit_price, modifier_total, computed_unit_price, weight_per_item, is_default, sort_order, is_active)
+         VALUES ($1, $2, $3, $4, $5, 0, $4, $6, $7, $8, true)
          RETURNING id`,
-        [activeTemplateId, opt.label, opt.option_key, opt.unit_price, opt.unit_price, !!opt.is_default, i]
+        [activeTemplateId, opt.label, opt.option_key, opt.unit_price, opt.unit_price, opt.weight_per_item, !!opt.is_default, i]
       );
       const hardwareTemplateOptionId = Number(optionRes.rows[0].id);
+
+      for (let r = 0; r < opt.shipping_box_rules.length; r += 1) {
+        const rule = opt.shipping_box_rules[r];
+        if (!Number.isFinite(rule.shipping_box_id) || rule.shipping_box_id <= 0) {
+          throw new Error('Shipping box is required for each hardware option shipping rule.');
+        }
+        if (!Number.isFinite(Number(rule.max_quantity_per_box)) || Number(rule.max_quantity_per_box) <= 0) {
+          throw new Error('Hardware option max quantity per box is required.');
+        }
+        if (rule.max_weight_per_box != null && (!Number.isFinite(Number(rule.max_weight_per_box)) || Number(rule.max_weight_per_box) <= 0)) {
+          throw new Error('Hardware option max weight per box must be greater than zero.');
+        }
+        const boxCheck = await client.query('SELECT id FROM shipping_boxes WHERE id = $1', [rule.shipping_box_id]);
+        if (boxCheck.rows.length === 0) throw new Error('Selected shipping box does not exist.');
+        await client.query(
+          `INSERT INTO hardware_template_option_shipping_box_rules
+           (hardware_template_option_id, shipping_box_id, max_quantity_per_box, max_weight_per_box, sort_order, is_active)
+           VALUES ($1, $2, $3, $4, $5, true)`,
+          [
+            hardwareTemplateOptionId,
+            rule.shipping_box_id,
+            Math.trunc(Number(rule.max_quantity_per_box)),
+            rule.max_weight_per_box == null ? null : rule.max_weight_per_box,
+            r,
+          ]
+        );
+      }
 
       const modifierRows = [];
       for (const m of opt.modifiers) {
@@ -1874,6 +2008,8 @@ const upsertHardwareTemplateAdmin = async (req, res) => {
         modifierRows.push({
           key,
           is_required: m?.is_required === true,
+          price_adjustment_override: asNumberOrNull(m?.price_adjustment_override ?? m?.priceAdjustmentOverride),
+          options: Array.isArray(m?.options) ? m.options : [],
         });
       }
 
@@ -1886,17 +2022,57 @@ const upsertHardwareTemplateAdmin = async (req, res) => {
         if (groupRes.rows.length === 0) continue;
         const modifierGroupId = Number(groupRes.rows[0].id);
         m.modifier_group_id = modifierGroupId;
-        await client.query(
-          `INSERT INTO hardware_template_option_modifiers (hardware_template_option_id, modifier_group_id, is_required, sort_order, is_active)
-           VALUES ($1, $2, $3, $4, true)`,
-          [hardwareTemplateOptionId, modifierGroupId, m.is_required, j]
+        const insertedModifier = await client.query(
+          `INSERT INTO hardware_template_option_modifiers (hardware_template_option_id, modifier_group_id, is_required, price_adjustment_override, sort_order, is_active)
+           VALUES ($1, $2, $3, $4, $5, true)
+           RETURNING id`,
+          [hardwareTemplateOptionId, modifierGroupId, m.is_required, m.price_adjustment_override, j]
         );
+        const hardwareTemplateOptionModifierId = Number(insertedModifier.rows?.[0]?.id);
+        const requestedOptions = Array.isArray(m.options) ? m.options : [];
+        let optionRows = requestedOptions
+          .map((opt) => ({
+            option_id: opt?.option_id == null && opt?.optionId == null ? null : Number(opt.option_id ?? opt.optionId),
+            value: String(opt?.value || '').trim(),
+            price_adjustment_override: asNumberOrNull(opt?.price_adjustment_override ?? opt?.priceAdjustmentOverride),
+          }))
+          .filter((opt) => opt.option_id != null || opt.value);
+        if (optionRows.length === 0) {
+          const allOptions = await client.query(
+            `SELECT id, value FROM modifier_options WHERE modifier_group_id = $1 AND is_active = true ORDER BY sort_order ASC, id ASC`,
+            [modifierGroupId]
+          );
+          optionRows = allOptions.rows.map((row) => ({
+            option_id: Number(row.id),
+            value: String(row.value || ''),
+            price_adjustment_override: null,
+          }));
+        }
+        const insertedOptionIds = new Set();
+        for (const opt of optionRows) {
+          let optionId = opt.option_id;
+          if (optionId == null && opt.value) {
+            const optionRes = await client.query(
+              `SELECT id FROM modifier_options WHERE modifier_group_id = $1 AND value = $2 ORDER BY id ASC LIMIT 1`,
+              [modifierGroupId, opt.value]
+            );
+            optionId = optionRes.rows.length > 0 ? Number(optionRes.rows[0].id) : null;
+          }
+          if (!Number.isFinite(optionId) || insertedOptionIds.has(Number(optionId))) continue;
+          insertedOptionIds.add(Number(optionId));
+          await client.query(
+            `INSERT INTO hardware_template_option_modifier_options
+             (hardware_template_option_modifier_id, modifier_option_id, price_adjustment_override, is_active)
+             VALUES ($1, $2, $3, true)`,
+            [hardwareTemplateOptionModifierId, Number(optionId), opt.price_adjustment_override]
+          );
+        }
       }
 
       const computed = await computeHardwareOptionPricing(
         client,
         opt.unit_price,
-        modifierRows.map((m) => m.modifier_group_id).filter((id) => id != null)
+        modifierRows.filter((m) => m.modifier_group_id != null)
       );
       await client.query(
         `UPDATE hardware_template_options
@@ -2214,7 +2390,7 @@ const createProduct = async (req, res) => {
     const shippingWeightVal = asNumberOrNull(shipping_weight);
     const parsedShippingBoxRules = parseShippingBoxRulesInput(shipping_box_rules);
     const fedexShippingValidationError = validateFedexShippingDataForHardware({
-      isHardware: graphicScenarioEnabledVal || pricingModeVal === 'fixed',
+      isHardware: false,
       shippingLength: shippingLengthVal,
       shippingWidth: shippingWidthVal,
       shippingHeight: shippingHeightVal,
@@ -2241,6 +2417,9 @@ const createProduct = async (req, res) => {
     }
     if (!graphicScenarioEnabledVal && pricingModeVal !== 'fixed' && parsedShippingBoxRules.length > 0 && !(weightPerSqftVal > 0)) {
       return res.status(400).json({ message: 'Weight per sq ft is required when shipping box rules are configured.' });
+    }
+    if (!graphicScenarioEnabledVal && pricingModeVal === 'fixed' && parsedShippingBoxRules.length > 0 && !(weightVal > 0)) {
+      return res.status(400).json({ message: 'Weight per item is required when fixed price shipping box rules are configured.' });
     }
 
     const result = await pool.query(
@@ -2389,7 +2568,7 @@ const updateProduct = async (req, res) => {
           ? parseShippingBoxRulesInput(req.body.shipping_box_rules)
           : null;
     const fedexShippingValidationError = validateFedexShippingDataForHardware({
-      isHardware: graphicScenarioEnabledVal || pricingModeVal === 'fixed',
+      isHardware: false,
       shippingLength: shippingLengthVal,
       shippingWidth: shippingWidthVal,
       shippingHeight: shippingHeightVal,
@@ -2431,6 +2610,9 @@ const updateProduct = async (req, res) => {
         : (graphicScenarioEnabledVal ? 0 : (await getProductShippingBoxRules(id)).length);
     if (!graphicScenarioEnabledVal && pricingModeVal !== 'fixed' && effectiveShippingBoxRuleCount > 0 && !(weightPerSqftVal > 0)) {
       return res.status(400).json({ message: 'Weight per sq ft is required when shipping box rules are configured.' });
+    }
+    if (!graphicScenarioEnabledVal && pricingModeVal === 'fixed' && effectiveShippingBoxRuleCount > 0 && !(weightVal > 0)) {
+      return res.status(400).json({ message: 'Weight per item is required when fixed price shipping box rules are configured.' });
     }
     const parsedPurchaseOptions = req.body.purchase_options !== undefined
       ? parsePurchaseOptionsInput(req.body.purchase_options)
