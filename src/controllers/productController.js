@@ -460,6 +460,7 @@ async function getProductModifierGroups(productId, { includeInactive = false } =
       mo.value AS option_value,
       mo.price_adjustment AS option_price_adjustment,
       mo.price_type AS option_price_type,
+      mo.sort_order AS option_sort_order,
       mo.is_default AS option_default,
       mo.is_active AS option_active,
       pmo.id AS product_modifier_option_id,
@@ -508,6 +509,7 @@ async function getProductModifierGroups(productId, { includeInactive = false } =
           : Number(row.option_price_adjustment || 0),
       price_type: String(row.option_price_type || 'fixed').toLowerCase(),
       is_default: !!row.product_option_default,
+      sort_order: Number(row.option_sort_order || 0),
       _catalog_default: !!row.option_default,
       is_active: !!row.product_option_active,
     });

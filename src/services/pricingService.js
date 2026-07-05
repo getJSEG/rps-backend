@@ -161,6 +161,7 @@ async function getProductPricingConfig(productId) {
       mo.value AS option_value,
       COALESCE(pmo.price_adjustment_override, mo.price_adjustment, 0) AS option_price_adjustment,
       mo.price_type AS option_price_type,
+      mo.sort_order AS option_sort_order,
       COALESCE(pmo.is_default, false) OR COALESCE(mo.is_default, false) AS option_is_default,
       pmo.is_active AS product_option_active,
       mo.is_active AS option_active
@@ -277,6 +278,7 @@ async function getProductPricingConfig(productId) {
            COALESCE(htomoo.price_adjustment_override, mo.price_adjustment, 0) AS option_price_adjustment,
            htomoo.price_adjustment_override AS option_price_adjustment_override,
            mo.price_type AS option_price_type,
+           mo.sort_order AS option_sort_order,
            mo.is_default AS option_is_default,
            mo.is_active AS option_active
          FROM hardware_template_option_modifiers htom
@@ -345,6 +347,7 @@ async function getProductPricingConfig(productId) {
       price_adjustment: asNumber(row.option_price_adjustment) ?? 0,
       price_type: String(row.option_price_type || 'fixed').trim().toLowerCase() || 'fixed',
       is_default: !!row.option_is_default,
+      sort_order: Number(row.option_sort_order || 0),
     });
   }
   for (const [mapKey, group] of groupsByKey.entries()) {
