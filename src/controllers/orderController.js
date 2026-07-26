@@ -1011,6 +1011,9 @@ const createOrderWithPaymentIntent = async (req, res) => {
     let shippingSum = shippingComputed.shippingSum;
     let shippingMethod = shippingComputed.shippingMethod;
     let shippingCharge = shippingComputed.shippingCharge;
+    let carrier = shippingComputed.carrier ?? null;
+    let carrierServiceType = shippingComputed.carrierServiceType ?? null;
+    let shippingEstimatedDelivery = shippingComputed.shippingEstimatedDelivery ?? null;
     let storePickupAddressId = null;
     let storePickupAddress = null;
     if (shippingMode === 'store_pickup') {
@@ -1031,6 +1034,13 @@ const createOrderWithPaymentIntent = async (req, res) => {
       const freeShippingResult = shippingComputed.applyFreeShipping(subtotalSum);
       shippingSum = freeShippingResult.shippingSum;
       shippingCharge = freeShippingResult.shippingCharge;
+      // if applyFreeShipping adjusted labels/carrier, use those updated values for persistence
+      if (freeShippingResult.shippingMethod != null) shippingMethod = freeShippingResult.shippingMethod;
+      if (freeShippingResult.carrier != null || freeShippingResult.carrier === null) carrier = freeShippingResult.carrier;
+      if (freeShippingResult.carrierServiceType != null || freeShippingResult.carrierServiceType === null)
+        carrierServiceType = freeShippingResult.carrierServiceType;
+      if (freeShippingResult.shippingEstimatedDelivery != null || freeShippingResult.shippingEstimatedDelivery === null)
+        shippingEstimatedDelivery = freeShippingResult.shippingEstimatedDelivery;
     }
     let taxPostalCode = '';
     if (userId && shippingAddressId != null) {
@@ -1091,11 +1101,9 @@ const createOrderWithPaymentIntent = async (req, res) => {
       storePickupAddressId,
       subtotalAmount: totals.subtotal,
       tax: totals.tax,
-      carrier: shippingMode === 'store_pickup' ? null : shippingComputed.carrier ?? null,
-      carrierServiceType:
-        shippingMode === 'store_pickup' ? null : shippingComputed.carrierServiceType ?? null,
-      shippingEstimatedDelivery:
-        shippingMode === 'store_pickup' ? null : shippingComputed.shippingEstimatedDelivery ?? null,
+      carrier: shippingMode === 'store_pickup' ? null : carrier ?? null,
+      carrierServiceType: shippingMode === 'store_pickup' ? null : carrierServiceType ?? null,
+      shippingEstimatedDelivery: shippingMode === 'store_pickup' ? null : shippingEstimatedDelivery ?? null,
     });
 
     if (!shouldUseStripePaymentIntent()) {

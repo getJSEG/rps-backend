@@ -96,22 +96,38 @@ async function computeShippingFromCartItems(cartItems) {
   const policy = await shippingRatesRepository.getRates();
   let shippingSum = agg.shippingSum;
   let shippingCharge = agg.shippingCharge;
+  let shippingMethod = agg.shippingMethod;
+  let carrier = agg.carrier ?? null;
+  let carrierServiceType = agg.carrierServiceType ?? null;
+  let shippingEstimatedDelivery = agg.shippingEstimatedDelivery ?? null;
   return {
     shippingMode,
     shippingSum,
-    shippingMethod: agg.shippingMethod,
+    shippingMethod,
     shippingCharge,
-    carrier: agg.carrier ?? null,
-    carrierServiceType: agg.carrierServiceType ?? null,
-    shippingEstimatedDelivery: agg.shippingEstimatedDelivery ?? null,
+    carrier,
+    carrierServiceType,
+    shippingEstimatedDelivery,
     freeShippingEnabled: !!policy.freeShippingEnabled,
     freeShippingThreshold: roundMoney2(policy.freeShippingThreshold),
     applyFreeShipping(subtotal) {
       if (policy.freeShippingEnabled && roundMoney2(subtotal) >= roundMoney2(policy.freeShippingThreshold)) {
         shippingSum = 0;
         shippingCharge = 0;
+        // When free shipping applies we should show a clear method and clear carrier info
+        shippingMethod = 'Free Shipping';
+        carrier = null;
+        carrierServiceType = null;
+        shippingEstimatedDelivery = null;
       }
-      return { shippingSum, shippingCharge };
+      return {
+        shippingSum,
+        shippingCharge,
+        shippingMethod,
+        carrier,
+        carrierServiceType,
+        shippingEstimatedDelivery,
+      };
     },
   };
 }
