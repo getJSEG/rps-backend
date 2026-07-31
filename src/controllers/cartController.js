@@ -4,14 +4,6 @@ const { computeShippingFromCartItems, computeTaxAndTotal, roundMoney2 } = requir
 const { isPersistedFedexQuotedServiceType } = require('../utils/fedexQuoteServiceType');
 const pool = require('../config/database');
 
-function isAdminUser(req) {
-  const role = (req.user?.role || '').toString().toLowerCase();
-  if (role === 'admin') return true;
-  const adminEmails = (process.env.ADMIN_EMAILS || '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
-  const email = (req.user?.email || '').toString().toLowerCase();
-  return adminEmails.length > 0 && email && adminEmails.includes(email);
-}
-
 function cartContext(req) {
   const userId = req.user?.id ?? null;
   const guestSessionId = userId ? null : (req.guestSessionId ?? null);
@@ -125,17 +117,12 @@ const addToCart = async (req, res) => {
   }
 };
 
-/** Get cart: user/employee = own cart, guest = session cart, admin = all carts */
+/** Get cart: logged-in user (incl. admin) = own cart, guest = session cart */
 const getCart = async (req, res) => {
   try {
     const { userId, guestSessionId } = cartContext(req);
     if (!userId && !guestSessionId) {
       return res.status(401).json({ message: 'Authentication or guest session required' });
-    }
-
-    if (isAdminUser(req)) {
-      const items = await cartRepository.findAdminCartItems();
-      return res.json({ cartItems: items, isAdminView: true });
     }
 
     const items = userId
@@ -157,9 +144,7 @@ const removeFromCart = async (req, res) => {
       return res.status(401).json({ message: 'Authentication or guest session required' });
     }
 
-    if (isAdminUser(req)) {
-      await cartRepository.deleteCartItemById(id);
-    } else if (userId) {
+    if (userId) {
       const rowCount = await cartRepository.deleteCartItemByUser(id, userId);
       if (rowCount === 0) return res.status(404).json({ message: 'Cart item not found' });
     } else {
@@ -183,27 +168,17 @@ const updateCartItem = async (req, res) => {
       return res.status(401).json({ message: 'Authentication or guest session required' });
     }
 
-    let existingRow = null;
-    if (isAdminUser(req)) {
-      existingRow = await cartRepository.findCartRowByIdAdmin(id);
-    } else if (userId) {
-      existingRow = await cartRepository.findCartRowByIdAndUser(id, userId);
-    } else {
-      existingRow = await cartRepository.findCartRowByIdAndGuest(id, guestSessionId);
-    }
+    const existingRow = userId
+      ? await cartRepository.findCartRowByIdAndUser(id, userId)
+      : await cartRepository.findCartRowByIdAndGuest(id, guestSessionId);
     if (!existingRow) return res.status(404).json({ message: 'Cart item not found' });
 
     const merged = mergeCartUpdatePreservingFedexQuote(existingRow.item_data, incoming);
     const itemData = await calculateCartItemFromInput(merged);
 
-    let result;
-    if (isAdminUser(req)) {
-      result = await cartRepository.updateCartItemDataAdmin(id, itemData);
-    } else if (userId) {
-      result = await cartRepository.updateCartItemDataByUser(id, userId, itemData);
-    } else {
-      result = await cartRepository.updateCartItemDataByGuest(id, guestSessionId, itemData);
-    }
+    const result = userId
+      ? await cartRepository.updateCartItemDataByUser(id, userId, itemData)
+      : await cartRepository.updateCartItemDataByGuest(id, guestSessionId, itemData);
     if (result.rowCount === 0) return res.status(404).json({ message: 'Cart item not found' });
     res.json({ cartItem: result.row });
   } catch (error) {
