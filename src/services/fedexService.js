@@ -11,11 +11,6 @@ const FEDEX_ACCOUNT_NUMBER = () => String(process.env.FEDEX_ACCOUNT_NUMBER || ''
 const DEFAULT_RATE_SERVICE_PROBES = [
   'FEDEX_GROUND',
   'GROUND_HOME_DELIVERY',
-  'FEDEX_2_DAY',
-  'FEDEX_EXPRESS_SAVER',
-  'STANDARD_OVERNIGHT',
-  'PRIORITY_OVERNIGHT',
-  'FIRST_OVERNIGHT',
 ];
 
 const STORE_ADDRESS_REQUIRED_MESSAGE = 'Shipping will be available once admin add store address.';
@@ -267,14 +262,21 @@ function padStreetLinesTo3(streetLines) {
 }
 
 function fedexAddressValidationPayload(address) {
+  const city = String(address?.city || '').trim();
+  const stateOrProvinceCode = String(address?.stateOrProvinceCode || '')
+    .trim()
+    .toUpperCase()
+    .slice(0, 2);
+  const postalCode = String(address?.postalCode || '').trim();
+  // Always send city (required for better residential/business classification).
   return {
     addressesToValidate: [
       {
         address: {
           streetLines: padStreetLinesTo3(address?.streetLines),
-          ...(address?.city ? { city: address.city } : {}),
-          ...(address?.stateOrProvinceCode ? { stateOrProvinceCode: address.stateOrProvinceCode } : {}),
-          postalCode: address?.postalCode,
+          city,
+          ...(stateOrProvinceCode ? { stateOrProvinceCode } : {}),
+          postalCode,
           countryCode: normalizeCountryCode(address?.countryCode),
         },
       },
@@ -358,64 +360,34 @@ function parseFedexResidentialClassification(data) {
 async function resolveRecipientAddressResidential(address) {
   const normalized = {
     ...address,
+    city: String(address?.city || '').trim(),
+    stateOrProvinceCode: String(address?.stateOrProvinceCode || '')
+      .trim()
+      .toUpperCase()
+      .slice(0, 2),
+    postalCode: String(address?.postalCode || '').trim(),
     countryCode: normalizeCountryCode(address?.countryCode),
   };
   const cacheKey = addressResidentialCacheKey(normalized);
   const cached = getCachedResidential(cacheKey);
   if (cached) {
-    console.log('[FedEx address validation] recipient residential:', {
-      residential: cached.isResidential,
-      source: `cache_${cached.source || 'unknown'}`,
-      postalCode: normalized.postalCode,
-      countryCode: normalized.countryCode,
-    });
     return { ...normalized, residential: cached.isResidential };
   }
 
   try {
     const resolveRequestPayload = fedexAddressValidationPayload(normalized);
-    console.log(
-      '[FedEx address validation] resolve REQUEST payload:\n',
-      JSON.stringify(resolveRequestPayload, null, 2)
-    );
     const data = await fedexRequest(
       '/address/v1/addresses/resolve',
       resolveRequestPayload,
       { retryOnceOn5xx: true }
     );
-    console.log(
-      '[FedEx address validation] resolve RESPONSE payload:\n',
-      JSON.stringify(data, null, 2)
-    );
     const parsed = parseFedexResidentialClassification(data);
     const isResidential = parsed == null ? true : parsed;
-    if (parsed == null) {
-      console.log('[FedEx address validation] UNKNOWN response debug:', {
-        streetLines: normalized.streetLines,
-        city: normalized.city,
-        stateOrProvinceCode: normalized.stateOrProvinceCode,
-        postalCode: normalized.postalCode,
-        countryCode: normalized.countryCode,
-      });
-      console.dir(data, { depth: null });
-    }
-    console.log('[FedEx address validation] recipient residential:', {
-      residential: isResidential,
-      source: parsed == null ? 'fallback_unknown' : 'fedex',
-      postalCode: normalized.postalCode,
-      countryCode: normalized.countryCode,
-    });
     setCachedResidential(cacheKey, isResidential, parsed == null ? 'fallback_unknown' : 'fedex');
     return { ...normalized, residential: isResidential };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     console.warn('[FedEx address validation] Falling back to residential:', msg);
-    console.log('[FedEx address validation] recipient residential:', {
-      residential: true,
-      source: 'fallback_error',
-      postalCode: normalized.postalCode,
-      countryCode: normalized.countryCode,
-    });
     setCachedResidential(cacheKey, true, 'fallback_error');
     return { ...normalized, residential: true };
   }
@@ -486,7 +458,7 @@ function buildRecipientAddressForRating(destinationInput) {
     fromArray.length > 0 ? fromArray : single ? [single] : ['100 Commerce St'];
   return {
     streetLines,
-    ...(city ? { city } : {}),
+    city,
     ...(stateOrProvinceCode.length >= 2 ? { stateOrProvinceCode: stateOrProvinceCode.slice(0, 2) } : {}),
     postalCode,
     countryCode: countryCode.length === 2 ? countryCode : 'US',

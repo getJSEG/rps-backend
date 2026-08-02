@@ -7,6 +7,10 @@ function validateDestination(destination) {
   if (!postalCode) {
     return 'destination.postalCode is required';
   }
+  const city = String(destination?.city || '').trim();
+  if (!city) {
+    return 'destination.city is required';
+  }
   return null;
 }
 

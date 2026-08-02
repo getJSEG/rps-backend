@@ -365,7 +365,8 @@ function fedexDestinationFromAddress(address) {
   if (!address || typeof address !== 'object') return null;
   const postalCode = String(address.postcode ?? address.postalCode ?? address.zip ?? '').trim();
   const countryRaw = String(address.country || 'US').trim();
-  if (!postalCode || !countryRaw) return null;
+  const city = String(address.city || '').trim();
+  if (!postalCode || !countryRaw || !city) return null;
   const street1 = String(address.street_address ?? address.streetAddress ?? '').trim();
   const street2 = String(address.address_line2 ?? address.addressLine2 ?? '').trim();
   const streetLines = [street1, street2].filter(Boolean);
@@ -373,7 +374,7 @@ function fedexDestinationFromAddress(address) {
     postalCode,
     countryCode: checkoutCountryCode(countryRaw),
     stateOrProvinceCode: String(address.state || '').trim().toUpperCase() || undefined,
-    city: String(address.city || '').trim() || undefined,
+    city,
     ...(streetLines.length > 0 ? { streetLines } : {}),
   };
 }
