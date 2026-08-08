@@ -211,11 +211,18 @@ const login = async (req, res) => {
     let result;
     try {
       result = await pool.query(
-        'SELECT id, email, password_hash, full_name, role, is_active, is_approved FROM users WHERE email = $1',
+        `SELECT id, email, password_hash, full_name, role, is_active, is_approved,
+                deletion_requested_at, deletion_scheduled_at
+         FROM users WHERE email = $1`,
         [email]
       );
     } catch (err) {
-      if (err.message && err.message.includes('does not exist')) {
+      if (err.message && /deletion_requested_at|deletion_scheduled_at/i.test(err.message)) {
+        result = await pool.query(
+          'SELECT id, email, password_hash, full_name, role, is_active, is_approved FROM users WHERE email = $1',
+          [email]
+        );
+      } else if (err.message && err.message.includes('does not exist')) {
         result = await pool.query(
           'SELECT id, email, password_hash, role, is_active, is_approved FROM users WHERE email = $1',
           [email]
@@ -245,15 +252,21 @@ const login = async (req, res) => {
 
     // Generate token
     const token = generateToken(user.id);
+    const pendingDeletion = !!user.deletion_requested_at;
 
     res.json({
-      message: 'Login successful',
+      message: pendingDeletion
+        ? 'Login successful. Your account is scheduled for deletion.'
+        : 'Login successful',
       user: {
         id: user.id,
         email: user.email,
         fullName: fullName,
         role: user.role,
-        isApproved: user.is_approved
+        isApproved: user.is_approved,
+        pendingDeletion,
+        deletionRequestedAt: user.deletion_requested_at || null,
+        deletionScheduledAt: user.deletion_scheduled_at || null,
       },
       token
     });

@@ -1,6 +1,76 @@
 const jwt = require('jsonwebtoken');
 const pool = require('../config/database');
 
+const PENDING_DELETION_ALLOWED_PATHS = new Set([
+  '/api/users/cancel-deletion',
+  '/api/users/deletion-status',
+]);
+
+function normalizeApiPath(req) {
+  const raw = (req.originalUrl || req.url || '').split('?')[0];
+  return raw.replace(/\/+$/, '') || '/';
+}
+
+function isPendingDeletionAllowlisted(req) {
+  return PENDING_DELETION_ALLOWED_PATHS.has(normalizeApiPath(req));
+}
+
+function mapUserRow(row) {
+  return {
+    ...row,
+    pendingDeletion: !!(row && row.deletion_requested_at),
+  };
+}
+
+async function loadUserById(userId) {
+  try {
+    return await pool.query(
+      `SELECT id, email, full_name, company_name, role, is_active,
+              deletion_requested_at, deletion_scheduled_at
+       FROM users WHERE id = $1`,
+      [userId]
+    );
+  } catch (err) {
+    if (err.message && /does not exist|column/i.test(err.message)) {
+      if (/deletion_requested_at|deletion_scheduled_at/i.test(err.message)) {
+        try {
+          return await pool.query(
+            `SELECT id, email, full_name, company_name, role, is_active
+             FROM users WHERE id = $1`,
+            [userId]
+          );
+        } catch (err2) {
+          if (err2.message && err2.message.includes('does not exist')) {
+            return pool.query(
+              `SELECT id, email, full_name, role, is_active FROM users WHERE id = $1`,
+              [userId]
+            );
+          }
+          throw err2;
+        }
+      }
+      return pool.query(
+        `SELECT id, email, full_name, role, is_active FROM users WHERE id = $1`,
+        [userId]
+      );
+    }
+    throw err;
+  }
+}
+
+function rejectIfPendingDeletion(req, res, userRow) {
+  if (!userRow || !userRow.deletion_requested_at) return false;
+  if (isPendingDeletionAllowlisted(req)) return false;
+
+  res.status(403).json({
+    message: 'Your account is scheduled for deletion. Cancel deletion to restore access.',
+    code: 'ACCOUNT_PENDING_DELETION',
+    deletionRequestedAt: userRow.deletion_requested_at,
+    deletionScheduledAt: userRow.deletion_scheduled_at || null,
+  });
+  return true;
+}
+
 const authenticateToken = async (req, res, next) => {
   try {
     const authHeader = req.headers['authorization'];
@@ -15,22 +85,7 @@ const authenticateToken = async (req, res, next) => {
     }
     const decoded = jwt.verify(token, secret);
 
-    let result;
-    try {
-      result = await pool.query(
-        'SELECT id, email, full_name, company_name, role, is_active FROM users WHERE id = $1',
-        [decoded.userId]
-      );
-    } catch (err) {
-      if (err.message && err.message.includes('does not exist')) {
-        result = await pool.query(
-          'SELECT id, email, full_name, role, is_active FROM users WHERE id = $1',
-          [decoded.userId]
-        );
-      } else {
-        throw err;
-      }
-    }
+    const result = await loadUserById(decoded.userId);
 
     if (result.rows.length === 0) {
       return res.status(401).json({ message: 'Session invalid. Please log in again.' });
@@ -40,7 +95,11 @@ const authenticateToken = async (req, res, next) => {
       return res.status(403).json({ message: 'Account is inactive' });
     }
 
-    req.user = result.rows[0];
+    if (rejectIfPendingDeletion(req, res, result.rows[0])) {
+      return;
+    }
+
+    req.user = mapUserRow(result.rows[0]);
     next();
   } catch (error) {
     console.error('authenticateToken error:', error);
@@ -62,24 +121,13 @@ const optionalAuth = async (req, res, next) => {
     if (token) {
       try {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        let result;
-        try {
-          result = await pool.query(
-            'SELECT id, email, full_name, company_name, role, is_active FROM users WHERE id = $1',
-            [decoded.userId]
-          );
-        } catch (err) {
-          if (err.message && err.message.includes('does not exist')) {
-            result = await pool.query(
-              'SELECT id, email, full_name, role, is_active FROM users WHERE id = $1',
-              [decoded.userId]
-            );
-          } else {
-            throw err;
-          }
-        }
-        if (result.rows.length > 0 && result.rows[0].is_active) {
-          req.user = result.rows[0];
+        const result = await loadUserById(decoded.userId);
+        if (
+          result.rows.length > 0 &&
+          result.rows[0].is_active &&
+          !result.rows[0].deletion_requested_at
+        ) {
+          req.user = mapUserRow(result.rows[0]);
         }
       } catch (e) {
         // ignore invalid token
@@ -144,24 +192,12 @@ const authenticateTokenOrGuestSession = async (req, res, next) => {
       if (secret && String(secret).trim()) {
         try {
           const decoded = jwt.verify(token, secret);
-          let result;
-          try {
-            result = await pool.query(
-              'SELECT id, email, full_name, company_name, role, is_active FROM users WHERE id = $1',
-              [decoded.userId]
-            );
-          } catch (err) {
-            if (err.message && err.message.includes('does not exist')) {
-              result = await pool.query(
-                'SELECT id, email, full_name, role, is_active FROM users WHERE id = $1',
-                [decoded.userId]
-              );
-            } else {
-              throw err;
-            }
-          }
+          const result = await loadUserById(decoded.userId);
           if (result.rows.length > 0 && result.rows[0].is_active) {
-            req.user = result.rows[0];
+            if (rejectIfPendingDeletion(req, res, result.rows[0])) {
+              return;
+            }
+            req.user = mapUserRow(result.rows[0]);
             return next();
           }
         } catch (e) {
@@ -199,4 +235,3 @@ module.exports = {
   requireAdminOrEmployee,
   authenticateTokenOrGuestSession,
 };
-

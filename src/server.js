@@ -7,6 +7,7 @@ require('dotenv').config();
 
 const pool = require('./config/database');
 const { startCartCleanupJob } = require('./jobs/cartCleanupJob');
+const { startAccountDeletionJob } = require('./jobs/accountDeletionJob');
 
 /** Create base tables (users, addresses, etc.) if they do not exist - for fresh Railway DB */
 async function ensureBaseTables() {
@@ -159,6 +160,10 @@ async function ensureEmployeeColumns() {
       const sql32 = fs.readFileSync(path.join(migrationsDir, 'zzAddHardwareOptionShippingAndOverrides.sql'), 'utf8');
       await pool.query(sql32);
     }
+    if (fs.existsSync(path.join(migrationsDir, 'addAccountDeletion.sql'))) {
+      const sql33 = fs.readFileSync(path.join(migrationsDir, 'addAccountDeletion.sql'), 'utf8');
+      await pool.query(sql33);
+    }
   } catch (err) {
     console.warn('Migrations (optional):', err.message);
   }
@@ -296,6 +301,7 @@ ensureBaseTables()
     console.log(`Server running on port ${PORT}`);
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
     startCartCleanupJob();
+    startAccountDeletionJob();
   });
 
   server.on('error', (err) => {
