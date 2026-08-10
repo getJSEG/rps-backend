@@ -628,11 +628,16 @@ const approveOrderItemArtwork = async (req, res) => {
       await deleteManyByUrl([line.customer_artwork_url]);
     }
     const advanced = await orderRepository.maybeAdvanceOrderToProcessingAfterArtwork(orderId);
+    const itemAdvanced = await orderRepository.maybeAdvanceOrderItemToProcessingAfterArtwork(
+      orderId,
+      itemId
+    );
     return res.status(200).json({
       orderItemId: row.id,
       customerArtworkUrl: row.customer_artwork_url,
       orderId: row.order_id,
       ...(advanced?.status ? { orderStatus: advanced.status } : {}),
+      ...(itemAdvanced?.status ? { itemStatus: itemAdvanced.status } : {}),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Could not save artwork.';
@@ -679,11 +684,16 @@ const approveGuestOrderItemArtwork = async (req, res) => {
       await deleteManyByUrl([line.customer_artwork_url]);
     }
     const advanced = await orderRepository.maybeAdvanceOrderToProcessingAfterArtwork(orderId);
+    const itemAdvanced = await orderRepository.maybeAdvanceOrderItemToProcessingAfterArtwork(
+      orderId,
+      itemId
+    );
     return res.status(200).json({
       orderItemId: row.id,
       customerArtworkUrl: row.customer_artwork_url,
       orderId: row.order_id,
       ...(advanced?.status ? { orderStatus: advanced.status } : {}),
+      ...(itemAdvanced?.status ? { itemStatus: itemAdvanced.status } : {}),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Could not save artwork.';
@@ -748,6 +758,43 @@ const updateOrderStatus = async (req, res) => {
   } catch (error) {
     console.error('Update order status error:', error);
     res.status(500).json({ message: 'Failed to update order status' });
+  }
+};
+
+const updateOrderItemStatus = async (req, res) => {
+  try {
+    const orderId = parseInt(String(req.params.id), 10);
+    const itemId = parseInt(String(req.params.itemId), 10);
+    const { status } = req.body;
+
+    if (!Number.isFinite(orderId) || orderId <= 0 || !Number.isFinite(itemId) || itemId <= 0) {
+      return res.status(400).json({ message: 'Invalid order or line item id.' });
+    }
+    if (!status) {
+      return res.status(400).json({ message: 'Status is required' });
+    }
+    if (!VALID_ORDER_STATUSES.includes(String(status).toLowerCase())) {
+      return res.status(400).json({ message: 'Invalid status' });
+    }
+
+    const existing = await orderRepository.findOrderByIdAdmin(orderId);
+    if (!existing) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    const updated = await orderRepository.updateOrderItemStatusById(
+      orderId,
+      itemId,
+      String(status).toLowerCase()
+    );
+    if (!updated) {
+      return res.status(404).json({ message: 'Order item not found' });
+    }
+
+    res.json({ item: updated });
+  } catch (error) {
+    console.error('Update order item status error:', error);
+    res.status(500).json({ message: 'Failed to update order item status' });
   }
 };
 
@@ -1434,6 +1481,7 @@ module.exports = {
   getAllOrders,
   getOrderByIdAdmin,
   updateOrderStatus,
+  updateOrderItemStatus,
   updateOrderTrackingId,
   deleteOrderAdmin,
   createOrderFromCartItem,

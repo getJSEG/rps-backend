@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS order_items (
     quantity INTEGER NOT NULL,
     unit_price DECIMAL(14, 2) NOT NULL,
     total_price DECIMAL(14, 2) NOT NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'awaiting_artwork',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

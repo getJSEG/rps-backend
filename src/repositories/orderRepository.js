@@ -25,6 +25,7 @@ const SQL = {
            'graphic_scenario_enabled', oi.graphic_scenario_enabled,
            'purchase_option_key', oi.purchase_option_key,
            'purchase_option_label', oi.purchase_option_label,
+           'status', oi.status,
            'product_graphic_scenario_enabled', p.graphic_scenario_enabled
          )) as items
          FROM orders o
@@ -66,6 +67,7 @@ const SQL = {
             'graphic_scenario_enabled', oi.graphic_scenario_enabled,
             'purchase_option_key', oi.purchase_option_key,
             'purchase_option_label', oi.purchase_option_label,
+            'status', oi.status,
             'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
@@ -112,6 +114,7 @@ const SQL = {
             'graphic_scenario_enabled', oi.graphic_scenario_enabled,
             'purchase_option_key', oi.purchase_option_key,
             'purchase_option_label', oi.purchase_option_label,
+            'status', oi.status,
             'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
@@ -158,6 +161,7 @@ const SQL = {
              'graphic_scenario_enabled', oi.graphic_scenario_enabled,
              'purchase_option_key', oi.purchase_option_key,
              'purchase_option_label', oi.purchase_option_label,
+             'status', oi.status,
              'product_graphic_scenario_enabled', p.graphic_scenario_enabled
            )
          ) FILTER (WHERE oi.id IS NOT NULL),
@@ -204,6 +208,7 @@ const SQL = {
             'graphic_scenario_enabled', oi.graphic_scenario_enabled,
             'purchase_option_key', oi.purchase_option_key,
             'purchase_option_label', oi.purchase_option_label,
+            'status', oi.status,
             'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
@@ -239,6 +244,7 @@ const SQL = {
             'graphic_scenario_enabled', oi.graphic_scenario_enabled,
             'purchase_option_key', oi.purchase_option_key,
             'purchase_option_label', oi.purchase_option_label,
+            'status', oi.status,
             'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
@@ -273,6 +279,7 @@ const SQL = {
             'graphic_scenario_enabled', oi.graphic_scenario_enabled,
             'purchase_option_key', oi.purchase_option_key,
             'purchase_option_label', oi.purchase_option_label,
+            'status', oi.status,
             'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
@@ -327,6 +334,7 @@ const SQL = {
              'graphic_scenario_enabled', oi.graphic_scenario_enabled,
              'purchase_option_key', oi.purchase_option_key,
              'purchase_option_label', oi.purchase_option_label,
+             'status', oi.status,
              'product_graphic_scenario_enabled', p.graphic_scenario_enabled
            )
          ) FILTER (WHERE oi.id IS NOT NULL),
@@ -383,6 +391,7 @@ const SQL = {
              'graphic_scenario_enabled', oi.graphic_scenario_enabled,
              'purchase_option_key', oi.purchase_option_key,
              'purchase_option_label', oi.purchase_option_label,
+             'status', oi.status,
              'product_graphic_scenario_enabled', p.graphic_scenario_enabled
            )
          ) FILTER (WHERE oi.id IS NOT NULL),
@@ -401,6 +410,16 @@ const SQL = {
        SET status = $1, updated_at = CURRENT_TIMESTAMP 
        WHERE id = $2 
        RETURNING *`,
+  UPDATE_ORDER_ITEM_STATUS: `UPDATE order_items
+       SET status = $1
+       WHERE id = $2 AND order_id = $3
+       RETURNING id, order_id, status`,
+  ADVANCE_ORDER_ITEM_TO_PROCESSING_IF_AWAITING: `UPDATE order_items
+       SET status = 'processing'
+       WHERE id = $1
+         AND order_id = $2
+         AND lower(trim(COALESCE(status, ''))) = 'awaiting_artwork'
+       RETURNING id, order_id, status`,
   UPDATE_ORDER_TRACKING_ID: `UPDATE orders
        SET order_tracking_id = $1, updated_at = CURRENT_TIMESTAMP
        WHERE id = $2
@@ -689,6 +708,28 @@ async function findOrderByIdAdmin(orderId) {
  */
 async function updateOrderStatusById(orderId, statusLower) {
   const result = await pool.query(SQL.UPDATE_ORDER_STATUS, [statusLower, orderId]);
+  return result.rows[0] ?? null;
+}
+
+/**
+ * Admin: set status for a single order line (independent of order.status).
+ * @returns {Promise<{ id: number, order_id: number, status: string }|null>}
+ */
+async function updateOrderItemStatusById(orderId, itemId, statusLower) {
+  const result = await pool.query(SQL.UPDATE_ORDER_ITEM_STATUS, [statusLower, itemId, orderId]);
+  return result.rows[0] ?? null;
+}
+
+/**
+ * After customer artwork upload: if line is still awaiting_artwork, move it to processing.
+ * Does not change other item statuses or the parent order status.
+ * @returns {Promise<{ id: number, order_id: number, status: string }|null>}
+ */
+async function maybeAdvanceOrderItemToProcessingAfterArtwork(orderId, itemId) {
+  const id = parseInt(String(orderId), 10);
+  const lineId = parseInt(String(itemId), 10);
+  if (!Number.isFinite(id) || id <= 0 || !Number.isFinite(lineId) || lineId <= 0) return null;
+  const result = await pool.query(SQL.ADVANCE_ORDER_ITEM_TO_PROCESSING_IF_AWAITING, [lineId, id]);
   return result.rows[0] ?? null;
 }
 
@@ -1193,6 +1234,8 @@ module.exports = {
   findAllOrdersAdmin,
   findOrderByIdAdmin,
   updateOrderStatusById,
+  updateOrderItemStatusById,
+  maybeAdvanceOrderItemToProcessingAfterArtwork,
   updateOrderTrackingIdById,
   updateOrderAfterFedexShipmentCreated,
   updateOrderShipmentTracking,

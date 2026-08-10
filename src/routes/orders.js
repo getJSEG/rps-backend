@@ -8,6 +8,7 @@ const {
   getAllOrders,
   getOrderByIdAdmin,
   updateOrderStatus,
+  updateOrderItemStatus,
   updateOrderTrackingId,
   deleteOrderAdmin,
   createOrderFromCartItem,
@@ -55,6 +56,7 @@ router.get('/admin/all', authenticateToken, requireAdmin, getAllOrders);
 router.post('/admin/from-cart', authenticateToken, requireAdmin, createOrderFromCartItem);
 router.get('/admin/:id', authenticateToken, requireAdmin, getOrderByIdAdmin);
 router.put('/admin/:id/status', authenticateToken, requireAdmin, updateOrderStatus);
+router.put('/admin/:id/items/:itemId/status', authenticateToken, requireAdmin, updateOrderItemStatus);
 router.post('/admin/:id/refund', authenticateToken, requireAdmin, refundOrderAdmin);
 router.put('/admin/:id/order-tracking', authenticateToken, requireAdmin, updateOrderTrackingId);
 router.delete('/admin/:id', authenticateToken, requireAdmin, deleteOrderAdmin);
