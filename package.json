@@ -17,7 +17,8 @@
     "seed": "node src/migrations/seed.js",
     "seed:modifiers": "node src/migrations/seedModifiers.js",
     "seed-subcategory-products": "node src/migrations/seedSubcategoryProducts.js",
-    "create-admin": "node src/migrations/createAdminUser.js"
+    "create-admin": "node src/migrations/createAdminUser.js",
+    "email:test": "node scripts/test-email-flow.js"
   },
   "keywords": [
     "express",
@@ -37,9 +38,9 @@
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
-    "nodemailer": "^6.10.1",
     "pdf-lib": "^1.17.1",
     "pg": "^8.11.3",
+    "resend": "^6.19.0",
     "sharp": "^0.34.5",
     "stripe": "^17.5.0"
   },

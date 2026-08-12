@@ -434,8 +434,8 @@ const SQL = {
   INSERT_ORDER_ITEM_ADMIN_NO_JOB: `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price, image_url, width_inches, height_inches, selected_modifiers, selection_mode, graphic_scenario_enabled, modifier_total, base_unit_price, purchase_option_key, purchase_option_label)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16)`,
   SELECT_ORDER_BY_ID: `SELECT o.* FROM orders o WHERE o.id = $1`,
-  INSERT_ORDER_STRIPE_PENDING: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, payment_status, notes, guest_checkout, guest_tracking_token_hash, guest_tracking_token_created_at, shipping_address_id, billing_address_id, shipping_method, shipping_charge, shipping_mode, store_pickup_address_id, subtotal_amount, tax_id, tax_name, tax_percentage, tax_amount, carrier, carrier_service_type, shipping_estimated_delivery)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+  INSERT_ORDER_STRIPE_PENDING: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, payment_status, notes, guest_checkout, guest_tracking_token_hash, guest_tracking_token_cipher, guest_tracking_token_created_at, shipping_address_id, billing_address_id, shipping_method, shipping_charge, shipping_mode, store_pickup_address_id, subtotal_amount, tax_id, tax_name, tax_percentage, tax_amount, carrier, carrier_service_type, shipping_estimated_delivery)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
          RETURNING id, order_number`,
   UPDATE_ORDER_FEDEX_SHIPMENT_CREATED: `UPDATE orders
        SET fedex_shipment_id = $2,
@@ -458,7 +458,11 @@ const SQL = {
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $1
        RETURNING *`,
-  UPDATE_ORDER_STRIPE_PAID: `UPDATE orders SET payment_status = $1, status = $2, notes = COALESCE(notes, '') || ' | Paid via Stripe ' || $3 WHERE id = $4`,
+  // Guarded so the client-side confirm and the Stripe webhook cannot both apply the paid
+  // transition; only the caller that actually changes the row gets a returned id and emails.
+  UPDATE_ORDER_STRIPE_PAID: `UPDATE orders SET payment_status = $1, status = $2, notes = COALESCE(notes, '') || ' | Paid via Stripe ' || $3
+       WHERE id = $4 AND COALESCE(payment_status, '') <> $1
+       RETURNING id`,
   UPDATE_ORDER_PAID_WITHOUT_STRIPE: `UPDATE orders SET payment_status = $1, status = $2, payment_method = $3, notes = COALESCE(notes, '') || $4 WHERE id = $5`,
   UPDATE_CUSTOMER_ARTWORK_ON_ORDER_ITEM: `UPDATE order_items oi
     SET customer_artwork_url = $4
@@ -525,6 +529,35 @@ const SQL = {
       SET stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, $1),
           updated_at = CURRENT_TIMESTAMP
       WHERE id = $2`,
+  // Deliberately narrow: only columns guaranteed to exist, so a customer notification is
+  // never lost to schema drift in the wider admin detail queries.
+  ORDER_NOTIFICATION_CONTEXT: `SELECT o.*,
+      COALESCE(u.email, o.guest_checkout->>'email') as user_email,
+      COALESCE(u.full_name, o.guest_checkout->>'fullName') as user_name,
+      MAX(sa.street_address) as shipping_street_address,
+      MAX(sa.address_line2) as shipping_address_line2,
+      MAX(sa.city) as shipping_city,
+      MAX(sa.state) as shipping_state,
+      MAX(sa.postcode) as shipping_postcode,
+      MAX(sa.country) as shipping_country,
+      COALESCE(
+        json_agg(
+          json_build_object(
+            'product_name', oi.product_name,
+            'job_name', oi.job_name,
+            'quantity', oi.quantity,
+            'unit_price', oi.unit_price,
+            'total_price', oi.total_price
+          )
+        ) FILTER (WHERE oi.id IS NOT NULL),
+        '[]'
+      ) as items
+      FROM orders o
+      LEFT JOIN users u ON o.user_id = u.id
+      LEFT JOIN order_items oi ON oi.order_id = o.id
+      LEFT JOIN addresses sa ON o.shipping_address_id = sa.id
+      WHERE o.id = $1
+      GROUP BY o.id, u.email, u.full_name`,
 };
 
 function itemImageUrlFromBody(item) {
@@ -706,6 +739,21 @@ async function findOrderByIdAdmin(orderId) {
 /**
  * @returns {Promise<object|null>}
  */
+/**
+ * Order plus recipient email and a minimal item list, for transactional emails.
+ * @returns {Promise<object|null>}
+ */
+async function findOrderForNotification(orderId) {
+  const id = parseInt(String(orderId), 10);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  const result = await pool.query(SQL.ORDER_NOTIFICATION_CONTEXT, [id]);
+  const order = result.rows[0] ?? null;
+  if (!order) return null;
+  if (!Array.isArray(order.items)) order.items = [];
+  order.id = parseInt(order.id, 10);
+  return order;
+}
+
 async function updateOrderStatusById(orderId, statusLower) {
   const result = await pool.query(SQL.UPDATE_ORDER_STATUS, [statusLower, orderId]);
   return result.rows[0] ?? null;
@@ -1008,6 +1056,7 @@ async function createPendingStripeOrderWithItems({
   totalAmount,
   guestCheckout,
   guestTrackingTokenHash = null,
+  guestTrackingTokenCipher = null,
   orderItems,
   shippingAddressId = null,
   billingAddressId = null,
@@ -1034,6 +1083,7 @@ async function createPendingStripeOrderWithItems({
       'Checkout via Stripe',
       guestCheckout,
       guestTrackingTokenHash,
+      guestTrackingTokenCipher,
       guestTrackingTokenHash ? new Date().toISOString() : null,
       shippingAddressId,
       billingAddressId,
@@ -1092,11 +1142,21 @@ async function findGuestOrderByIdAndTokenHash(orderId, tokenHash) {
   return order;
 }
 
+/**
+ * @returns {Promise<boolean>} true only when this call performed the paid transition, so
+ * the caller knows whether it owns the confirmation email.
+ */
 async function markOrderPaidFromStripe(orderId, paidAtIso, paymentIntentId = null) {
-  await pool.query(SQL.UPDATE_ORDER_STRIPE_PAID, ['paid', 'awaiting_artwork', paidAtIso, orderId]);
+  const result = await pool.query(SQL.UPDATE_ORDER_STRIPE_PAID, [
+    'paid',
+    'awaiting_artwork',
+    paidAtIso,
+    orderId,
+  ]);
   if (paymentIntentId) {
     await pool.query(SQL.UPDATE_ORDER_STRIPE_PAYMENT_INTENT, [String(paymentIntentId), orderId]);
   }
+  return result.rowCount > 0;
 }
 
 async function setOrderStripePaymentIntent(orderId, paymentIntentId) {
@@ -1233,6 +1293,7 @@ module.exports = {
   findGuestOrderByIdAndTokenHash,
   findAllOrdersAdmin,
   findOrderByIdAdmin,
+  findOrderForNotification,
   updateOrderStatusById,
   updateOrderItemStatusById,
   maybeAdvanceOrderItemToProcessingAfterArtwork,

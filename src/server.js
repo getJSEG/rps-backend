@@ -9,6 +9,43 @@ const pool = require('./config/database');
 const { startCartCleanupJob } = require('./jobs/cartCleanupJob');
 const { startAccountDeletionJob } = require('./jobs/accountDeletionJob');
 
+/**
+ * Warn about production settings that silently break customer email instead of erroring:
+ * a missing or local FRONTEND_URL ships dead links, and test-mode settings divert every
+ * message away from the customer. Warns only - a bad link should never stop the API booting.
+ */
+function warnOnProductionEmailConfig() {
+  if ((process.env.NODE_ENV || '').trim() !== 'production') return;
+
+  const problems = [];
+  const appUrl = (process.env.FRONTEND_URL || process.env.APP_BASE_URL || '').trim();
+
+  if (!appUrl) {
+    problems.push('FRONTEND_URL is not set - password reset and order links in emails will have no domain.');
+  } else if (/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])/i.test(appUrl)) {
+    problems.push(`FRONTEND_URL points at ${appUrl} - customers cannot open links on your machine.`);
+  }
+
+  const testMode = /^(1|true|yes|on)$/i.test(String(process.env.EMAIL_TEST_MODE || '').trim());
+  if (testMode) {
+    problems.push('EMAIL_TEST_MODE is on - no customer will receive email. Set it to false in production.');
+  }
+  if ((process.env.EMAIL_TEST_RECIPIENT || '').trim()) {
+    problems.push('EMAIL_TEST_RECIPIENT is set - if test mode is ever enabled, all customer email is redirected there.');
+  }
+  if (!(process.env.RESEND_API_KEY || '').trim()) {
+    problems.push('RESEND_API_KEY is not set - no email can be sent at all.');
+  }
+  if (!(process.env.EMAIL_FROM || '').trim()) {
+    problems.push('EMAIL_FROM is not set - messages fall back to no-reply@localhost and will be rejected.');
+  }
+
+  if (problems.length === 0) return;
+  console.warn('\n⚠️  Email configuration warnings (production):');
+  for (const problem of problems) console.warn(`   - ${problem}`);
+  console.warn('');
+}
+
 /** Create base tables (users, addresses, etc.) if they do not exist - for fresh Railway DB */
 async function ensureBaseTables() {
   try {
@@ -52,8 +89,8 @@ async function ensureEmployeeColumns() {
       const sql6 = fs.readFileSync(path.join(migrationsDir, 'addCartItems.sql'), 'utf8');
       await pool.query(sql6);
     }
-    if (fs.existsSync(path.join(migrationsDir, 'addPasswordResetCodes.sql'))) {
-      const sql7 = fs.readFileSync(path.join(migrationsDir, 'addPasswordResetCodes.sql'), 'utf8');
+    if (fs.existsSync(path.join(migrationsDir, 'addPasswordResetToken.sql'))) {
+      const sql7 = fs.readFileSync(path.join(migrationsDir, 'addPasswordResetToken.sql'), 'utf8');
       await pool.query(sql7);
     }
     if (fs.existsSync(path.join(migrationsDir, 'addGuestCheckout.sql'))) {
@@ -300,6 +337,7 @@ ensureBaseTables()
   const server = app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    warnOnProductionEmailConfig();
     startCartCleanupJob();
     startAccountDeletionJob();
   });

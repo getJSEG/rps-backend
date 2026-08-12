@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const pool = require('../config/database');
 const STRONG_PASSWORD_REGEX = /^(?=.*[A-Z])(?=.*\d).+$/;
+const { sendPasswordChangedEmail } = require('../services/emailService');
 
 const DELETION_GRACE_DAYS = 30;
 
@@ -74,7 +75,7 @@ const changePassword = async (req, res) => {
     }
 
     // Account change-password UI: logged-in user sets a new password only (no email code, no current-password check).
-    // Email + code flow remains on POST /auth/send-reset-code and POST /auth/reset-password for unauthenticated reset.
+    // Unauthenticated reset goes through POST /auth/forgot-password and POST /auth/reset-password instead.
 
     const newPasswordHash = await bcrypt.hash(newPassword, 10);
 
@@ -83,6 +84,17 @@ const changePassword = async (req, res) => {
       'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
       [newPasswordHash, userId]
     );
+
+    // Notify user (best-effort)
+    try {
+      const r = await pool.query('SELECT email FROM users WHERE id = $1', [userId]);
+      const email = r.rows[0]?.email;
+      if (email) {
+        sendPasswordChangedEmail(email).catch((e) => console.warn('[user] password changed email failed', e && e.message ? e.message : e));
+      }
+    } catch (e) {
+      console.warn('[user] could not fetch email to send password changed notification', e && e.message ? e.message : e);
+    }
 
     res.json({ message: 'Password changed successfully' });
   } catch (error) {
