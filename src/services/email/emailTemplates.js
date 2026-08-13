@@ -40,6 +40,15 @@ function escapeWithBold(text) {
     .join('');
 }
 
+function isSignOffLine(line) {
+  return /choosing resourceful print solutions/i.test(String(line || ''));
+}
+
+/** Full-width centered sign-off — text-align on <p> is unreliable in Gmail/Outlook. */
+function renderSignOff(line) {
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="${STYLES.signOffTable}"><tr><td align="center" style="${STYLES.signOffCell}">${escapeWithBold(line)}</td></tr></table>`;
+}
+
 function humanize(value) {
   return String(value || '')
     .split(/[_\s]+/)
@@ -155,7 +164,11 @@ function renderOrderSummaryBlock(
         .filter(Boolean);
   if (footerLines.length) {
     bottom = footerLines
-      .map((line) => `<p style="${STYLES.note}">${escapeWithBold(line)}</p>`)
+      .map((line) =>
+        isSignOffLine(line)
+          ? renderSignOff(line)
+          : `<p style="${STYLES.note}">${escapeWithBold(line)}</p>`
+      )
       .join('');
   } else if (!omitAddress) {
     bottom = isStorePickup(order)
@@ -221,42 +234,37 @@ function buildOrderConfirmationEmail(order = {}, { appUrl = '', guestToken = nul
   const name = customerNameOf(order);
   const isGuest = !order.user_id && !order.userId;
   const orderUrl = buildOrderUrl({ order, appUrl, guestToken });
-  const thanksLoggedIn =
-    'Thanks for your order. We have received it and it is now confirmed.';
 
-  // Guest confirmation copy + tracking link (no account, so the link is how they reopen the order).
-  let guestBlock = '';
-  if (isGuest) {
-    guestBlock = `
-      <p>Thank you for your order. We&rsquo;ve received it successfully, and your order is now confirmed.</p>
+  const guestSaveLink = isGuest
+    ? `
       <p>Since you checked out as a guest, please save the tracking link below. You can use it anytime to securely view your latest order status and updates.</p>
       ${orderUrl ? `<p style="${STYLES.urlText}"><a href="${escapeHtml(orderUrl)}" style="${STYLES.link}">${escapeHtml(orderUrl)}</a></p>` : ''}
-      ${orderUrl ? renderButton(orderUrl, 'Track Your Order') : ''}
-      <p>We&rsquo;ll keep you informed as your order progresses. If you have any questions, please contact our support team.</p>
-      <p>Thank you for choosing Resourceful Print Solutions.</p>
-    `;
-  }
+    `
+    : '';
+
+  const closing = `
+    <p>Thank you for your order. We&rsquo;ve received it successfully, and your order is now confirmed.</p>
+    ${guestSaveLink}
+    ${orderUrl ? renderButton(orderUrl, 'Track Your Order') : ''}
+    <p>We&rsquo;ll keep you informed as your order progresses. If you have any questions, please contact our support team.</p>
+    ${renderSignOff('Thank you for choosing Resourceful Print Solutions.')}
+  `;
 
   const content = `
-    ${renderOrderSummaryBlock(order, { omitPaymentMethod: true })}
-    ${guestBlock}
-    ${isGuest ? '' : `<p style="${STYLES.note}">${escapeHtml(thanksLoggedIn)}</p>`}
+    ${renderOrderSummaryBlock(order, { omitPaymentMethod: true, omitAddress: true })}
+    ${closing}
   `;
   return {
     subject: `Order #${number} Confirmed`,
     text: [
       `Order ${number} confirmed. Total: ${money(order.total_amount) || formatCurrency(0)}`,
+      'Thank you for your order. We have received it successfully, and your order is now confirmed.',
       isGuest
-        ? [
-            'Thank you for your order. We have received it successfully, and your order is now confirmed.',
-            'Since you checked out as a guest, please save the tracking link below. You can use it anytime to securely view your latest order status and updates.',
-            orderUrl ? `Track Your Order: ${orderUrl}` : '',
-            "We'll keep you informed as your order progresses. If you have any questions, please contact our support team.",
-            'Thank you for choosing Resourceful Print Solutions.',
-          ]
-            .filter(Boolean)
-            .join('\n')
-        : thanksLoggedIn,
+        ? 'Since you checked out as a guest, please save the tracking link below. You can use it anytime to securely view your latest order status and updates.'
+        : '',
+      orderUrl ? `Track Your Order: ${orderUrl}` : '',
+      "We'll keep you informed as your order progresses. If you have any questions, please contact our support team.",
+      'Thank you for choosing Resourceful Print Solutions.',
     ]
       .filter(Boolean)
       .join('\n'),
@@ -360,12 +368,13 @@ function buildOrderStatusEmail(order = {}, nextStatus = '', { appUrl = '', guest
   });
   const trackingButton = trackingUrl ? renderButton(trackingUrl, 'Track your package') : '';
 
-  // Same guest tracking link as confirmation — guests have no account order list.
+  // Same guest tracking presentation as confirmation — guests have no account order list.
   let guestLinkBlock = '';
   if (isGuest && orderUrl) {
     guestLinkBlock = `
-      <p style="${STYLES.note}">View your order with this tracking link:</p>
+      <p>Since you checked out as a guest, please save the tracking link below. You can use it anytime to securely view your latest order status and updates.</p>
       <p style="${STYLES.urlText}"><a href="${escapeHtml(orderUrl)}" style="${STYLES.link}">${escapeHtml(orderUrl)}</a></p>
+      ${renderButton(orderUrl, 'Track Your Order')}
     `;
   }
 
@@ -395,7 +404,12 @@ function buildOrderStatusEmail(order = {}, nextStatus = '', { appUrl = '', guest
     subject,
     text: [
       `Order ${number} is now ${meta.label}.${body ? ` ${body}` : ''}${textRows ? ` ${textRows}` : ''}`,
-      isGuest && orderUrl ? `View your order: ${orderUrl}` : '',
+      isGuest && orderUrl
+        ? [
+            'Since you checked out as a guest, please save the tracking link below. You can use it anytime to securely view your latest order status and updates.',
+            `Track Your Order: ${orderUrl}`,
+          ].join('\n')
+        : '',
     ]
       .filter(Boolean)
       .join('\n'),

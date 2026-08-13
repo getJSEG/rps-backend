@@ -43,6 +43,8 @@ const STYLES = {
   buttonTable: 'margin:20px 0 4px;',
   buttonCell: `background:${COLORS.brand};`,
   note: `color:${COLORS.muted};font-size:13px;line-height:19px;font-weight:normal;margin-top:10px;`,
+  signOffTable: 'width:100%;margin:18px 0 0;border-collapse:collapse;',
+  signOffCell: `text-align:center;font-size:14px;line-height:21px;font-weight:normal;color:${COLORS.text};font-family:${FONT};`,
   sectionTitle: `margin:18px 0 4px;font-size:13px;font-weight:normal;color:${COLORS.muted};`,
   address: `margin:0;font-size:14px;line-height:20px;font-weight:normal;color:${COLORS.text};`,
   table: 'width:100%;border-collapse:collapse;margin-top:12px;',

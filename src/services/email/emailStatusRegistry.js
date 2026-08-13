@@ -158,8 +158,10 @@ const STATUS_REGISTRY = {
     omitPaymentMethod: true,
     omitPaymentStatus: true,
     omitAddress: true,
-    footerMessage:
-      'Contact us if you believe this was a mistake.',
+    footerMessage: [
+      'If you did not request this cancellation or believe it was a mistake, please contact our support team for assistance.',
+      'Thank you for choosing Resourceful Print Solutions.',
+    ],
   },
 };
 
