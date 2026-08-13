@@ -32,6 +32,14 @@ function moneyIfCharged(value) {
   return money(value);
 }
 
+/** Footer copy may mark emphasis with **bold**; escape everything else. */
+function escapeWithBold(text) {
+  return String(text || '')
+    .split(/\*\*/)
+    .map((part, i) => (i % 2 === 1 ? `<strong>${escapeHtml(part)}</strong>` : escapeHtml(part)))
+    .join('');
+}
+
 function humanize(value) {
   return String(value || '')
     .split(/[_\s]+/)
@@ -138,15 +146,16 @@ function renderOrderSummaryBlock(
   }
   const details = renderKeyValue(metaRows);
   let bottom = '';
-  const footerLines = Array.isArray(footerMessage)
-    ? footerMessage.map((line) => String(line || '').trim()).filter(Boolean)
-    : String(footerMessage || '')
+  const resolvedFooter = typeof footerMessage === 'function' ? footerMessage(order) : footerMessage;
+  const footerLines = Array.isArray(resolvedFooter)
+    ? resolvedFooter.map((line) => String(line || '').trim()).filter(Boolean)
+    : String(resolvedFooter || '')
         .split(/\n+/)
         .map((line) => line.trim())
         .filter(Boolean);
   if (footerLines.length) {
     bottom = footerLines
-      .map((line) => `<p style="${STYLES.note}">${escapeHtml(line)}</p>`)
+      .map((line) => `<p style="${STYLES.note}">${escapeWithBold(line)}</p>`)
       .join('');
   } else if (!omitAddress) {
     bottom = isStorePickup(order)
@@ -291,14 +300,10 @@ function statusDetailRows(order = {}, status = '') {
   if (status === 'shipped') {
     return [
       { label: 'Tracking number', value: String(order.order_tracking_id || '').trim() },
-      { label: 'Carrier', value: String(order.carrier || '').trim().toUpperCase() },
-      { label: 'Estimated delivery', value: formatDate(order.shipping_estimated_delivery) },
     ];
   }
   if (status === 'refunded') {
     return [
-      { label: 'Refunded amount', value: money(order.refund_amount) },
-      { label: 'Refund date', value: formatDate(order.refunded_at) },
       { label: 'Refund type', value: refundScopeLabel(order) },
       { label: 'Reason', value: refundReasonLabel(order) },
     ];

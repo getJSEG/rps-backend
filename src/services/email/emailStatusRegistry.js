@@ -3,6 +3,13 @@
  * Keep in sync with customerOrderStatusDescription in rps-frontend src/utils/orderStatuses.ts
  * so the email wording matches what the customer sees in the portal.
  */
+const { formatDate, formatCurrency } = require('./emailLayout');
+
+function carrierDisplayName(order = {}) {
+  const raw = String(order.carrier || '').trim();
+  if (!raw || raw.toLowerCase() === 'fedex') return 'FedEx';
+  return raw.replace(/_/g, ' ');
+}
 
 /** Legacy / alternate DB values mapped onto the current pipeline. */
 const LEGACY_STATUS_ALIASES = {
@@ -86,8 +93,17 @@ const STATUS_REGISTRY = {
     body: '',
     omitPaymentMethod: true,
     omitAddress: true,
-    footerMessage:
-      'Your order has been shipped and the carrier now has the package.',
+    footerMessage: (order) => {
+      const carrier = carrierDisplayName(order);
+      const delivery = formatDate(order.shipping_estimated_delivery);
+      return [
+        'Your order has been **shipped** and is now on its way to you.',
+        delivery
+          ? `The package has been handed over to **${carrier}**, with an estimated delivery date of **${delivery}**.`
+          : `The package has been handed over to **${carrier}**.`,
+        'Thank you for choosing Resourceful Print Solutions. We appreciate your business.',
+      ];
+    },
   },
   completed: {
     label: 'Completed',
@@ -107,8 +123,29 @@ const STATUS_REGISTRY = {
     body: '',
     omitPaymentMethod: true,
     omitAddress: true,
-    footerMessage:
-      'Your refund has been processed. It may take a few business days for the amount to appear on your original payment method.',
+    footerMessage: (order) => {
+      const amount = Number(order.refund_amount);
+      const amountLabel = Number.isFinite(amount) && amount > 0 ? formatCurrency(amount) : null;
+      const refundedOn = formatDate(order.refunded_at);
+      const lines = [
+        'Your refund has been **processed** and is on its way back to you.',
+      ];
+      if (amountLabel && refundedOn) {
+        lines.push(
+          `A refund of **${amountLabel}** was issued on **${refundedOn}**. It may take a few business days for the amount to appear on your original payment method.`
+        );
+      } else if (amountLabel) {
+        lines.push(
+          `A refund of **${amountLabel}** has been issued. It may take a few business days for the amount to appear on your original payment method.`
+        );
+      } else {
+        lines.push(
+          'It may take a few business days for the amount to appear on your original payment method.'
+        );
+      }
+      lines.push('Thank you for choosing Resourceful Print Solutions. We appreciate your business.');
+      return lines;
+    },
   },
   cancelled: {
     label: 'Cancelled',
