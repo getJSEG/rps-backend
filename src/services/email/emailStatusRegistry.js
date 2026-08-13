@@ -70,8 +70,11 @@ const STATUS_REGISTRY = {
     body: '',
     omitPaymentMethod: true,
     omitAddress: true,
-    footerMessage:
-      'Your order is temporarily on hold. We will notify you when its ready to be processed.',
+    footerMessage: [
+      'Your order is currently on hold and will be processed once it is ready to move forward.',
+      'We\u2019ll notify you as soon as there is an update to your order status. No action is required from you at this time.',
+      'Thank you for your patience and for choosing Resourceful Print Solutions.',
+    ],
   },
   shipped: {
     label: 'Shipped',

@@ -138,8 +138,16 @@ function renderOrderSummaryBlock(
   }
   const details = renderKeyValue(metaRows);
   let bottom = '';
-  if (footerMessage) {
-    bottom = `<p style="${STYLES.note}">${escapeHtml(footerMessage)}</p>`;
+  const footerLines = Array.isArray(footerMessage)
+    ? footerMessage.map((line) => String(line || '').trim()).filter(Boolean)
+    : String(footerMessage || '')
+        .split(/\n+/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+  if (footerLines.length) {
+    bottom = footerLines
+      .map((line) => `<p style="${STYLES.note}">${escapeHtml(line)}</p>`)
+      .join('');
   } else if (!omitAddress) {
     bottom = isStorePickup(order)
       ? `<p style="${STYLES.sectionTitle}">Collection</p><p style="${STYLES.address}">This order is set for store pickup. We will let you know when it is ready to collect.</p>`
@@ -204,29 +212,42 @@ function buildOrderConfirmationEmail(order = {}, { appUrl = '', guestToken = nul
   const name = customerNameOf(order);
   const isGuest = !order.user_id && !order.userId;
   const orderUrl = buildOrderUrl({ order, appUrl, guestToken });
-  const thanks =
+  const thanksLoggedIn =
     'Thanks for your order. We have received it and it is now confirmed.';
 
-  // Guests need the raw tracking URL in the email so they can open the order later.
-  let guestLinkBlock = '';
-  if (isGuest && orderUrl) {
-    guestLinkBlock = `
-      <p style="${STYLES.note}">Since you checked out as a guest, save this tracking link to view your order status later:</p>
-      <p style="${STYLES.urlText}"><a href="${escapeHtml(orderUrl)}" style="${STYLES.link}">${escapeHtml(orderUrl)}</a></p>
+  // Guest confirmation copy + tracking link (no account, so the link is how they reopen the order).
+  let guestBlock = '';
+  if (isGuest) {
+    guestBlock = `
+      <p>Thank you for your order. We&rsquo;ve received it successfully, and your order is now confirmed.</p>
+      <p>Since you checked out as a guest, please save the tracking link below. You can use it anytime to securely view your latest order status and updates.</p>
+      ${orderUrl ? `<p style="${STYLES.urlText}"><a href="${escapeHtml(orderUrl)}" style="${STYLES.link}">${escapeHtml(orderUrl)}</a></p>` : ''}
+      ${orderUrl ? renderButton(orderUrl, 'Track Your Order') : ''}
+      <p>We&rsquo;ll keep you informed as your order progresses. If you have any questions, please contact our support team.</p>
+      <p>Thank you for choosing Resourceful Print Solutions.</p>
     `;
   }
 
   const content = `
     ${renderOrderSummaryBlock(order, { omitPaymentMethod: true })}
-    ${guestLinkBlock}
-    <p style="${STYLES.note}">${escapeHtml(thanks)}</p>
+    ${guestBlock}
+    ${isGuest ? '' : `<p style="${STYLES.note}">${escapeHtml(thanksLoggedIn)}</p>`}
   `;
   return {
     subject: `Order #${number} Confirmed`,
     text: [
       `Order ${number} confirmed. Total: ${money(order.total_amount) || formatCurrency(0)}`,
-      isGuest && orderUrl ? `Track your order: ${orderUrl}` : '',
-      thanks,
+      isGuest
+        ? [
+            'Thank you for your order. We have received it successfully, and your order is now confirmed.',
+            'Since you checked out as a guest, please save the tracking link below. You can use it anytime to securely view your latest order status and updates.',
+            orderUrl ? `Track Your Order: ${orderUrl}` : '',
+            "We'll keep you informed as your order progresses. If you have any questions, please contact our support team.",
+            'Thank you for choosing Resourceful Print Solutions.',
+          ]
+            .filter(Boolean)
+            .join('\n')
+        : thanksLoggedIn,
     ]
       .filter(Boolean)
       .join('\n'),
@@ -330,7 +351,7 @@ function buildOrderStatusEmail(order = {}, nextStatus = '', { appUrl = '', guest
     omitPaymentMethod: meta.omitPaymentMethod === true,
     omitPaymentStatus: meta.omitPaymentStatus === true,
     omitAddress: meta.omitAddress === true,
-    footerMessage: String(meta.footerMessage || ''),
+    footerMessage: meta.footerMessage || '',
   });
   const trackingButton = trackingUrl ? renderButton(trackingUrl, 'Track your package') : '';
 
