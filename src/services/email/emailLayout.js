@@ -66,9 +66,11 @@ function buildTrackingUrl(order = {}) {
   return null;
 }
 
-function renderButton(url, label) {
+function renderButton(url, label, { centered = false } = {}) {
   if (!url) return '';
-  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="${STYLES.buttonTable}"><tr><td style="${STYLES.buttonCell}"><a href="${escapeHtml(url)}" style="${STYLES.button}">${escapeHtml(label)}</a></td></tr></table>`;
+  const inner = `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${centered ? ' align="center"' : ` style="${STYLES.buttonTable}"`}><tr><td style="${STYLES.buttonCell}"><a href="${escapeHtml(url)}" style="${STYLES.button}">${escapeHtml(label)}</a></td></tr></table>`;
+  if (!centered) return inner;
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="${STYLES.buttonWrap}"><tr><td align="center" style="text-align:center;width:100%;">${inner}</td></tr></table>`;
 }
 
 function renderLink(url, label) {
@@ -106,13 +108,16 @@ function renderAddress(order = {}, title = 'Shipping address') {
     <p style="${STYLES.address}">${lines.map((l) => escapeHtml(l)).join('<br>')}</p>`;
 }
 
-function buildBaseLayout({ title, preheader, content, logoUrl, uniqueRef = '' }) {
+function buildBaseLayout({ title, preheader, content, logoUrl, uniqueRef = '', titleAlign = 'left' } = {}) {
   const logo = String(logoUrl || '').trim();
   const logoRow = logo
     ? `<tr><td align="center" style="${STYLES.logoRow}"><img src="${escapeHtml(logo)}" alt="RPS Store" width="180" style="${STYLES.logoImg}" /></td></tr>`
     : '';
   const titleText = String(title || '').trim();
   const preheaderText = String(preheader || '').trim();
+  const headingCentered = String(titleAlign || '').toLowerCase() === 'center';
+  const headingAlign = headingCentered ? 'center' : 'left';
+  const headingExtra = headingCentered ? 'text-align:center;' : '';
   // Gmail shows "⋯" and hides the body when several messages look the same (same footer /
   // layout). A unique per-send marker keeps each email distinct so the full body stays open.
   const clipKey =
@@ -121,9 +126,9 @@ function buildBaseLayout({ title, preheader, content, logoUrl, uniqueRef = '' })
   const clipBuster = `<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#ffffff;">${escapeHtml(clipKey)}</div>`;
   const headingBlock = titleText
     ? `<tr>
-                    <td style="${STYLES.headingCell}">
-                      <p style="${STYLES.heading}">${escapeHtml(titleText)}</p>
-                      ${preheaderText ? `<p style="${STYLES.preheader}">${escapeHtml(preheaderText)}</p>` : ''}
+                    <td align="${headingAlign}" style="${STYLES.headingCell}${headingExtra}">
+                      <p style="${STYLES.heading}${headingExtra}">${escapeHtml(titleText)}</p>
+                      ${preheaderText ? `<p style="${STYLES.preheader}${headingExtra}">${escapeHtml(preheaderText)}</p>` : ''}
                     </td>
                   </tr>`
     : '';

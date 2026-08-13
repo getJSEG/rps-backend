@@ -132,12 +132,13 @@ function readResetTokenTtlMinutes() {
   return Number.isFinite(n) && n > 0 ? n : 30;
 }
 
-async function sendPasswordResetEmail(to, resetUrl) {
+async function sendPasswordResetEmail(to, resetUrl, { name = '' } = {}) {
   const appUrl = readAppUrl();
   const tpl = templates.buildPasswordResetEmail({
     resetUrl,
     expiresMinutes: readResetTokenTtlMinutes(),
     appUrl,
+    name,
   });
   return sendRaw({ to, subject: tpl.subject, html: tpl.html, text: tpl.text, event: 'password reset' });
 }

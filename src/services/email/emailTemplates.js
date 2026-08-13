@@ -183,22 +183,41 @@ function renderOrderSummaryBlock(
   `;
 }
 
-function buildPasswordResetEmail({ resetUrl = '', expiresMinutes = 30, appUrl = '' } = {}) {
+function buildPasswordResetEmail({ resetUrl = '', expiresMinutes = 30, appUrl = '', name = '' } = {}) {
   const target = String(resetUrl || '').trim() || null;
   const minutes = Number(expiresMinutes);
+  const displayName = String(name || '').trim();
+  const greeting = displayName ? `Hello ${displayName},` : 'Hello,';
   const content = `
-    <p>Hello,</p>
-    <p>We received a request to reset the password for your RPS Store account. Click the button below to choose a new password:</p>
-    ${renderButton(target, 'Reset your password')}
-    <p>This link expires in ${minutes} minutes and can only be used once.</p>
-    <p style="${STYLES.note}">If you did not request a password reset you can safely ignore this email &mdash; your password will not change. Never share this link with anyone; RPS Store staff will never ask you for it.</p>
+    <p>${escapeHtml(greeting)}</p>
+    <p>Click the button below to securely create a new password.</p>
+    ${renderButton(target, 'Reset your password', { centered: true })}
+    <p>For your security, this link will expire in ${minutes} minutes and can only be used once.</p>
+    <p>If you did not request a password reset, no action is required. Your current password will remain unchanged.</p>
+    <p>For your protection, please do not share this password reset link with anyone.</p>
+    <p>Thank you,<br>Resourceful Print Solutions</p>
   `;
   return {
     subject: 'Reset Your RPS Password',
-    text: `Reset your RPS Store password using this link: ${target || '(link unavailable)'}\n\nThe link expires in ${minutes} minutes and can only be used once. If you did not request this, ignore this email.`,
+    text: [
+      greeting,
+      '',
+      'Click the button below to securely create a new password.',
+      target || '(link unavailable)',
+      '',
+      `For your security, this link will expire in ${minutes} minutes and can only be used once.`,
+      '',
+      'If you did not request a password reset, no action is required. Your current password will remain unchanged.',
+      '',
+      'For your protection, please do not share this password reset link with anyone.',
+      '',
+      'Thank you,',
+      'Resourceful Print Solutions',
+    ].join('\n'),
     html: buildBaseLayout({
       title: 'Reset your password',
-      preheader: 'Use your reset link to choose a new password',
+      titleAlign: 'center',
+      preheader: '',
       content,
       logoUrl: resolveEmailLogoUrl(appUrl),
       uniqueRef: emailUniqueRef('password-reset'),

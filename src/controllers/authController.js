@@ -327,7 +327,7 @@ const forgotPassword = async (req, res) => {
     const normalizedEmail = email.trim().toLowerCase();
 
     const userResult = await pool.query(
-      'SELECT id, is_active FROM users WHERE email = $1',
+      'SELECT id, is_active, full_name FROM users WHERE email = $1',
       [normalizedEmail]
     );
     const user = userResult.rows[0];
@@ -341,7 +341,9 @@ const forgotPassword = async (req, res) => {
         [hashResetToken(rawToken), expiresAt, user.id]
       );
 
-      const { sent, error } = await sendPasswordResetEmail(normalizedEmail, buildResetUrl(rawToken));
+      const { sent, error } = await sendPasswordResetEmail(normalizedEmail, buildResetUrl(rawToken), {
+        name: user.full_name || '',
+      });
       if (!sent) {
         console.warn('[auth] password reset email not sent for user', user.id, error || 'no error');
       }

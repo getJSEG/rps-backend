@@ -41,6 +41,7 @@ const STYLES = {
   urlText: `color:${COLORS.link};word-break:break-all;`,
   button: `display:inline-block;background:${COLORS.brand};color:${COLORS.surface};text-decoration:none;padding:12px 22px;font-weight:normal;font-size:14px;font-family:${FONT};`,
   buttonTable: 'margin:20px 0 4px;',
+  buttonWrap: 'width:100%;margin:20px 0 4px;border-collapse:collapse;',
   buttonCell: `background:${COLORS.brand};`,
   note: `color:${COLORS.muted};font-size:13px;line-height:19px;font-weight:normal;margin-top:10px;`,
   signOffTable: 'width:100%;margin:18px 0 0;border-collapse:collapse;',
