@@ -3,13 +3,6 @@
  * Keep in sync with customerOrderStatusDescription in rps-frontend src/utils/orderStatuses.ts
  * so the email wording matches what the customer sees in the portal.
  */
-const { formatDate, formatCurrency } = require('./emailLayout');
-
-function carrierDisplayName(order = {}) {
-  const raw = String(order.carrier || '').trim();
-  if (!raw || raw.toLowerCase() === 'fedex') return 'FedEx';
-  return raw.replace(/_/g, ' ');
-}
 
 /** Legacy / alternate DB values mapped onto the current pipeline. */
 const LEGACY_STATUS_ALIASES = {
@@ -71,39 +64,29 @@ const STATUS_REGISTRY = {
     label: 'On hold',
     notify: true,
     subject: (number) => `Order #${number} Is On Hold`,
-    // Title is the customer name (set in the template). No visible preheader.
-    heading: null,
+    // Centered status title under the logo; greeting + CTA are built in the template.
+    heading: 'Order On Hold',
+    titleAlign: 'center',
     preheader: '',
     body: '',
     omitPaymentMethod: true,
     omitAddress: true,
-    footerMessage: [
-      'Your order is currently on hold and will be processed once it is ready to move forward.',
-      'We\u2019ll notify you as soon as there is an update to your order status. No action is required from you at this time.',
-      'Thank you for your patience and for choosing Resourceful Print Solutions.',
-    ],
+    // One short explanation + thank-you are rendered in the template.
+    footerMessage: '',
   },
   shipped: {
     label: 'Shipped',
     notify: true,
     subject: (number) => `Your Order #${number} Has Shipped`,
-    // Same layout as on_hold: customer name as title, message where address was.
-    heading: null,
+    // Centered status title under the logo; greeting + CTA are built in the template.
+    heading: 'Order Shipped',
+    titleAlign: 'center',
     preheader: '',
     body: '',
     omitPaymentMethod: true,
     omitAddress: true,
-    footerMessage: (order) => {
-      const carrier = carrierDisplayName(order);
-      const delivery = formatDate(order.shipping_estimated_delivery);
-      return [
-        'Your order has been **shipped** and is now on its way to you.',
-        delivery
-          ? `The package has been handed over to **${carrier}**, with an estimated delivery date of **${delivery}**.`
-          : `The package has been handed over to **${carrier}**.`,
-        'Thank you for choosing Resourceful Print Solutions. We appreciate your business.',
-      ];
-    },
+    // Carrier / delivery are detail rows; one CTA message is rendered in the template.
+    footerMessage: '',
   },
   completed: {
     label: 'Completed',
@@ -117,51 +100,29 @@ const STATUS_REGISTRY = {
     label: 'Refunded',
     notify: true,
     subject: (number) => `Refund Processed for Order #${number}`,
-    // Same layout as on_hold / shipped: customer name as title, message where address was.
-    heading: null,
+    // Centered status title under the logo; greeting + CTA are built in the template.
+    heading: 'Order Refunded',
+    titleAlign: 'center',
     preheader: '',
     body: '',
     omitPaymentMethod: true,
     omitAddress: true,
-    footerMessage: (order) => {
-      const amount = Number(order.refund_amount);
-      const amountLabel = Number.isFinite(amount) && amount > 0 ? formatCurrency(amount) : null;
-      const refundedOn = formatDate(order.refunded_at);
-      const lines = [
-        'Your refund has been **processed** and is on its way back to you.',
-      ];
-      if (amountLabel && refundedOn) {
-        lines.push(
-          `A refund of **${amountLabel}** was issued on **${refundedOn}**. It may take a few business days for the amount to appear on your original payment method.`
-        );
-      } else if (amountLabel) {
-        lines.push(
-          `A refund of **${amountLabel}** has been issued. It may take a few business days for the amount to appear on your original payment method.`
-        );
-      } else {
-        lines.push(
-          'It may take a few business days for the amount to appear on your original payment method.'
-        );
-      }
-      lines.push('Thank you for choosing Resourceful Print Solutions. We appreciate your business.');
-      return lines;
-    },
+    footerMessage: '',
   },
   cancelled: {
     label: 'Cancelled',
     notify: true,
     subject: (number) => `Order #${number} Cancelled`,
-    // Same layout as on_hold / shipped: customer name as title, message where address was.
-    heading: null,
+    // Centered status title under the logo; greeting + CTA are built in the template.
+    heading: 'Order Cancelled',
+    titleAlign: 'center',
     preheader: '',
     body: '',
     omitPaymentMethod: true,
-    omitPaymentStatus: true,
+    // Show payment status so customers can tell whether a refund may apply.
+    omitPaymentStatus: false,
     omitAddress: true,
-    footerMessage: [
-      'If you did not request this cancellation or believe it was a mistake, please contact our support team for assistance.',
-      'Thank you for choosing Resourceful Print Solutions.',
-    ],
+    footerMessage: '',
   },
 };
 

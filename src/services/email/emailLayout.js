@@ -66,6 +66,14 @@ function buildTrackingUrl(order = {}) {
   return null;
 }
 
+/** Site home or mailto fallback for Contact us / Contact Support actions. */
+function resolveContactUrl(appUrl = '') {
+  const siteBase = String(appUrl || process.env.FRONTEND_URL || process.env.APP_BASE_URL || '')
+    .trim()
+    .replace(/\/+$/, '');
+  return siteBase || 'mailto:noreply@resourcefulprintsolutions.com';
+}
+
 function renderButton(url, label, { centered = false } = {}) {
   if (!url) return '';
   const inner = `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${centered ? ' align="center"' : ` style="${STYLES.buttonTable}"`}><tr><td style="${STYLES.buttonCell}"><a href="${escapeHtml(url)}" style="${STYLES.button}">${escapeHtml(label)}</a></td></tr></table>`;
@@ -108,16 +116,26 @@ function renderAddress(order = {}, title = 'Shipping address') {
     <p style="${STYLES.address}">${lines.map((l) => escapeHtml(l)).join('<br>')}</p>`;
 }
 
-function buildBaseLayout({ title, preheader, content, logoUrl, uniqueRef = '', titleAlign = 'left' } = {}) {
+function buildBaseLayout({
+  title,
+  preheader,
+  content,
+  logoUrl,
+  uniqueRef = '',
+  titleAlign = 'left',
+  titleAccent = false,
+  appUrl = '',
+} = {}) {
   const logo = String(logoUrl || '').trim();
   const logoRow = logo
-    ? `<tr><td align="center" style="${STYLES.logoRow}"><img src="${escapeHtml(logo)}" alt="RPS Store" width="180" style="${STYLES.logoImg}" /></td></tr>`
+    ? `<tr><td align="center" style="${STYLES.logoRow}"><img src="${escapeHtml(logo)}" alt="Resourceful Print Solutions" width="180" style="${STYLES.logoImg}" /></td></tr>`
     : '';
   const titleText = String(title || '').trim();
   const preheaderText = String(preheader || '').trim();
   const headingCentered = String(titleAlign || '').toLowerCase() === 'center';
   const headingAlign = headingCentered ? 'center' : 'left';
   const headingExtra = headingCentered ? 'text-align:center;' : '';
+  const headingEmphasis = titleAccent ? STYLES.headingAccent : '';
   // Gmail shows "⋯" and hides the body when several messages look the same (same footer /
   // layout). A unique per-send marker keeps each email distinct so the full body stays open.
   const clipKey =
@@ -127,11 +145,16 @@ function buildBaseLayout({ title, preheader, content, logoUrl, uniqueRef = '', t
   const headingBlock = titleText
     ? `<tr>
                     <td align="${headingAlign}" style="${STYLES.headingCell}${headingExtra}">
-                      <p style="${STYLES.heading}${headingExtra}">${escapeHtml(titleText)}</p>
+                      <p style="${STYLES.heading}${headingExtra}${headingEmphasis}">${escapeHtml(titleText)}</p>
                       ${preheaderText ? `<p style="${STYLES.preheader}${headingExtra}">${escapeHtml(preheaderText)}</p>` : ''}
                     </td>
                   </tr>`
     : '';
+  const year = new Date().getFullYear();
+  const contactHref = resolveContactUrl(appUrl);
+  const contactLabel = String(contactHref).startsWith('mailto:') ? 'Contact support' : 'Contact us';
+  // Inside the card, under thank-you / body copy — same for guest and logged-in templates.
+  const footerBlock = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="${STYLES.footerTable}"><tr><td align="center" style="${STYLES.footer}">&copy; ${year} Resourceful Print Solutions<br><a href="${escapeHtml(contactHref)}" style="${STYLES.footerLink}">${escapeHtml(contactLabel)}</a></td></tr></table>`;
   return `<!doctype html>
   <html lang="en">
   <head>
@@ -153,11 +176,11 @@ function buildBaseLayout({ title, preheader, content, logoUrl, uniqueRef = '', t
                   ${headingBlock}
                 </table>
                 <div style="${STYLES.content}">${content}</div>
+                ${footerBlock}
                 ${clipBuster}
               </td>
             </tr>
           </table>
-          <p style="${STYLES.footer}">&copy; ${new Date().getFullYear()} RPS Store</p>
         </td>
       </tr>
     </table>
@@ -217,6 +240,7 @@ module.exports = {
   customerNameOf,
   buildOrderUrl,
   buildTrackingUrl,
+  resolveContactUrl,
   renderButton,
   renderLink,
   renderKeyValue,

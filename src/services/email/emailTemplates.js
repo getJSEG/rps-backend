@@ -13,6 +13,7 @@ const {
   buildBaseLayout,
   renderOrderItemsTable,
   renderTotals,
+  resolveContactUrl,
 } = require('./emailLayout');
 const { STYLES } = require('./emailStyles');
 const { getStatusMeta } = require('./emailStatusRegistry');
@@ -49,6 +50,11 @@ function renderSignOff(line) {
   return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="${STYLES.signOffTable}"><tr><td align="center" style="${STYLES.signOffCell}">${escapeWithBold(line)}</td></tr></table>`;
 }
 
+/** Smaller muted thank-you line for status emails. */
+function renderSubtleThankYou(line) {
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="${STYLES.thankYouTable}"><tr><td align="center" style="${STYLES.thankYouSubtle}">${escapeHtml(line)}</td></tr></table>`;
+}
+
 function humanize(value) {
   return String(value || '')
     .split(/[_\s]+/)
@@ -62,13 +68,29 @@ const PAYMENT_METHOD_LABELS = {
   stripe: 'Card',
   manual: 'Manual',
   cash: 'Cash',
-  cod: 'Cash on delivery',
+  cod: 'Cash on Delivery',
 };
 
 function paymentMethodLabel(order = {}) {
   const raw = String(order.payment_method || '').trim().toLowerCase();
   if (!raw) return null;
   return PAYMENT_METHOD_LABELS[raw] || humanize(raw);
+}
+
+function isCashOnDelivery(order = {}) {
+  const method = String(order.payment_method || '').trim().toLowerCase();
+  return method === 'cod' || method === 'cash';
+}
+
+/**
+ * Confirmation emails: COD customers need the method label, not a misleading "Paid".
+ * Card / prepaid orders benefit from Payment status instead.
+ */
+function confirmationPaymentVisibility(order = {}) {
+  if (isCashOnDelivery(order)) {
+    return { omitPaymentMethod: false, omitPaymentStatus: true };
+  }
+  return { omitPaymentMethod: true, omitPaymentStatus: false };
 }
 
 /**
@@ -140,18 +162,32 @@ function emailUniqueRef(seed = '') {
 /** Shared confirmation-style order block: meta, line items, totals, shipping address. */
 function renderOrderSummaryBlock(
   order = {},
-  { omitPaymentMethod = false, omitPaymentStatus = false, omitAddress = false, footerMessage = '' } = {}
+  {
+    omitPaymentMethod = false,
+    omitPaymentStatus = false,
+    omitAddress = false,
+    footerMessage = '',
+    leadingMetaRows = [],
+    extraMetaRows = [],
+  } = {}
 ) {
   const number = orderNumberOf(order);
-  const metaRows = [
+  const metaRows = [];
+  if (Array.isArray(leadingMetaRows) && leadingMetaRows.length) {
+    metaRows.push(...leadingMetaRows);
+  }
+  metaRows.push(
     { label: 'Order number', value: number },
-    { label: 'Order date', value: formatDate(order.created_at) },
-  ];
+    { label: 'Order date', value: formatDate(order.created_at) }
+  );
   if (!omitPaymentMethod) {
     metaRows.push({ label: 'Payment method', value: paymentMethodLabel(order) });
   }
   if (!omitPaymentStatus) {
     metaRows.push({ label: 'Payment status', value: paymentStatusLabel(order) });
+  }
+  if (Array.isArray(extraMetaRows) && extraMetaRows.length) {
+    metaRows.push(...extraMetaRows);
   }
   const details = renderKeyValue(metaRows);
   let bottom = '';
@@ -220,6 +256,7 @@ function buildPasswordResetEmail({ resetUrl = '', expiresMinutes = 30, appUrl = 
       preheader: '',
       content,
       logoUrl: resolveEmailLogoUrl(appUrl),
+      appUrl,
       uniqueRef: emailUniqueRef('password-reset'),
     }),
   };
@@ -243,6 +280,7 @@ function buildPasswordChangedEmail({ appUrl = '' } = {}) {
       preheader: 'Your account password was updated',
       content,
       logoUrl: resolveEmailLogoUrl(appUrl),
+      appUrl,
       uniqueRef: emailUniqueRef('password-changed'),
     }),
   };
@@ -251,47 +289,53 @@ function buildPasswordChangedEmail({ appUrl = '' } = {}) {
 function buildOrderConfirmationEmail(order = {}, { appUrl = '', guestToken = null } = {}) {
   const number = orderNumberOf(order);
   const name = customerNameOf(order);
-  const isGuest = !order.user_id && !order.userId;
   const orderUrl = buildOrderUrl({ order, appUrl, guestToken });
+  const paymentVisibility = confirmationPaymentVisibility(order);
 
-  const guestSaveLink = isGuest
-    ? `
-      <p>Since you checked out as a guest, please save the tracking link below. You can use it anytime to securely view your latest order status and updates.</p>
-      ${orderUrl ? `<p style="${STYLES.urlText}"><a href="${escapeHtml(orderUrl)}" style="${STYLES.link}">${escapeHtml(orderUrl)}</a></p>` : ''}
-    `
-    : '';
+  const greeting = `<p style="${STYLES.greeting}">Dear ${escapeHtml(name)},</p>`;
+  const shortMessage =
+    '<p style="' +
+    STYLES.sectionMessage +
+    '">We&rsquo;ve received your order and will keep you updated as it progresses.</p>';
 
-  const closing = `
-    <p>Thank you for your order. We&rsquo;ve received it successfully, and your order is now confirmed.</p>
-    ${guestSaveLink}
-    ${orderUrl ? renderButton(orderUrl, 'Track Your Order') : ''}
-    <p>We&rsquo;ll keep you informed as your order progresses. If you have any questions, please contact our support team.</p>
-    ${renderSignOff('Thank you for choosing Resourceful Print Solutions.')}
+  const actionBlock = `
+    <div style="${STYLES.ctaSection}">
+      ${orderUrl ? renderButton(orderUrl, 'Track Your Order') : ''}
+      ${renderSubtleThankYou('Thank you for choosing Resourceful Print Solutions.')}
+    </div>
   `;
 
   const content = `
-    ${renderOrderSummaryBlock(order, { omitPaymentMethod: true, omitAddress: true })}
-    ${closing}
+    ${greeting}
+    ${shortMessage}
+    ${renderOrderSummaryBlock(order, {
+      omitPaymentMethod: paymentVisibility.omitPaymentMethod,
+      omitPaymentStatus: paymentVisibility.omitPaymentStatus,
+      omitAddress: true,
+    })}
+    ${actionBlock}
   `;
+
   return {
     subject: `Order #${number} Confirmed`,
     text: [
-      `Order ${number} confirmed. Total: ${money(order.total_amount) || formatCurrency(0)}`,
-      'Thank you for your order. We have received it successfully, and your order is now confirmed.',
-      isGuest
-        ? 'Since you checked out as a guest, please save the tracking link below. You can use it anytime to securely view your latest order status and updates.'
-        : '',
+      'Order Confirmed.',
+      `Dear ${name},`,
+      `Order ${number}. Total: ${money(order.total_amount) || formatCurrency(0)}`,
+      "We've received your order and will keep you updated as it progresses.",
       orderUrl ? `Track Your Order: ${orderUrl}` : '',
-      "We'll keep you informed as your order progresses. If you have any questions, please contact our support team.",
       'Thank you for choosing Resourceful Print Solutions.',
     ]
       .filter(Boolean)
       .join('\n'),
     html: buildBaseLayout({
-      title: `Dear ${name},`,
+      title: 'Order Confirmed',
+      titleAlign: 'center',
+      titleAccent: true,
       preheader: '',
       content,
       logoUrl: resolveEmailLogoUrl(appUrl),
+      appUrl,
       uniqueRef: emailUniqueRef(`confirm-${number}`),
     }),
   };
@@ -318,6 +362,13 @@ function refundScopeLabel(order = {}) {
   return refunded + 0.005 >= total ? 'Full refund' : 'Partial refund';
 }
 
+function shippedCarrierLabel(order = {}) {
+  const raw = String(order.carrier || '').trim();
+  if (!raw) return null;
+  if (raw.toLowerCase() === 'fedex') return 'FedEx';
+  return raw.replace(/_/g, ' ');
+}
+
 /**
  * Status-specific facts, pulled only from populated columns. A status reached without the
  * usual side effects (for example an admin setting `shipped` with no FedEx shipment)
@@ -326,11 +377,15 @@ function refundScopeLabel(order = {}) {
 function statusDetailRows(order = {}, status = '') {
   if (status === 'shipped') {
     return [
+      { label: 'Carrier', value: shippedCarrierLabel(order) },
+      { label: 'Estimated delivery', value: formatDate(order.shipping_estimated_delivery) },
       { label: 'Tracking number', value: String(order.order_tracking_id || '').trim() },
     ];
   }
   if (status === 'refunded') {
     return [
+      { label: 'Refund amount', value: money(order.refund_amount) },
+      { label: 'Refund date', value: formatDate(order.refunded_at) },
       { label: 'Refund type', value: refundScopeLabel(order) },
       { label: 'Reason', value: refundReasonLabel(order) },
     ];
@@ -351,8 +406,15 @@ function buildOrderStatusEmail(order = {}, nextStatus = '', { appUrl = '', guest
   const number = orderNumberOf(order);
   const name = customerNameOf(order);
   const isGuest = !order.user_id && !order.userId;
+  const isShipped = meta.status === 'shipped';
+  const isOnHold = meta.status === 'on_hold';
+  const isCancelled = meta.status === 'cancelled';
+  const isRefunded = meta.status === 'refunded';
+  const isHeadlineStatus = isShipped || isOnHold || isCancelled || isRefunded;
   const orderUrl = buildOrderUrl({ order, appUrl, guestToken });
-  const trackingUrl = meta.status === 'shipped' ? buildTrackingUrl(order) : null;
+  const trackingUrl = isShipped ? buildTrackingUrl(order) : null;
+  const contactUrl = resolveContactUrl(appUrl);
+  const refundAmountLabel = money(order.refund_amount);
   const subject = typeof meta.subject === 'function'
     ? meta.subject(number)
     : `Order #${number} status: ${meta.label}`;
@@ -367,76 +429,175 @@ function buildOrderStatusEmail(order = {}, nextStatus = '', { appUrl = '', guest
     ? String(meta.body || '')
     : `Your order status is now ${meta.label}.`;
 
-  const details = renderKeyValue(statusDetailRows(order, meta.status));
-
-  // Only mention a refund on a cancellation when one has actually been recorded.
-  let extra = '';
-  if (meta.status === 'cancelled') {
-    const refundedOn = formatDate(order.refunded_at);
-    const refundedAmount = money(order.refund_amount);
-    extra = refundedOn && refundedAmount
-      ? `<p>A refund of ${escapeHtml(refundedAmount)} was processed on ${escapeHtml(refundedOn)}.</p>`
-      : '';
-  }
+  const statusRows = statusDetailRows(order, meta.status);
+  const details = isHeadlineStatus ? '' : renderKeyValue(statusRows);
 
   const orderSummary = renderOrderSummaryBlock(order, {
     omitPaymentMethod: meta.omitPaymentMethod === true,
     omitPaymentStatus: meta.omitPaymentStatus === true,
     omitAddress: meta.omitAddress === true,
-    footerMessage: meta.footerMessage || '',
+    footerMessage: isHeadlineStatus ? '' : meta.footerMessage || '',
+    leadingMetaRows: isCancelled || isRefunded ? statusRows : [],
+    extraMetaRows: isShipped ? statusRows : [],
   });
-  const trackingButton = trackingUrl ? renderButton(trackingUrl, 'Track your package') : '';
 
-  // Same guest tracking presentation as confirmation — guests have no account order list.
-  let guestLinkBlock = '';
-  if (isGuest && orderUrl) {
-    guestLinkBlock = `
-      <p>Since you checked out as a guest, please save the tracking link below. You can use it anytime to securely view your latest order status and updates.</p>
-      <p style="${STYLES.urlText}"><a href="${escapeHtml(orderUrl)}" style="${STYLES.link}">${escapeHtml(orderUrl)}</a></p>
-      ${renderButton(orderUrl, 'Track Your Order')}
-    `;
-  }
-
-  // Name-as-header layout (on_hold, shipped, cancelled, refunded): skip the duplicate "Hello …" line.
+  // Name-as-header layout is unused for notifying statuses that now use a status title.
   const nameAsHeading = meta.heading == null;
-  const greeting = nameAsHeading ? '' : `<p>Hello ${escapeHtml(name)},</p>`;
+  const title = isHeadlineStatus
+    ? meta.heading ||
+      (isShipped
+        ? 'Order Shipped'
+        : isOnHold
+          ? 'Order On Hold'
+          : isCancelled
+            ? 'Order Cancelled'
+            : 'Order Refunded')
+    : nameAsHeading
+      ? `Dear ${name},`
+      : meta.heading || 'Order update';
+  const titleAlign = meta.titleAlign || (isHeadlineStatus ? 'center' : 'left');
+
+  const greeting = isHeadlineStatus
+    ? `<p style="${STYLES.greeting}">Dear ${escapeHtml(name)},</p>`
+    : nameAsHeading
+      ? ''
+      : `<p>Hello ${escapeHtml(name)},</p>`;
+  const statusLine = isHeadlineStatus
+    ? ''
+    : `<p>Order #${escapeHtml(number)} is now ${escapeHtml(meta.label)}.</p>`;
   const bodyParagraph = body ? `<p>${escapeHtml(body)}</p>` : '';
+
+  const refundMessageBlock = isRefunded
+    ? `
+      ${
+        refundAmountLabel
+          ? `<p style="${STYLES.refundAmount}">A refund of ${escapeHtml(refundAmountLabel)} has been processed.</p>`
+          : `<p style="${STYLES.sectionMessage}">Your refund has been processed.</p>`
+      }
+      <p style="${STYLES.note}">It may take a few business days to appear on your original payment method.</p>
+    `
+    : '';
+
+  let ctaBlock = '';
+  let trackingButton = '';
+  if (isShipped) {
+    const primaryUrl = isGuest && orderUrl ? orderUrl : trackingUrl || orderUrl;
+    const buttonLabel =
+      isGuest && orderUrl ? 'Track Your Order' : trackingUrl ? 'Track your package' : orderUrl ? 'View your order' : '';
+    const message = isGuest
+      ? 'Your package is on its way. Use the button below to track your order anytime.'
+      : 'Your package is on its way. Use the button below to track your shipment.';
+    ctaBlock = `
+      <div style="${STYLES.ctaSection}">
+        <p style="${STYLES.sectionMessage}">${escapeHtml(message)}</p>
+        ${primaryUrl && buttonLabel ? renderButton(primaryUrl, buttonLabel) : ''}
+        ${renderSubtleThankYou('Thank you for choosing Resourceful Print Solutions. We appreciate your business.')}
+      </div>
+    `;
+  } else if (isOnHold) {
+    ctaBlock = `
+      <div style="${STYLES.ctaSection}">
+        <p style="${STYLES.sectionMessage}">Your order is on hold and will continue once it is ready. No action is needed from you right now.</p>
+        ${isGuest && orderUrl ? renderButton(orderUrl, 'Track Your Order') : ''}
+        ${renderSubtleThankYou('Thank you for your patience and for choosing Resourceful Print Solutions.')}
+      </div>
+    `;
+  } else if (isCancelled) {
+    // Guest cancelled orders remain viewable on the guest tracking page.
+    const guestTrack = isGuest && orderUrl ? renderButton(orderUrl, 'Track Your Order') : '';
+    ctaBlock = `
+      <div style="${STYLES.ctaSection}">
+        <p style="${STYLES.sectionMessage}">If you did not request this or believe it was a mistake, please contact our support team.</p>
+        ${renderButton(contactUrl, 'Contact Support')}
+        ${guestTrack}
+        ${renderSubtleThankYou('Thank you for choosing Resourceful Print Solutions.')}
+      </div>
+    `;
+  } else if (isRefunded) {
+    ctaBlock = `
+      <div style="${STYLES.ctaSection}">
+        ${orderUrl ? renderButton(orderUrl, 'View Order') : ''}
+        ${renderSubtleThankYou('Thank you for choosing Resourceful Print Solutions.')}
+      </div>
+    `;
+  } else {
+    trackingButton = trackingUrl ? renderButton(trackingUrl, 'Track your package') : '';
+    if (isGuest && orderUrl) {
+      ctaBlock = `
+        ${renderButton(orderUrl, 'Track Your Order')}
+      `;
+    }
+  }
 
   const content = `
     ${greeting}
-    <p>Order #${escapeHtml(number)} is now ${escapeHtml(meta.label)}.</p>
+    ${refundMessageBlock}
+    ${statusLine}
     ${bodyParagraph}
     ${details}
-    ${extra}
     ${orderSummary}
-    ${guestLinkBlock}
+    ${ctaBlock}
     ${trackingButton}
   `;
 
-  const title = nameAsHeading ? `Dear ${name},` : (meta.heading || 'Order update');
-
-  const textRows = statusDetailRows(order, meta.status)
+  const textRows = statusRows
     .filter((r) => r.value != null && String(r.value).trim() !== '')
     .map((r) => `${r.label}: ${r.value}`)
     .join(' ');
+  const textMessage = isShipped
+    ? 'Your package is on its way. Use the button below to track your order.'
+    : isOnHold
+      ? 'Your order is on hold and will continue once it is ready. No action is needed from you right now.'
+      : isCancelled
+        ? 'If you did not request this or believe it was a mistake, please contact our support team.'
+        : isRefunded
+          ? [
+              refundAmountLabel
+                ? `A refund of ${refundAmountLabel} has been processed.`
+                : 'Your refund has been processed.',
+              'It may take a few business days to appear on your original payment method.',
+            ].join(' ')
+          : body;
   return {
     subject,
     text: [
-      `Order ${number} is now ${meta.label}.${body ? ` ${body}` : ''}${textRows ? ` ${textRows}` : ''}`,
-      isGuest && orderUrl
-        ? [
-            'Since you checked out as a guest, please save the tracking link below. You can use it anytime to securely view your latest order status and updates.',
-            `Track Your Order: ${orderUrl}`,
-          ].join('\n')
+      isShipped
+        ? `Order Shipped. Order ${number}.`
+        : isOnHold
+          ? `Order On Hold. Order ${number}.`
+          : isCancelled
+            ? `Order Cancelled. Order ${number}.`
+            : isRefunded
+              ? `Order Refunded. Order ${number}.`
+              : `Order ${number} is now ${meta.label}.${textMessage ? ` ${textMessage}` : ''}`,
+      textRows,
+      isHeadlineStatus ? textMessage : '',
+      isCancelled ? `Contact Support: ${contactUrl}` : '',
+      orderUrl
+        ? isRefunded
+          ? `View Order: ${orderUrl}`
+          : isGuest
+            ? `Track Your Order: ${orderUrl}`
+            : ''
         : '',
+      isShipped
+        ? 'Thank you for choosing Resourceful Print Solutions. We appreciate your business.'
+        : isOnHold
+          ? 'Thank you for your patience and for choosing Resourceful Print Solutions.'
+          : isCancelled || isRefunded
+            ? 'Thank you for choosing Resourceful Print Solutions.'
+            : '',
     ]
       .filter(Boolean)
       .join('\n'),
     html: buildBaseLayout({
       title,
+      titleAlign,
+      titleAccent: isHeadlineStatus,
       preheader,
       content,
       logoUrl: resolveEmailLogoUrl(appUrl),
+      appUrl,
       uniqueRef: emailUniqueRef(`${meta.status || 'status'}-${number}`),
     }),
   };
