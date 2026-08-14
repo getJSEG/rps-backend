@@ -26,6 +26,7 @@ const SQL = {
            'purchase_option_key', oi.purchase_option_key,
            'purchase_option_label', oi.purchase_option_label,
            'status', oi.status,
+           'refund_amount', oi.refund_amount,
            'product_graphic_scenario_enabled', p.graphic_scenario_enabled
          )) as items
          FROM orders o
@@ -68,6 +69,7 @@ const SQL = {
             'purchase_option_key', oi.purchase_option_key,
             'purchase_option_label', oi.purchase_option_label,
             'status', oi.status,
+            'refund_amount', oi.refund_amount,
             'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
@@ -115,6 +117,7 @@ const SQL = {
             'purchase_option_key', oi.purchase_option_key,
             'purchase_option_label', oi.purchase_option_label,
             'status', oi.status,
+            'refund_amount', oi.refund_amount,
             'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
@@ -162,6 +165,7 @@ const SQL = {
              'purchase_option_key', oi.purchase_option_key,
              'purchase_option_label', oi.purchase_option_label,
              'status', oi.status,
+            'refund_amount', oi.refund_amount,
              'product_graphic_scenario_enabled', p.graphic_scenario_enabled
            )
          ) FILTER (WHERE oi.id IS NOT NULL),
@@ -209,6 +213,7 @@ const SQL = {
             'purchase_option_key', oi.purchase_option_key,
             'purchase_option_label', oi.purchase_option_label,
             'status', oi.status,
+            'refund_amount', oi.refund_amount,
             'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
@@ -245,6 +250,7 @@ const SQL = {
             'purchase_option_key', oi.purchase_option_key,
             'purchase_option_label', oi.purchase_option_label,
             'status', oi.status,
+            'refund_amount', oi.refund_amount,
             'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
@@ -280,6 +286,7 @@ const SQL = {
             'purchase_option_key', oi.purchase_option_key,
             'purchase_option_label', oi.purchase_option_label,
             'status', oi.status,
+            'refund_amount', oi.refund_amount,
             'product_graphic_scenario_enabled', p.graphic_scenario_enabled
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
@@ -335,6 +342,7 @@ const SQL = {
              'purchase_option_key', oi.purchase_option_key,
              'purchase_option_label', oi.purchase_option_label,
              'status', oi.status,
+            'refund_amount', oi.refund_amount,
              'product_graphic_scenario_enabled', p.graphic_scenario_enabled
            )
          ) FILTER (WHERE oi.id IS NOT NULL),
@@ -392,6 +400,7 @@ const SQL = {
              'purchase_option_key', oi.purchase_option_key,
              'purchase_option_label', oi.purchase_option_label,
              'status', oi.status,
+            'refund_amount', oi.refund_amount,
              'product_graphic_scenario_enabled', p.graphic_scenario_enabled
            )
          ) FILTER (WHERE oi.id IS NOT NULL),
@@ -517,13 +526,31 @@ const SQL = {
       SET status = $1,
           payment_status = $2,
           stripe_refund_id = $3,
-          refund_amount = $4,
+          refund_amount = COALESCE(refund_amount, 0) + $4,
           refunded_at = $5,
           refund_currency = $6,
           refund_reason = $7,
           updated_at = CURRENT_TIMESTAMP,
           notes = COALESCE(notes, '') || $8
       WHERE id = $9
+      RETURNING *`,
+  SELECT_ORDER_ITEM_BY_ID: `SELECT * FROM order_items WHERE id = $1 AND order_id = $2`,
+  SELECT_ORDER_ITEMS_BY_ORDER: `SELECT * FROM order_items WHERE order_id = $1 ORDER BY id`,
+  UPDATE_ORDER_ITEM_REFUNDED: `UPDATE order_items
+      SET status = 'refunded',
+          stripe_refund_id = $1,
+          refund_amount = $2,
+          refunded_at = $3,
+          refund_currency = $4,
+          refund_reason = $5
+      WHERE id = $6 AND order_id = $7
+      RETURNING *`,
+  UPDATE_ORDER_AFTER_ITEM_REFUND: `UPDATE orders
+      SET refund_amount = COALESCE(refund_amount, 0) + $1,
+          refund_currency = COALESCE($2, refund_currency),
+          updated_at = CURRENT_TIMESTAMP,
+          notes = COALESCE(notes, '') || $3
+      WHERE id = $4
       RETURNING *`,
   UPDATE_ORDER_STRIPE_PAYMENT_INTENT: `UPDATE orders
       SET stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, $1),
@@ -766,6 +793,148 @@ async function updateOrderStatusById(orderId, statusLower) {
 async function updateOrderItemStatusById(orderId, itemId, statusLower) {
   const result = await pool.query(SQL.UPDATE_ORDER_ITEM_STATUS, [statusLower, itemId, orderId]);
   return result.rows[0] ?? null;
+}
+
+function normalizeStatusKey(raw) {
+  return String(raw || '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, '_');
+}
+
+const ITEM_INACTIVE_STATUSES = new Set([
+  'cancellation_requested',
+  'awaiting_refund',
+  'refunded',
+  'cancelled',
+  'canceled',
+]);
+
+const ITEM_CANCEL_ALLOWED_STATUSES = new Set(['awaiting_artwork', 'on_hold', 'processing']);
+
+const WHOLE_ORDER_CANCEL_FLOW_STATUSES = new Set([
+  'cancellation_requested',
+  'awaiting_refund',
+  'refunded',
+  'cancelled',
+  'canceled',
+]);
+
+function isInactiveOrderItemStatus(status) {
+  return ITEM_INACTIVE_STATUSES.has(normalizeStatusKey(status));
+}
+
+function isWholeOrderCancelFlowStatus(status) {
+  return WHOLE_ORDER_CANCEL_FLOW_STATUSES.has(normalizeStatusKey(status));
+}
+
+async function findOrderItemById(orderId, itemId) {
+  const result = await pool.query(SQL.SELECT_ORDER_ITEM_BY_ID, [itemId, orderId]);
+  return result.rows[0] ?? null;
+}
+
+async function listOrderItemsByOrderId(orderId) {
+  const result = await pool.query(SQL.SELECT_ORDER_ITEMS_BY_ORDER, [orderId]);
+  return result.rows;
+}
+
+/**
+ * Customer/guest: request cancellation of one line. Does not change order.status.
+ * @returns {Promise<{ item: object, order: object }>}
+ */
+async function requestOrderItemCancellation(orderId, itemId) {
+  const order = await findOrderById(orderId);
+  if (!order) {
+    const err = new Error('Order not found');
+    err.statusCode = 404;
+    throw err;
+  }
+  if (isWholeOrderCancelFlowStatus(order.status)) {
+    const err = new Error('This order is already in the cancellation or refund flow.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const items = await listOrderItemsByOrderId(orderId);
+  const item = items.find((row) => Number(row.id) === Number(itemId));
+  if (!item) {
+    const err = new Error('Order item not found');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const itemStatus = normalizeStatusKey(item.status);
+  if (itemStatus === 'cancellation_requested') {
+    const err = new Error('Cancellation already requested for this item.');
+    err.statusCode = 409;
+    throw err;
+  }
+  if (!ITEM_CANCEL_ALLOWED_STATUSES.has(itemStatus)) {
+    const err = new Error('This item cannot be cancelled at its current stage.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const activeCount = items.filter((row) => !isInactiveOrderItemStatus(row.status)).length;
+  if (activeCount <= 1) {
+    const err = new Error('Use order cancellation when only one item remains.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const updatedItem = await updateOrderItemStatusById(orderId, itemId, 'cancellation_requested');
+  return { item: updatedItem, order };
+}
+
+/**
+ * After a successful Stripe partial refund for one line: mark item refunded and
+ * record the refund on the order. Original subtotal/tax/shipping/total stay as charged.
+ */
+async function markOrderItemRefunded({
+  orderId,
+  itemId,
+  refundId,
+  refundAmount,
+  refundedAtIso,
+  refundCurrency,
+  refundReason,
+}) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const itemResult = await client.query(SQL.UPDATE_ORDER_ITEM_REFUNDED, [
+      refundId,
+      refundAmount,
+      refundedAtIso,
+      refundCurrency || 'usd',
+      refundReason || null,
+      itemId,
+      orderId,
+    ]);
+    const item = itemResult.rows[0];
+    if (!item) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+
+    const suffix = ` | Item ${itemId} refunded via Stripe ${refundId} (${refundAmount} ${String(
+      refundCurrency || 'usd'
+    ).toUpperCase()}) ${refundedAtIso}`;
+
+    await client.query(SQL.UPDATE_ORDER_AFTER_ITEM_REFUND, [
+      refundAmount,
+      refundCurrency || 'usd',
+      suffix,
+      orderId,
+    ]);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+  return findOrderByIdAdmin(orderId);
 }
 
 /**
@@ -1296,6 +1465,9 @@ module.exports = {
   findOrderForNotification,
   updateOrderStatusById,
   updateOrderItemStatusById,
+  findOrderItemById,
+  requestOrderItemCancellation,
+  markOrderItemRefunded,
   maybeAdvanceOrderItemToProcessingAfterArtwork,
   updateOrderTrackingIdById,
   updateOrderAfterFedexShipmentCreated,

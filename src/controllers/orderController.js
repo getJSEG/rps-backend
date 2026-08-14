@@ -86,6 +86,13 @@ function roundMoney2(n) {
 const MAX_ORDER_MONEY = 999_999_999_999.99;
 const MAX_LINE_QTY = 1_000_000;
 
+/** Line total + tax on that line. Shipping is not included. */
+function itemRefundAmountWithTax(itemTotal, taxPercentage) {
+  const line = roundMoney2(itemTotal);
+  const tax = roundMoney2(line * (Number(taxPercentage) || 0) / 100);
+  return roundMoney2(line + tax);
+}
+
 function buildGuestTrackingUrl(req, orderId, token) {
   const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim();
   const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
@@ -778,6 +785,14 @@ const updateOrderItemStatus = async (req, res) => {
       return res.status(404).json({ message: 'Order not found' });
     }
 
+    const items = Array.isArray(existing.items) ? existing.items : [];
+    const line = items.find((row) => Number(row.id) === itemId);
+    if (line && isOrderStatusLocked(line.status)) {
+      return res.status(400).json({
+        message: 'This item is refunded and its status cannot be changed.',
+      });
+    }
+
     const updated = await orderRepository.updateOrderItemStatusById(
       orderId,
       itemId,
@@ -1400,6 +1415,82 @@ const requestGuestOrderCancellation = async (req, res) => {
   }
 };
 
+function itemCancelHttpError(res, error) {
+  const code = Number(error?.statusCode) || 500;
+  const message = error instanceof Error ? error.message : 'Failed to request item cancellation';
+  if (code >= 500) console.error('Request order item cancellation error:', error);
+  return res.status(code).json({ message });
+}
+
+const requestOrderItemCancellation = async (req, res) => {
+  try {
+    const orderId = parseInt(String(req.params.id), 10);
+    const itemId = parseInt(String(req.params.itemId), 10);
+    if (!Number.isFinite(orderId) || orderId <= 0 || !Number.isFinite(itemId) || itemId <= 0) {
+      return res.status(400).json({ message: 'Invalid order or line item id.' });
+    }
+    const userId = req.user.id;
+    const order = await orderRepository.findOrderByIdAndUserId(orderId, userId);
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+    const result = await orderRepository.requestOrderItemCancellation(orderId, itemId);
+    return res.json(result);
+  } catch (error) {
+    return itemCancelHttpError(res, error);
+  }
+};
+
+const requestGuestOrderItemCancellation = async (req, res) => {
+  try {
+    const orderId = parseInt(String(req.params.id), 10);
+    const itemId = parseInt(String(req.params.itemId), 10);
+    if (!Number.isFinite(orderId) || orderId <= 0 || !Number.isFinite(itemId) || itemId <= 0) {
+      return res.status(400).json({ message: 'Invalid order or line item id.' });
+    }
+    const token = String(req.query?.token || '').trim();
+    if (!token) return res.status(400).json({ message: 'token is required' });
+    const tokenHash = hashGuestTrackingToken(token);
+    const order = await orderRepository.findGuestOrderByIdAndTokenHash(orderId, tokenHash);
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+    const result = await orderRepository.requestOrderItemCancellation(orderId, itemId);
+    return res.json(result);
+  } catch (error) {
+    return itemCancelHttpError(res, error);
+  }
+};
+
+async function resolveStripePaymentIntentId(order) {
+  let paymentIntentId = String(order.stripe_payment_intent_id || '').trim();
+  if (paymentIntentId) return paymentIntentId;
+  try {
+    const byOrderId = await stripe.paymentIntents.search({
+      query: `metadata['orderId']:'${String(order.id)}' AND status:'succeeded'`,
+      limit: 1,
+    });
+    if (Array.isArray(byOrderId?.data) && byOrderId.data.length > 0) {
+      paymentIntentId = String(byOrderId.data[0].id || '').trim();
+    }
+  } catch (e) {
+    console.warn('Stripe payment intent search by orderId failed:', e.message);
+  }
+  if (!paymentIntentId) {
+    try {
+      const byOrderNumber = await stripe.paymentIntents.search({
+        query: `metadata['orderNumber']:'${String(order.order_number || '')}' AND status:'succeeded'`,
+        limit: 1,
+      });
+      if (Array.isArray(byOrderNumber?.data) && byOrderNumber.data.length > 0) {
+        paymentIntentId = String(byOrderNumber.data[0].id || '').trim();
+      }
+    } catch (e) {
+      console.warn('Stripe payment intent search by orderNumber failed:', e.message);
+    }
+  }
+  if (paymentIntentId) {
+    await orderRepository.setOrderStripePaymentIntent(order.id, paymentIntentId);
+  }
+  return paymentIntentId;
+}
+
 const refundOrderAdmin = async (req, res) => {
   try {
     if (!stripe) {
@@ -1420,37 +1511,7 @@ const refundOrderAdmin = async (req, res) => {
       });
     }
 
-    let paymentIntentId = String(order.stripe_payment_intent_id || '').trim();
-    if (!paymentIntentId) {
-      // Backfill older orders by searching Stripe metadata.
-      try {
-        const byOrderId = await stripe.paymentIntents.search({
-          query: `metadata['orderId']:'${String(order.id)}' AND status:'succeeded'`,
-          limit: 1,
-        });
-        if (Array.isArray(byOrderId?.data) && byOrderId.data.length > 0) {
-          paymentIntentId = String(byOrderId.data[0].id || '').trim();
-        }
-      } catch (e) {
-        console.warn('Stripe payment intent search by orderId failed:', e.message);
-      }
-      if (!paymentIntentId) {
-        try {
-          const byOrderNumber = await stripe.paymentIntents.search({
-            query: `metadata['orderNumber']:'${String(order.order_number || '')}' AND status:'succeeded'`,
-            limit: 1,
-          });
-          if (Array.isArray(byOrderNumber?.data) && byOrderNumber.data.length > 0) {
-            paymentIntentId = String(byOrderNumber.data[0].id || '').trim();
-          }
-        } catch (e) {
-          console.warn('Stripe payment intent search by orderNumber failed:', e.message);
-        }
-      }
-      if (paymentIntentId) {
-        await orderRepository.setOrderStripePaymentIntent(id, paymentIntentId);
-      }
-    }
+    let paymentIntentId = await resolveStripePaymentIntentId(order);
     if (!paymentIntentId) {
       return res.status(400).json({
         message:
@@ -1494,6 +1555,90 @@ const refundOrderAdmin = async (req, res) => {
   }
 };
 
+const refundOrderItemAdmin = async (req, res) => {
+  try {
+    if (!stripe) {
+      return res.status(503).json({ message: 'Stripe is not configured. Set STRIPE_SECRET_KEY in .env' });
+    }
+    const orderId = parseInt(String(req.params.id), 10);
+    const itemId = parseInt(String(req.params.itemId), 10);
+    if (!Number.isFinite(orderId) || orderId <= 0 || !Number.isFinite(itemId) || itemId <= 0) {
+      return res.status(400).json({ message: 'Invalid order or line item id.' });
+    }
+
+    const order = await orderRepository.findOrderByIdAdmin(orderId);
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+
+    const item = await orderRepository.findOrderItemById(orderId, itemId);
+    if (!item) return res.status(404).json({ message: 'Order item not found' });
+
+    const itemStatus = String(item.status || '')
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, '_');
+    const allowedItemStatuses = new Set(['awaiting_refund', 'cancellation_requested']);
+    if (!allowedItemStatuses.has(itemStatus)) {
+      return res.status(400).json({
+        message: 'Refund is allowed only when item status is Awaiting refund or Cancellation requested.',
+      });
+    }
+    if (item.stripe_refund_id) {
+      return res.status(409).json({ message: 'This item has already been refunded.' });
+    }
+
+    const paymentIntentId = await resolveStripePaymentIntentId(order);
+    if (!paymentIntentId) {
+      return res.status(400).json({
+        message:
+          'Stripe payment intent ID is missing for this order and could not be auto-resolved from Stripe metadata.',
+      });
+    }
+
+    const refundAmount = itemRefundAmountWithTax(item.total_price, order.tax_percentage);
+    const refundCents = Math.round(refundAmount * 100);
+    if (!Number.isFinite(refundCents) || refundCents <= 0) {
+      return res.status(400).json({ message: 'Item refund amount is invalid.' });
+    }
+
+    const refund = await stripe.refunds.create({
+      payment_intent: paymentIntentId,
+      amount: refundCents,
+      reason: 'requested_by_customer',
+      metadata: {
+        orderId: String(order.id),
+        orderNumber: String(order.order_number || ''),
+        orderItemId: String(item.id),
+      },
+    });
+
+    const refundedAtIso = new Date(Number(refund.created || 0) * 1000 || Date.now()).toISOString();
+    const updatedOrder = await orderRepository.markOrderItemRefunded({
+      orderId,
+      itemId,
+      refundId: refund.id,
+      refundAmount: Number(refund.amount || refundCents) / 100,
+      refundedAtIso,
+      refundCurrency: String(refund.currency || 'usd').toLowerCase(),
+      refundReason: refund.reason || 'requested_by_customer',
+    });
+
+    return res.json({
+      order: updatedOrder || order,
+      item: { id: itemId, status: 'refunded' },
+      refund: {
+        id: refund.id,
+        amount: Number(refund.amount || refundCents) / 100,
+        currency: String(refund.currency || 'usd').toLowerCase(),
+        date: refundedAtIso,
+      },
+    });
+  } catch (error) {
+    console.error('Refund order item admin error:', error);
+    const stripeMessage = error?.raw?.message || error?.message;
+    return res.status(500).json({ message: stripeMessage || 'Failed to process item refund' });
+  }
+};
+
 module.exports = {
   createOrder,
   getOrders,
@@ -1513,5 +1658,8 @@ module.exports = {
   handleStripeWebhook,
   requestOrderCancellation,
   requestGuestOrderCancellation,
+  requestOrderItemCancellation,
+  requestGuestOrderItemCancellation,
   refundOrderAdmin,
+  refundOrderItemAdmin,
 };

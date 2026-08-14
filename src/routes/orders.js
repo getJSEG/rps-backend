@@ -17,8 +17,11 @@ const {
   confirmStripePayment,
   requestOrderCancellation,
   requestGuestOrderCancellation,
+  requestOrderItemCancellation,
+  requestGuestOrderItemCancellation,
   approveGuestOrderItemArtwork,
   refundOrderAdmin,
+  refundOrderItemAdmin,
 } = require('../controllers/orderController');
 const { authenticateToken, optionalAuth, requireAdmin } = require('../middleware/auth');
 const { uploadArtworkFile, uploadGuestArtworkFile } = require('../middleware/upload');
@@ -28,6 +31,7 @@ router.post('/create-payment-intent', optionalAuth, createOrderWithPaymentIntent
 router.post('/confirm-stripe-payment', optionalAuth, confirmStripePayment);
 router.get('/guest/:id', getGuestOrderByIdWithToken);
 router.post('/guest/:id/request-cancellation', requestGuestOrderCancellation);
+router.post('/guest/:id/items/:itemId/request-cancellation', requestGuestOrderItemCancellation);
 router.post(
   '/guest/:id/items/:itemId/approve-artwork',
   (req, res, next) => {
@@ -39,6 +43,11 @@ router.post(
   approveGuestOrderItemArtwork
 );
 router.post('/:id/request-cancellation', authenticateToken, requestOrderCancellation);
+router.post(
+  '/:id/items/:itemId/request-cancellation',
+  authenticateToken,
+  requestOrderItemCancellation
+);
 router.get('/', authenticateToken, getOrders);
 router.post(
   '/:orderId/items/:itemId/approve-artwork',
@@ -58,6 +67,12 @@ router.get('/admin/:id', authenticateToken, requireAdmin, getOrderByIdAdmin);
 router.put('/admin/:id/status', authenticateToken, requireAdmin, updateOrderStatus);
 router.put('/admin/:id/items/:itemId/status', authenticateToken, requireAdmin, updateOrderItemStatus);
 router.post('/admin/:id/refund', authenticateToken, requireAdmin, refundOrderAdmin);
+router.post(
+  '/admin/:id/items/:itemId/refund',
+  authenticateToken,
+  requireAdmin,
+  refundOrderItemAdmin
+);
 router.put('/admin/:id/order-tracking', authenticateToken, requireAdmin, updateOrderTrackingId);
 router.delete('/admin/:id', authenticateToken, requireAdmin, deleteOrderAdmin);
 // This route should be last to avoid conflicts
