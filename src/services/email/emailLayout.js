@@ -52,20 +52,6 @@ function buildOrderUrl({ order = {}, appUrl = '', guestToken = null } = {}) {
   return `${base}/guest-orders/${encodeURIComponent(orderId)}?token=${encodeURIComponent(token)}`;
 }
 
-/**
- * Public carrier tracking page for a real tracking number. Returns null for unknown
- * carriers so the template omits the link rather than guessing a URL.
- */
-function buildTrackingUrl(order = {}) {
-  const tracking = String(order.order_tracking_id || '').trim();
-  if (!tracking) return null;
-  const carrier = String(order.carrier || '').trim().toLowerCase();
-  if (carrier === 'fedex') {
-    return `https://www.fedex.com/fedextrack/?trknbr=${encodeURIComponent(tracking)}`;
-  }
-  return null;
-}
-
 /** Site home or mailto fallback for Contact us / Contact Support actions. */
 function resolveContactUrl(appUrl = '') {
   const siteBase = String(appUrl || process.env.FRONTEND_URL || process.env.APP_BASE_URL || '')
@@ -100,21 +86,6 @@ function renderKeyValue(rows = []) {
     )
     .join('');
   return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="${STYLES.kvTable}">${body}</table>`;
-}
-
-/** Multi-line postal address block from the shipping_* aliases on the notification query. */
-function renderAddress(order = {}, title = 'Shipping address') {
-  const lines = [
-    order.shipping_street_address,
-    order.shipping_address_line2,
-    [order.shipping_city, order.shipping_state, order.shipping_postcode].filter(Boolean).join(', '),
-    order.shipping_country,
-  ]
-    .map((l) => String(l ?? '').trim())
-    .filter(Boolean);
-  if (!lines.length) return '';
-  return `<p style="${STYLES.sectionTitle}">${escapeHtml(title)}</p>
-    <p style="${STYLES.address}">${lines.map((l) => escapeHtml(l)).join('<br>')}</p>`;
 }
 
 function buildBaseLayout({
@@ -247,12 +218,10 @@ module.exports = {
   orderNumberOf,
   customerNameOf,
   buildOrderUrl,
-  buildTrackingUrl,
   resolveContactUrl,
   renderButton,
   renderLink,
   renderKeyValue,
-  renderAddress,
   buildBaseLayout,
   renderOrderItemsTable,
   renderTotals,

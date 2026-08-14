@@ -64,29 +64,21 @@ const STATUS_REGISTRY = {
     label: 'On hold',
     notify: true,
     subject: (number) => `Order #${number} Is On Hold`,
-    // Centered status title under the logo; greeting + CTA are built in the template.
     heading: 'Order On Hold',
     titleAlign: 'center',
     preheader: '',
     body: '',
     omitPaymentMethod: true,
-    omitAddress: true,
-    // One short explanation + thank-you are rendered in the template.
-    footerMessage: '',
   },
   shipped: {
     label: 'Shipped',
     notify: true,
     subject: (number) => `Your Order #${number} Has Shipped`,
-    // Centered status title under the logo; greeting + CTA are built in the template.
     heading: 'Order Shipped',
     titleAlign: 'center',
     preheader: '',
     body: '',
     omitPaymentMethod: true,
-    omitAddress: true,
-    // Carrier / delivery are detail rows; one CTA message is rendered in the template.
-    footerMessage: '',
   },
   completed: {
     label: 'Completed',
@@ -100,29 +92,21 @@ const STATUS_REGISTRY = {
     label: 'Refunded',
     notify: true,
     subject: (number) => `Refund Processed for Order #${number}`,
-    // Centered status title under the logo; greeting + CTA are built in the template.
     heading: 'Order Refunded',
     titleAlign: 'center',
     preheader: '',
     body: '',
     omitPaymentMethod: true,
-    omitAddress: true,
-    footerMessage: '',
   },
   cancelled: {
     label: 'Cancelled',
     notify: true,
     subject: (number) => `Order #${number} Cancelled`,
-    // Centered status title under the logo; greeting + CTA are built in the template.
     heading: 'Order Cancelled',
     titleAlign: 'center',
     preheader: '',
     body: '',
     omitPaymentMethod: true,
-    // Show payment status so customers can tell whether a refund may apply.
-    omitPaymentStatus: false,
-    omitAddress: true,
-    footerMessage: '',
   },
 };
 

@@ -8,7 +8,6 @@ const {
   renderButton,
   renderLink,
   renderKeyValue,
-  renderAddress,
   buildBaseLayout,
   renderOrderItemsTable,
   renderTotals,
@@ -30,23 +29,6 @@ function moneyIfCharged(value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n === 0) return null;
   return money(value);
-}
-
-/** Footer copy may mark emphasis with **bold**; escape everything else. */
-function escapeWithBold(text) {
-  return String(text || '')
-    .split(/\*\*/)
-    .map((part, i) => (i % 2 === 1 ? `<strong>${escapeHtml(part)}</strong>` : escapeHtml(part)))
-    .join('');
-}
-
-function isSignOffLine(line) {
-  return /choosing resourceful print solutions/i.test(String(line || ''));
-}
-
-/** Full-width centered sign-off — text-align on <p> is unreliable in Gmail/Outlook. */
-function renderSignOff(line) {
-  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="${STYLES.signOffTable}"><tr><td align="center" style="${STYLES.signOffCell}">${escapeWithBold(line)}</td></tr></table>`;
 }
 
 /** Smaller muted thank-you line for status emails. */
@@ -171,14 +153,12 @@ function emailUniqueRef(seed = '') {
     .slice(2, 10)}`;
 }
 
-/** Shared confirmation-style order block: meta, line items, totals, shipping address. */
+/** Shared order block: meta rows, line items, totals. */
 function renderOrderSummaryBlock(
   order = {},
   {
     omitPaymentMethod = false,
     omitPaymentStatus = false,
-    omitAddress = false,
-    footerMessage = '',
     leadingMetaRows = [],
     extraMetaRows = [],
   } = {}
@@ -201,33 +181,10 @@ function renderOrderSummaryBlock(
   if (Array.isArray(extraMetaRows) && extraMetaRows.length) {
     metaRows.push(...extraMetaRows);
   }
-  const details = renderKeyValue(metaRows);
-  let bottom = '';
-  const resolvedFooter = typeof footerMessage === 'function' ? footerMessage(order) : footerMessage;
-  const footerLines = Array.isArray(resolvedFooter)
-    ? resolvedFooter.map((line) => String(line || '').trim()).filter(Boolean)
-    : String(resolvedFooter || '')
-        .split(/\n+/)
-        .map((line) => line.trim())
-        .filter(Boolean);
-  if (footerLines.length) {
-    bottom = footerLines
-      .map((line) =>
-        isSignOffLine(line)
-          ? renderSignOff(line)
-          : `<p style="${STYLES.note}">${escapeWithBold(line)}</p>`
-      )
-      .join('');
-  } else if (!omitAddress) {
-    bottom = isStorePickup(order)
-      ? `<p style="${STYLES.sectionTitle}">Collection</p><p style="${STYLES.address}">This order is set for store pickup. We will let you know when it is ready to collect.</p>`
-      : renderAddress(order);
-  }
   return `
-    ${details}
+    ${renderKeyValue(metaRows)}
     ${renderOrderItemsTable(order.items)}
     ${buildOrderTotals(order)}
-    ${bottom}
   `;
 }
 
@@ -322,7 +279,6 @@ function buildOrderConfirmationEmail(order = {}, { appUrl = '', guestToken = nul
     ${renderOrderSummaryBlock(order, {
       omitPaymentMethod: paymentVisibility.omitPaymentMethod,
       omitPaymentStatus: paymentVisibility.omitPaymentStatus,
-      omitAddress: true,
     })}
     ${actionBlock}
   `;
@@ -452,8 +408,6 @@ function buildOrderStatusEmail(order = {}, nextStatus = '', { appUrl = '', guest
   const orderSummary = renderOrderSummaryBlock(order, {
     omitPaymentMethod: meta.omitPaymentMethod === true,
     omitPaymentStatus: meta.omitPaymentStatus === true,
-    omitAddress: meta.omitAddress === true,
-    footerMessage: isHeadlineStatus ? '' : meta.footerMessage || '',
     leadingMetaRows: isCancelled || isRefunded ? statusRows : [],
     extraMetaRows: isShipped ? statusRows : [],
   });
