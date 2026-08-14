@@ -5,7 +5,6 @@ const {
   orderNumberOf,
   customerNameOf,
   buildOrderUrl,
-  buildTrackingUrl,
   renderButton,
   renderLink,
   renderKeyValue,
@@ -53,6 +52,19 @@ function renderSignOff(line) {
 /** Smaller muted thank-you line for status emails. */
 function renderSubtleThankYou(line) {
   return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="${STYLES.thankYouTable}"><tr><td align="center" style="${STYLES.thankYouSubtle}">${escapeHtml(line)}</td></tr></table>`;
+}
+
+/**
+ * Guest-only access: tracking URL only (no button). Logged-in buyers have an account
+ * order list, so they do not get this block.
+ */
+function renderGuestOrderAccess(orderUrl) {
+  const url = String(orderUrl || '').trim();
+  if (!url) return '';
+  return `
+    <p style="${STYLES.sectionMessage}">Since you checked out as a guest, save the link below to securely view your latest order status.</p>
+    <p style="${STYLES.urlText}"><a href="${escapeHtml(url)}" style="${STYLES.link}">${escapeHtml(url)}</a></p>
+  `;
 }
 
 function humanize(value) {
@@ -289,18 +301,17 @@ function buildPasswordChangedEmail({ appUrl = '' } = {}) {
 function buildOrderConfirmationEmail(order = {}, { appUrl = '', guestToken = null } = {}) {
   const number = orderNumberOf(order);
   const name = customerNameOf(order);
+  const isGuest = !order.user_id && !order.userId;
   const orderUrl = buildOrderUrl({ order, appUrl, guestToken });
   const paymentVisibility = confirmationPaymentVisibility(order);
 
   const greeting = `<p style="${STYLES.greeting}">Dear ${escapeHtml(name)},</p>`;
-  const shortMessage =
-    '<p style="' +
-    STYLES.sectionMessage +
-    '">We&rsquo;ve received your order and will keep you updated as it progresses.</p>';
+  const shortMessage = `<p style="${STYLES.sectionMessage}">Your order #${escapeHtml(number)} has been received successfully and is now confirmed.</p>`;
 
   const actionBlock = `
     <div style="${STYLES.ctaSection}">
-      ${orderUrl ? renderButton(orderUrl, 'Track Your Order') : ''}
+      ${isGuest ? renderGuestOrderAccess(orderUrl) : ''}
+      <p style="${STYLES.sectionMessage}">We&rsquo;ll keep you informed as your order progresses.</p>
       ${renderSubtleThankYou('Thank you for choosing Resourceful Print Solutions.')}
     </div>
   `;
@@ -321,9 +332,15 @@ function buildOrderConfirmationEmail(order = {}, { appUrl = '', guestToken = nul
     text: [
       'Order Confirmed.',
       `Dear ${name},`,
-      `Order ${number}. Total: ${money(order.total_amount) || formatCurrency(0)}`,
-      "We've received your order and will keep you updated as it progresses.",
-      orderUrl ? `Track Your Order: ${orderUrl}` : '',
+      `Your order #${number} has been received successfully and is now confirmed.`,
+      `Total: ${money(order.total_amount) || formatCurrency(0)}`,
+      isGuest && orderUrl
+        ? [
+            'Since you checked out as a guest, save the link below to securely view your latest order status.',
+            orderUrl,
+          ].join('\n')
+        : '',
+      "We'll keep you informed as your order progresses.",
       'Thank you for choosing Resourceful Print Solutions.',
     ]
       .filter(Boolean)
@@ -412,9 +429,9 @@ function buildOrderStatusEmail(order = {}, nextStatus = '', { appUrl = '', guest
   const isRefunded = meta.status === 'refunded';
   const isHeadlineStatus = isShipped || isOnHold || isCancelled || isRefunded;
   const orderUrl = buildOrderUrl({ order, appUrl, guestToken });
-  const trackingUrl = isShipped ? buildTrackingUrl(order) : null;
   const contactUrl = resolveContactUrl(appUrl);
   const refundAmountLabel = money(order.refund_amount);
+  const guestAccess = isGuest ? renderGuestOrderAccess(orderUrl) : '';
   const subject = typeof meta.subject === 'function'
     ? meta.subject(number)
     : `Order #${number} status: ${meta.label}`;
@@ -479,18 +496,11 @@ function buildOrderStatusEmail(order = {}, nextStatus = '', { appUrl = '', guest
     : '';
 
   let ctaBlock = '';
-  let trackingButton = '';
   if (isShipped) {
-    const primaryUrl = isGuest && orderUrl ? orderUrl : trackingUrl || orderUrl;
-    const buttonLabel =
-      isGuest && orderUrl ? 'Track Your Order' : trackingUrl ? 'Track your package' : orderUrl ? 'View your order' : '';
-    const message = isGuest
-      ? 'Your package is on its way. Use the button below to track your order anytime.'
-      : 'Your package is on its way. Use the button below to track your shipment.';
     ctaBlock = `
       <div style="${STYLES.ctaSection}">
-        <p style="${STYLES.sectionMessage}">${escapeHtml(message)}</p>
-        ${primaryUrl && buttonLabel ? renderButton(primaryUrl, buttonLabel) : ''}
+        <p style="${STYLES.sectionMessage}">Your package is on its way.</p>
+        ${guestAccess}
         ${renderSubtleThankYou('Thank you for choosing Resourceful Print Solutions. We appreciate your business.')}
       </div>
     `;
@@ -498,35 +508,28 @@ function buildOrderStatusEmail(order = {}, nextStatus = '', { appUrl = '', guest
     ctaBlock = `
       <div style="${STYLES.ctaSection}">
         <p style="${STYLES.sectionMessage}">Your order is on hold and will continue once it is ready. No action is needed from you right now.</p>
-        ${isGuest && orderUrl ? renderButton(orderUrl, 'Track Your Order') : ''}
+        ${guestAccess}
         ${renderSubtleThankYou('Thank you for your patience and for choosing Resourceful Print Solutions.')}
       </div>
     `;
   } else if (isCancelled) {
-    // Guest cancelled orders remain viewable on the guest tracking page.
-    const guestTrack = isGuest && orderUrl ? renderButton(orderUrl, 'Track Your Order') : '';
     ctaBlock = `
       <div style="${STYLES.ctaSection}">
         <p style="${STYLES.sectionMessage}">If you did not request this or believe it was a mistake, please contact our support team.</p>
         ${renderButton(contactUrl, 'Contact Support')}
-        ${guestTrack}
+        ${guestAccess}
         ${renderSubtleThankYou('Thank you for choosing Resourceful Print Solutions.')}
       </div>
     `;
   } else if (isRefunded) {
     ctaBlock = `
       <div style="${STYLES.ctaSection}">
-        ${orderUrl ? renderButton(orderUrl, 'View Order') : ''}
+        ${guestAccess}
         ${renderSubtleThankYou('Thank you for choosing Resourceful Print Solutions.')}
       </div>
     `;
-  } else {
-    trackingButton = trackingUrl ? renderButton(trackingUrl, 'Track your package') : '';
-    if (isGuest && orderUrl) {
-      ctaBlock = `
-        ${renderButton(orderUrl, 'Track Your Order')}
-      `;
-    }
+  } else if (guestAccess) {
+    ctaBlock = `<div style="${STYLES.ctaSection}">${guestAccess}</div>`;
   }
 
   const content = `
@@ -537,7 +540,6 @@ function buildOrderStatusEmail(order = {}, nextStatus = '', { appUrl = '', guest
     ${details}
     ${orderSummary}
     ${ctaBlock}
-    ${trackingButton}
   `;
 
   const textRows = statusRows
@@ -545,7 +547,7 @@ function buildOrderStatusEmail(order = {}, nextStatus = '', { appUrl = '', guest
     .map((r) => `${r.label}: ${r.value}`)
     .join(' ');
   const textMessage = isShipped
-    ? 'Your package is on its way. Use the button below to track your order.'
+    ? 'Your package is on its way.'
     : isOnHold
       ? 'Your order is on hold and will continue once it is ready. No action is needed from you right now.'
       : isCancelled
@@ -573,12 +575,11 @@ function buildOrderStatusEmail(order = {}, nextStatus = '', { appUrl = '', guest
       textRows,
       isHeadlineStatus ? textMessage : '',
       isCancelled ? `Contact Support: ${contactUrl}` : '',
-      orderUrl
-        ? isRefunded
-          ? `View Order: ${orderUrl}`
-          : isGuest
-            ? `Track Your Order: ${orderUrl}`
-            : ''
+      isGuest && orderUrl
+        ? [
+            'Since you checked out as a guest, save the link below to securely view your latest order status.',
+            orderUrl,
+          ].join('\n')
         : '',
       isShipped
         ? 'Thank you for choosing Resourceful Print Solutions. We appreciate your business.'

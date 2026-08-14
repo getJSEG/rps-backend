@@ -11,8 +11,8 @@ const { startAccountDeletionJob } = require('./jobs/accountDeletionJob');
 
 /**
  * Warn about production settings that silently break customer email instead of erroring:
- * a missing or local FRONTEND_URL ships dead links, and test-mode settings divert every
- * message away from the customer. Warns only - a bad link should never stop the API booting.
+ * a missing or local FRONTEND_URL ships dead links. Warns only - a bad link should never
+ * stop the API booting.
  */
 function warnOnProductionEmailConfig() {
   if ((process.env.NODE_ENV || '').trim() !== 'production') return;
@@ -26,13 +26,6 @@ function warnOnProductionEmailConfig() {
     problems.push(`FRONTEND_URL points at ${appUrl} - customers cannot open links on your machine.`);
   }
 
-  const testMode = /^(1|true|yes|on)$/i.test(String(process.env.EMAIL_TEST_MODE || '').trim());
-  if (testMode) {
-    problems.push('EMAIL_TEST_MODE is on - no customer will receive email. Set it to false in production.');
-  }
-  if ((process.env.EMAIL_TEST_RECIPIENT || '').trim()) {
-    problems.push('EMAIL_TEST_RECIPIENT is set - if test mode is ever enabled, all customer email is redirected there.');
-  }
   if (!(process.env.RESEND_API_KEY || '').trim()) {
     problems.push('RESEND_API_KEY is not set - no email can be sent at all.');
   }
