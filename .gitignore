@@ -26,3 +26,6 @@ build/
 # Local user uploads (product/employee/artwork files); paths live in the database — not source control
 uploads/
 
+# Scratch output from local scripts (e.g. email HTML previews)
+tmp/
+

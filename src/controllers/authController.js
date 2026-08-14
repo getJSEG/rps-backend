@@ -1,7 +1,8 @@
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const pool = require('../config/database');
 const { generateToken } = require('../utils/jwt');
-const { sendPasswordResetCode } = require('../utils/email');
+const { sendPasswordResetEmail, sendPasswordChangedEmail } = require('../services/emailService');
 const STRONG_PASSWORD_REGEX = /^(?=.*[A-Z])(?=.*\d).+$/;
 
 const register = async (req, res) => {
@@ -295,13 +296,29 @@ const getProfile = async (req, res) => {
   }
 };
 
-/** Generate 6-digit numeric code */
-function generateResetCode() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+/** Shared with the reset email so the stored expiry and the wording in the email always agree. */
+function resetTokenTtlMinutes() {
+  const n = Number(process.env.PASSWORD_RESET_TOKEN_TTL_MINUTES);
+  return Number.isFinite(n) && n > 0 ? n : 30;
 }
 
-/** POST /auth/send-reset-code - send code to email (for password change). Body: { email } */
-const sendResetCode = async (req, res) => {
+function hashResetToken(rawToken) {
+  return crypto.createHash('sha256').update(rawToken).digest('hex');
+}
+
+function buildResetUrl(rawToken) {
+  const base = (process.env.FRONTEND_URL || process.env.APP_BASE_URL || '').trim().replace(/\/+$/, '');
+  return `${base}/reset-password?token=${encodeURIComponent(rawToken)}`;
+}
+
+/**
+ * The response is identical for unknown, inactive and existing accounts so the endpoint cannot be
+ * used to enumerate customers. Delivery problems are logged, never surfaced.
+ */
+const GENERIC_FORGOT_RESPONSE = 'If an account exists for this email, a password reset link has been sent.';
+
+/** POST /auth/forgot-password - email a single-use reset link. Body: { email } */
+const forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
     if (!email || typeof email !== 'string' || !email.trim()) {
@@ -309,60 +326,46 @@ const sendResetCode = async (req, res) => {
     }
     const normalizedEmail = email.trim().toLowerCase();
 
-    const userResult = await pool.query('SELECT id FROM users WHERE email = $1', [normalizedEmail]);
-    if (userResult.rows.length === 0) {
-      return res.status(404).json({ message: 'No account found with this email' });
-    }
-
-    const code = generateResetCode();
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
-
-    await pool.query(
-      'DELETE FROM password_reset_codes WHERE email = $1',
+    const userResult = await pool.query(
+      'SELECT id, is_active, full_name FROM users WHERE email = $1',
       [normalizedEmail]
     );
-    await pool.query(
-      'INSERT INTO password_reset_codes (email, code, expires_at) VALUES ($1, $2, $3)',
-      [normalizedEmail, code, expiresAt]
-    );
+    const user = userResult.rows[0];
 
-    const { sent, error } = await sendPasswordResetCode(normalizedEmail, code);
-    if (!sent) {
-      // In development: return code in response so user can test without Gmail App Password
-      const isDev = process.env.NODE_ENV !== 'production';
-      if (isDev) {
-        return res.status(200).json({
-          message: 'Code generated. Use the code below (email not sent - SMTP not configured).',
-          code,
-          devMode: true,
-        });
-      }
-      return res.status(503).json({
-        message: 'Email service is temporarily unavailable. Please try again later.',
+    if (user && user.is_active !== false) {
+      const rawToken = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + resetTokenTtlMinutes() * 60 * 1000);
+
+      await pool.query(
+        'UPDATE users SET reset_token_hash = $1, reset_token_expires_at = $2 WHERE id = $3',
+        [hashResetToken(rawToken), expiresAt, user.id]
+      );
+
+      const { sent, error } = await sendPasswordResetEmail(normalizedEmail, buildResetUrl(rawToken), {
+        name: user.full_name || '',
       });
+      if (!sent) {
+        console.warn('[auth] password reset email not sent for user', user.id, error || 'no error');
+      }
     }
 
-    res.json({ message: 'Code sent to your email. Check your inbox.' });
+    res.json({ message: GENERIC_FORGOT_RESPONSE });
   } catch (error) {
-    console.error('Send reset code error:', error);
-    res.status(500).json({ message: 'Failed to send code' });
+    console.error('Forgot password error:', error);
+    res.status(500).json({ message: 'Failed to process password reset request' });
   }
 };
 
-/** POST /auth/reset-password - reset password with email + code. Body: { email, code, newPassword } */
-const resetPasswordWithCode = async (req, res) => {
+/** POST /auth/reset-password - consume a reset link token. Body: { token, newPassword } */
+const resetPassword = async (req, res) => {
   try {
-    const { email, code, newPassword } = req.body;
-    if (!email || !code || !newPassword) {
-      return res.status(400).json({ message: 'Email, code and new password are required' });
+    const { token, newPassword } = req.body;
+    if (!token || typeof token !== 'string' || !token.trim()) {
+      return res.status(400).json({ message: 'Reset token is required' });
     }
-    const normalizedEmail = email.trim().toLowerCase();
-    // Normalize code: digits only (user may paste "123 456" or "123456")
-    const codeStr = String(code).replace(/\D/g, '').trim();
-    if (codeStr.length !== 6) {
-      return res.status(400).json({ message: 'Code must be 6 digits.' });
+    if (!newPassword || typeof newPassword !== 'string') {
+      return res.status(400).json({ message: 'New password is required' });
     }
-
     if (newPassword.length < 6) {
       return res.status(400).json({ message: 'New password must be at least 6 characters' });
     }
@@ -370,36 +373,38 @@ const resetPasswordWithCode = async (req, res) => {
       return res.status(400).json({ message: 'New password must include at least one uppercase letter and one number' });
     }
 
-    const row = await pool.query(
-      'SELECT id, code, expires_at FROM password_reset_codes WHERE email = $1 ORDER BY created_at DESC LIMIT 1',
-      [normalizedEmail]
-    );
-    if (row.rows.length === 0) {
-      return res.status(400).json({ message: 'Invalid or expired code. Request a new code.' });
-    }
-    const { code: storedCode, expires_at: expiresAt } = row.rows[0];
-    if (new Date() > new Date(expiresAt)) {
-      await pool.query('DELETE FROM password_reset_codes WHERE email = $1', [normalizedEmail]);
-      return res.status(400).json({ message: 'Code has expired. Request a new code.' });
-    }
-    const storedCodeStr = String(storedCode || '').replace(/\D/g, '').trim();
-    if (storedCodeStr !== codeStr) {
-      return res.status(400).json({ message: 'Invalid code.' });
-    }
-
     const passwordHash = await bcrypt.hash(newPassword, 10);
-    await pool.query(
-      'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE email = $2',
-      [passwordHash, normalizedEmail]
-    );
-    await pool.query('DELETE FROM password_reset_codes WHERE email = $1', [normalizedEmail]);
 
-    res.json({ message: 'Password changed successfully. You can now log in with your new password.' });
+    // Clearing the token in the same statement that matches it makes the link single-use even if
+    // two requests arrive at once - only one of them can see a non-null hash.
+    const result = await pool.query(
+      `UPDATE users
+         SET password_hash = $1,
+             reset_token_hash = NULL,
+             reset_token_expires_at = NULL,
+             updated_at = CURRENT_TIMESTAMP
+       WHERE reset_token_hash = $2 AND reset_token_expires_at > NOW()
+       RETURNING id, email`,
+      [passwordHash, hashResetToken(token.trim())]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(400).json({ message: 'This reset link is invalid or has expired. Please request a new one.' });
+    }
+
+    const { id: userId, email } = result.rows[0];
+
+    // Notify user about password change (best-effort, non-blocking)
+    sendPasswordChangedEmail(email).catch((e) => {
+      console.warn('[auth] password changed notification not sent for user', userId, e && e.message ? e.message : e);
+    });
+
+    res.json({ message: 'Password reset successfully. You can now sign in with your new password.' });
   } catch (error) {
     console.error('Reset password error:', error);
     res.status(500).json({ message: 'Failed to reset password' });
   }
 };
 
-module.exports = { register, login, getProfile, sendResetCode, resetPasswordWithCode, createAdmin };
+module.exports = { register, login, getProfile, forgotPassword, resetPassword, createAdmin };
 

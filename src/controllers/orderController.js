@@ -14,10 +14,18 @@ const {
   fedexDeliveryEstimateWithProduction,
   maxProductionTimeBusinessDays,
 } = require('../utils/deliveryEstimate');
-const crypto = require('crypto');
 const Stripe = require('stripe');
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 const { deleteManyByUrl } = require('../utils/spaces');
+const {
+  notifyOrderConfirmation,
+  notifyOrderStatusChange,
+} = require('../services/orderNotifications');
+const {
+  createGuestTrackingTokenPlain,
+  hashGuestTrackingToken,
+  encryptGuestTrackingToken,
+} = require('../utils/guestTrackingToken');
 
 /**
  * Parsed STRIPE_PAYMENT_ENABLED: true | false | null (null = unset / unknown).
@@ -77,22 +85,6 @@ function roundMoney2(n) {
 
 const MAX_ORDER_MONEY = 999_999_999_999.99;
 const MAX_LINE_QTY = 1_000_000;
-const GUEST_TRACKING_TOKEN_BYTES = 32;
-
-function guestTrackingPepper() {
-  return String(process.env.GUEST_TRACKING_TOKEN_PEPPER || process.env.JWT_SECRET || 'rps-guest-tracking-pepper');
-}
-
-function createGuestTrackingTokenPlain() {
-  return crypto.randomBytes(GUEST_TRACKING_TOKEN_BYTES).toString('base64url');
-}
-
-function hashGuestTrackingToken(token) {
-  return crypto
-    .createHash('sha256')
-    .update(`${String(token || '')}:${guestTrackingPepper()}`)
-    .digest('hex');
-}
 
 function buildGuestTrackingUrl(req, orderId, token) {
   const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim();
@@ -538,6 +530,8 @@ const createOrder = async (req, res) => {
       items: normalizedItems,
     });
 
+    notifyOrderConfirmation(completeOrder.id, { fallbackEmail: guestCheckout?.email || null });
+
     res.status(201).json({ order: completeOrder });
   } catch (error) {
     console.error('Create order error:', error);
@@ -753,6 +747,8 @@ const updateOrderStatus = async (req, res) => {
     if (!updated) {
       return res.status(404).json({ message: 'Order not found' });
     }
+
+    notifyOrderStatusChange(id, { nextStatus: updated.status, previousStatus: existing.status });
 
     res.json({ order: updated });
   } catch (error) {
@@ -979,6 +975,7 @@ const createOrderWithPaymentIntent = async (req, res) => {
     let guestCheckout = null;
     let guestTrackingToken = null;
     let guestTrackingTokenHash = null;
+    let guestTrackingTokenCipher = null;
     if (!userId) {
       const parsed = parseGuestCheckout(req.body);
       if (parsed.error) {
@@ -991,6 +988,7 @@ const createOrderWithPaymentIntent = async (req, res) => {
       }
       guestTrackingToken = createGuestTrackingTokenPlain();
       guestTrackingTokenHash = hashGuestTrackingToken(guestTrackingToken);
+      guestTrackingTokenCipher = encryptGuestTrackingToken(guestTrackingToken);
     }
 
     let cartItems = await loadServerCartForCheckout(req, userId);
@@ -1140,6 +1138,7 @@ const createOrderWithPaymentIntent = async (req, res) => {
       totalAmount,
       guestCheckout,
       guestTrackingTokenHash,
+      guestTrackingTokenCipher,
       orderItems,
       shippingAddressId,
       billingAddressId,
@@ -1160,6 +1159,11 @@ const createOrderWithPaymentIntent = async (req, res) => {
       }
       await orderRepository.markOrderPaidWithoutStripe(orderId);
       await clearBuyerCartAfterCheckout(req, userId);
+      notifyOrderConfirmation(orderId, {
+        guestToken: guestTrackingToken,
+        fallbackEmail: guestCheckout?.email || null,
+      });
+
       return res.status(201).json({
         orderId,
         orderNumber: savedOrderNumber,
@@ -1263,7 +1267,16 @@ const confirmStripePayment = async (req, res) => {
       return res.status(400).json({ message: 'PaymentIntent does not match this order' });
     }
 
-    await orderRepository.markOrderPaidFromStripe(orderIdNum, new Date().toISOString(), pi.id);
+    const transitioned = await orderRepository.markOrderPaidFromStripe(
+      orderIdNum,
+      new Date().toISOString(),
+      pi.id
+    );
+    // The webhook may have already handled this payment; only the winner emails.
+    if (transitioned) {
+      notifyOrderConfirmation(orderIdNum);
+    }
+
     return res.status(200).json({ ok: true, orderId: orderIdNum, paymentStatus: 'paid' });
   } catch (error) {
     console.error('Confirm Stripe payment error:', error);
@@ -1291,7 +1304,11 @@ const handleStripeWebhook = async (req, res) => {
     const orderId = pi.metadata?.orderId;
     if (orderId) {
       try {
-        await orderRepository.markOrderPaidFromStripe(orderId, new Date().toISOString(), pi.id);
+        const transitioned = await orderRepository.markOrderPaidFromStripe(
+          orderId,
+          new Date().toISOString(),
+          pi.id
+        );
         const buyerId = await orderRepository.getOrderUserId(orderId);
         if (buyerId) {
           await cartRepository.clearCartByUserId(buyerId);
@@ -1301,6 +1318,9 @@ const handleStripeWebhook = async (req, res) => {
           if (sid.length >= 8 && sid.length <= 128) {
             await cartRepository.clearCartByGuestSession(sid);
           }
+        }
+        if (transitioned) {
+          notifyOrderConfirmation(orderId);
         }
       } catch (e) {
         console.error('Failed to update order after payment:', e);
@@ -1456,6 +1476,8 @@ const refundOrderAdmin = async (req, res) => {
       refundCurrency: String(refund.currency || 'usd').toLowerCase(),
       refundReason: refund.reason || 'requested_by_customer',
     });
+
+    notifyOrderStatusChange(id, { nextStatus: 'refunded', previousStatus: order.status });
 
     return res.json({
       order: updated || { ...order, status: 'refunded' },

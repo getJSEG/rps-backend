@@ -1,5 +1,6 @@
 const fedexService = require('../services/fedexService');
 const orderRepository = require('../repositories/orderRepository');
+const { notifyOrderStatusChange } = require('../services/orderNotifications');
 const { isPersistedFedexQuotedServiceType } = require('../utils/fedexQuoteServiceType');
 
 function validateDestination(destination) {
@@ -98,6 +99,12 @@ const createShipmentForOrder = async (req, res) => {
     });
 
     const updated = await orderRepository.findOrderByIdAdmin(orderId);
+
+    notifyOrderStatusChange(orderId, {
+      nextStatus: 'shipped',
+      previousStatus: order.status,
+      order: updated,
+    });
     return res.status(201).json({
       trackingNumber: shipResult.trackingNumber,
       masterTrackingNumber: shipResult.masterTrackingNumber,
