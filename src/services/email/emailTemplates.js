@@ -237,16 +237,15 @@ function buildPasswordResetEmail({ resetUrl = '', expiresMinutes = 30, appUrl = 
   const displayName = String(name || '').trim();
   const greeting = displayName ? `Hello ${displayName},` : 'Hello,';
   const content = `
-    <p>${escapeHtml(greeting)}</p>
-    <p>Click the button below to securely create a new password.</p>
-    ${renderButton(target, 'Reset your password', { centered: true })}
-    <p>For your security, this link will expire in ${minutes} minutes and can only be used once.</p>
-    <p>If you did not request a password reset, no action is required. Your current password will remain unchanged.</p>
-    <p>For your protection, please do not share this password reset link with anyone.</p>
-    <p>Thank you,<br>Resourceful Print Solutions</p>
+    <p style="${STYLES.contentAuthPara}">${escapeHtml(greeting)}</p>
+    <p style="${STYLES.contentAuthPara}">Click the button below to securely create a new password.</p>
+    ${renderButton(target, 'Reset your password', { centered: true, auth: true })}
+    <p style="${STYLES.contentAuthPara}">For your security, this link will expire in <span style="${STYLES.emphasis}">${minutes} minutes</span> and can only be used once.</p>
+    <p style="${STYLES.contentAuthPara}">For your protection, please do not share this password reset link with anyone.</p>
+    <p style="${STYLES.contentAuthPara}">Thank you,<br>Resourceful Print Solutions</p>
   `;
   return {
-    subject: 'Reset Your RPS Password',
+    subject: 'Reset Your Resourceful Print Solutions Password',
     text: [
       greeting,
       '',
@@ -263,8 +262,9 @@ function buildPasswordResetEmail({ resetUrl = '', expiresMinutes = 30, appUrl = 
       'Resourceful Print Solutions',
     ].join('\n'),
     html: buildBaseLayout({
-      title: 'Reset your password',
+      title: 'Reset Your Password',
       titleAlign: 'center',
+      authLayout: true,
       preheader: '',
       content,
       logoUrl: resolveEmailLogoUrl(appUrl),
@@ -280,13 +280,13 @@ function buildPasswordChangedEmail({ appUrl = '' } = {}) {
   const target = base || null;
   const content = `
     <p>Hello,</p>
-    <p>The password for your RPS Store account was changed successfully.</p>
+    <p>The password for your Resourceful Print Solutions account was changed successfully.</p>
     ${renderLink(target, 'Sign in to your account')}
     <p style="${STYLES.note}">If you did not make this change, contact us immediately so we can secure your account.</p>
   `;
   return {
-    subject: 'Your RPS Password Was Changed',
-    text: 'The password for your RPS Store account was changed successfully. If this was not you, contact us immediately.',
+    subject: 'Your Resourceful Print Solutions Password Was Changed',
+    text: 'The password for your Resourceful Print Solutions account was changed successfully. If this was not you, contact us immediately.',
     html: buildBaseLayout({
       title: 'Password changed',
       preheader: 'Your account password was updated',

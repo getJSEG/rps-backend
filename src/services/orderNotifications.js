@@ -5,6 +5,7 @@ const {
   sendOrderConfirmationEmail,
 } = require('./emailService');
 const { decryptGuestTrackingToken } = require('../utils/guestTrackingToken');
+const { isEmailNotificationsEnabled } = require('../repositories/appSettingsRepository');
 
 /**
  * Registered buyers only exist on the joined admin query; the plain `orders` row has no
@@ -54,6 +55,9 @@ async function loadFullOrder(orderId) {
  */
 async function notifyOrderStatusChange(orderId, { nextStatus, previousStatus = null, guestToken = null, order = null } = {}) {
   try {
+    if (!(await isEmailNotificationsEnabled())) {
+      return { sent: false, skipped: 'email notifications disabled' };
+    }
     const status = canonicalOrderStatus(nextStatus);
     if (!shouldNotifyForStatus(status)) {
       return { sent: false, skipped: 'status not in notify list' };
@@ -80,6 +84,9 @@ async function notifyOrderStatusChange(orderId, { nextStatus, previousStatus = n
  */
 async function notifyOrderConfirmation(orderId, { guestToken = null, fallbackEmail = null } = {}) {
   try {
+    if (!(await isEmailNotificationsEnabled())) {
+      return { sent: false, skipped: 'email notifications disabled' };
+    }
     const fullOrder = await loadFullOrder(orderId);
     if (!fullOrder) return { sent: false, skipped: 'order not found' };
     const recipient = resolveRecipient(fullOrder) || (fallbackEmail ? String(fallbackEmail).trim().toLowerCase() : null);

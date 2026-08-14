@@ -74,9 +74,10 @@ function resolveContactUrl(appUrl = '') {
   return siteBase || 'mailto:noreply@resourcefulprintsolutions.com';
 }
 
-function renderButton(url, label, { centered = false } = {}) {
+function renderButton(url, label, { centered = false, auth = false } = {}) {
   if (!url) return '';
-  const inner = `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${centered ? ' align="center"' : ` style="${STYLES.buttonTable}"`}><tr><td style="${STYLES.buttonCell}"><a href="${escapeHtml(url)}" style="${STYLES.button}">${escapeHtml(label)}</a></td></tr></table>`;
+  const buttonStyle = auth ? STYLES.buttonAuth : STYLES.button;
+  const inner = `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${centered ? ' align="center"' : ` style="${STYLES.buttonTable}"`}><tr><td style="${STYLES.buttonCell}"><a href="${escapeHtml(url)}" style="${buttonStyle}">${escapeHtml(label)}</a></td></tr></table>`;
   if (!centered) return inner;
   return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="${STYLES.buttonWrap}"><tr><td align="center" style="text-align:center;width:100%;">${inner}</td></tr></table>`;
 }
@@ -124,6 +125,7 @@ function buildBaseLayout({
   uniqueRef = '',
   titleAlign = 'left',
   titleAccent = false,
+  authLayout = false,
   appUrl = '',
 } = {}) {
   const logo = String(logoUrl || '').trim();
@@ -132,10 +134,12 @@ function buildBaseLayout({
     : '';
   const titleText = String(title || '').trim();
   const preheaderText = String(preheader || '').trim();
-  const headingCentered = String(titleAlign || '').toLowerCase() === 'center';
+  const headingCentered = String(titleAlign || '').toLowerCase() === 'center' || authLayout;
   const headingAlign = headingCentered ? 'center' : 'left';
   const headingExtra = headingCentered ? 'text-align:center;' : '';
-  const headingEmphasis = titleAccent ? STYLES.headingAccent : '';
+  const headingStyle = authLayout
+    ? STYLES.headingAuth
+    : `${STYLES.heading}${headingExtra}${titleAccent ? STYLES.headingAccent : ''}`;
   // Gmail shows "⋯" and hides the body when several messages look the same (same footer /
   // layout). A unique per-send marker keeps each email distinct so the full body stays open.
   const clipKey =
@@ -145,16 +149,20 @@ function buildBaseLayout({
   const headingBlock = titleText
     ? `<tr>
                     <td align="${headingAlign}" style="${STYLES.headingCell}${headingExtra}">
-                      <p style="${STYLES.heading}${headingExtra}${headingEmphasis}">${escapeHtml(titleText)}</p>
+                      <p style="${headingStyle}">${escapeHtml(titleText)}</p>
                       ${preheaderText ? `<p style="${STYLES.preheader}${headingExtra}">${escapeHtml(preheaderText)}</p>` : ''}
                     </td>
                   </tr>`
     : '';
   const year = new Date().getFullYear();
   const contactHref = resolveContactUrl(appUrl);
-  const contactLabel = String(contactHref).startsWith('mailto:') ? 'Contact support' : 'Contact us';
+  const contactLabel = 'Contact Support';
   // Inside the card, under thank-you / body copy — same for guest and logged-in templates.
   const footerBlock = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="${STYLES.footerTable}"><tr><td align="center" style="${STYLES.footer}">&copy; ${year} Resourceful Print Solutions<br><a href="${escapeHtml(contactHref)}" style="${STYLES.footerLink}">${escapeHtml(contactLabel)}</a></td></tr></table>`;
+  const canvasPad = authLayout ? STYLES.canvasCellCompact : STYLES.canvasCell;
+  const cardStyle = authLayout ? STYLES.cardNarrow : STYLES.card;
+  const cardWidth = authLayout ? '540' : '600';
+  const contentStyle = authLayout ? STYLES.contentAuth : STYLES.content;
   return `<!doctype html>
   <html lang="en">
   <head>
@@ -167,15 +175,15 @@ function buildBaseLayout({
     ${preheaderText ? `<span style="${STYLES.preheaderHidden}">${escapeHtml(preheaderText)}</span>` : ''}
     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="${STYLES.canvasTable}">
       <tr>
-        <td align="center" style="${STYLES.canvasCell}">
-          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" style="${STYLES.card}">
+        <td align="center" style="${canvasPad}">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="${cardWidth}" style="${cardStyle}">
             <tr>
               <td style="${STYLES.cardInner}">
                 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
                   ${logoRow}
                   ${headingBlock}
                 </table>
-                <div style="${STYLES.content}">${content}</div>
+                <div style="${contentStyle}">${content}</div>
                 ${footerBlock}
                 ${clipBuster}
               </td>

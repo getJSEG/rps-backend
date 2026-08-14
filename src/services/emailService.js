@@ -81,6 +81,10 @@ function readResetTokenTtlMinutes() {
   return Number.isFinite(n) && n > 0 ? n : 30;
 }
 
+/**
+ * Auth/account recovery mail — intentionally NOT gated by admin
+ * emailNotificationsEnabled. Order notification toggles must never block these.
+ */
 async function sendPasswordResetEmail(to, resetUrl, { name = '' } = {}) {
   const appUrl = readAppUrl();
   const tpl = templates.buildPasswordResetEmail({
@@ -92,6 +96,7 @@ async function sendPasswordResetEmail(to, resetUrl, { name = '' } = {}) {
   return sendRaw({ to, subject: tpl.subject, html: tpl.html, text: tpl.text, event: 'password reset' });
 }
 
+/** Same as reset: always send; ignore order-email notification setting. */
 async function sendPasswordChangedEmail(to) {
   const appUrl = readAppUrl();
   const tpl = templates.buildPasswordChangedEmail({ appUrl });

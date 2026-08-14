@@ -25,30 +25,42 @@ const STYLES = {
   body: `margin:0;padding:0;background:${COLORS.canvas};font-family:${FONT};color:${COLORS.text};`,
   canvasTable: `background:${COLORS.canvas};`,
   canvasCell: 'padding:24px 12px;',
+  /** Tighter top padding for short auth emails (password reset). */
+  canvasCellCompact: 'padding:12px 12px 24px;',
   card: `background:${COLORS.surface};border:1px solid ${COLORS.borderStrong};max-width:600px;`,
+  /** Narrower card for password-reset (~540px within 500–550). */
+  cardNarrow: `background:${COLORS.surface};border:1px solid ${COLORS.borderStrong};max-width:540px;`,
   cardInner: 'padding:24px;',
   logoRow: 'padding:0 0 20px;text-align:center;',
   logoImg: 'height:48px;max-width:220px;width:auto;display:block;margin:0 auto;border:0;',
   headingCell: 'vertical-align:middle;padding:0 0 8px;',
   // font-weight:normal — email clients bold <h1> by default; keep it plain like a bank alert.
   heading: `margin:0;font-size:20px;line-height:26px;font-weight:normal;color:${COLORS.text};font-family:${FONT};text-align:left;`,
-  /** Status headline (e.g. "Order Shipped") — brand blue and bold to lead the message. */
+  /** Status / auth headline — brand blue and bold to lead the message. */
   headingAccent: `font-weight:bold;color:${COLORS.brand};`,
+  /** Password-reset title: slightly larger than status headlines. */
+  headingAuth: `margin:0;font-size:24px;line-height:30px;font-weight:bold;color:${COLORS.brand};font-family:${FONT};text-align:center;`,
   preheader: `margin:6px 0 0;color:${COLORS.muted};font-size:13px;font-weight:normal;font-family:${FONT};`,
   /** Inbox preview text: present in the DOM, never painted. */
   preheaderHidden: 'display:none;font-size:1px;color:#ffffff;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;',
   content: `margin-top:20px;font-size:14px;line-height:21px;font-weight:normal;color:${COLORS.text};`,
+  /** Password-reset body: a bit more breathing room between lines. */
+  contentAuth: `margin-top:18px;font-size:14px;line-height:24px;font-weight:normal;color:${COLORS.text};`,
+  contentAuthPara: `margin:0 0 14px;font-size:14px;line-height:24px;font-weight:normal;color:${COLORS.text};font-family:${FONT};`,
   /** Same visual weight as order-detail labels — not a second heading. */
   greeting: `margin:0 0 20px;font-size:13px;line-height:19px;font-weight:normal;color:${COLORS.muted};font-family:${FONT};`,
-  footer: `text-align:center;color:${COLORS.faint};font-size:12px;line-height:18px;margin:0;padding:16px 0 0;border-top:1px solid ${COLORS.border};font-family:${FONT};`,
-  footerTable: 'width:100%;margin:24px 0 0;border-collapse:collapse;',
-  footerLink: `color:${COLORS.faint};text-decoration:underline;`,
+  footer: `text-align:center;color:${COLORS.faint};font-size:11px;line-height:16px;margin:0;padding:14px 0 0;border-top:1px solid ${COLORS.border};font-family:${FONT};`,
+  footerTable: 'width:100%;margin:20px 0 0;border-collapse:collapse;',
+  footerLink: `color:#a8b3c2;text-decoration:underline;`,
   link: `color:${COLORS.link};`,
   urlText: `margin:0 0 4px;color:${COLORS.link};word-break:break-all;font-size:13px;line-height:19px;`,
   button: `display:inline-block;background:${COLORS.brand};color:${COLORS.surface};text-decoration:none;padding:12px 22px;font-weight:normal;font-size:14px;font-family:${FONT};`,
+  /** Password-reset CTA: more horizontal padding + bold label. */
+  buttonAuth: `display:inline-block;background:${COLORS.brand};color:${COLORS.surface};text-decoration:none;padding:14px 36px;font-weight:bold;font-size:14px;font-family:${FONT};`,
   buttonTable: 'margin:16px 0 4px;',
   buttonWrap: 'width:100%;margin:16px 0 4px;border-collapse:collapse;',
   buttonCell: `background:${COLORS.brand};`,
+  emphasis: 'font-weight:bold;',
   note: `color:${COLORS.muted};font-size:13px;line-height:19px;font-weight:normal;margin-top:10px;`,
   sectionMessage: `margin:0 0 12px;font-size:14px;line-height:21px;font-weight:normal;color:${COLORS.text};font-family:${FONT};`,
   /** Prominent refund amount line near the top of refund emails. */

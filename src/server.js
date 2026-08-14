@@ -221,6 +221,7 @@ const artworkRoutes = require('./routes/artworks');
 const reportsRoutes = require('./routes/reports');
 const fedexRoutes = require('./routes/fedex');
 const shippingBoxesRoutes = require('./routes/shippingBoxes');
+const appSettingsRoutes = require('./routes/appSettings');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -304,6 +305,7 @@ app.use('/api/artworks', artworkRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/fedex', fedexRoutes);
 app.use('/api/shipping-boxes', shippingBoxesRoutes);
+app.use('/api/settings', appSettingsRoutes);
 
 // 404 handler
 app.use((req, res) => {
