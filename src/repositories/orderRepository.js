@@ -5,8 +5,8 @@ const SQL = {
          billing_address_id, payment_method, notes, guest_checkout, status)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING *`,
-  INSERT_ORDER_ITEM_WITH_JOB: `INSERT INTO order_items (order_id, product_id, product_name, job_name, quantity, unit_price, total_price, image_url, width_inches, height_inches, selected_modifiers, selection_mode, graphic_scenario_enabled, modifier_total, base_unit_price, purchase_option_key, purchase_option_label)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15, $16, $17)`,
+  INSERT_ORDER_ITEM_WITH_JOB: `INSERT INTO order_items (order_id, product_id, product_name, job_name, quantity, unit_price, total_price, image_url, width_inches, height_inches, selected_modifiers, selection_mode, graphic_scenario_enabled, modifier_total, base_unit_price, purchase_option_key, purchase_option_label, discount_amount)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15, $16, $17, $18)`,
   SELECT_ORDER_WITH_ITEMS_AGG: `SELECT o.*, 
          json_agg(json_build_object(
            'id', oi.id,
@@ -15,6 +15,7 @@ const SQL = {
            'quantity', oi.quantity,
            'unit_price', oi.unit_price,
            'total_price', oi.total_price,
+           'discount_amount', COALESCE(oi.discount_amount, 0),
            'width_inches', oi.width_inches,
            'height_inches', oi.height_inches,
             'customer_artwork_url', oi.customer_artwork_url,
@@ -57,6 +58,7 @@ const SQL = {
             'quantity', oi.quantity,
             'unit_price', oi.unit_price,
             'total_price', oi.total_price,
+            'discount_amount', COALESCE(oi.discount_amount, 0),
             'image_url', COALESCE(oi.image_url, p.image_url),
             'width_inches', oi.width_inches,
             'height_inches', oi.height_inches,
@@ -105,6 +107,7 @@ const SQL = {
             'quantity', oi.quantity,
             'unit_price', oi.unit_price,
             'total_price', oi.total_price,
+            'discount_amount', COALESCE(oi.discount_amount, 0),
             'image_url', COALESCE(oi.image_url, p.image_url),
             'width_inches', oi.width_inches,
             'height_inches', oi.height_inches,
@@ -153,6 +156,7 @@ const SQL = {
              'quantity', oi.quantity,
              'unit_price', oi.unit_price,
              'total_price', oi.total_price,
+             'discount_amount', COALESCE(oi.discount_amount, 0),
              'image_url', COALESCE(oi.image_url, p.image_url),
              'width_inches', oi.width_inches,
              'height_inches', oi.height_inches,
@@ -201,6 +205,7 @@ const SQL = {
             'quantity', oi.quantity,
             'unit_price', oi.unit_price,
             'total_price', oi.total_price,
+            'discount_amount', COALESCE(oi.discount_amount, 0),
             'image_url', COALESCE(oi.image_url, p.image_url),
             'width_inches', oi.width_inches,
             'height_inches', oi.height_inches,
@@ -238,6 +243,7 @@ const SQL = {
             'quantity', oi.quantity,
             'unit_price', oi.unit_price,
             'total_price', oi.total_price,
+            'discount_amount', COALESCE(oi.discount_amount, 0),
             'product_image', COALESCE(oi.image_url, p.image_url),
             'width_inches', oi.width_inches,
             'height_inches', oi.height_inches,
@@ -274,6 +280,7 @@ const SQL = {
             'quantity', oi.quantity,
             'unit_price', oi.unit_price,
             'total_price', oi.total_price,
+            'discount_amount', COALESCE(oi.discount_amount, 0),
             'product_image', COALESCE(oi.image_url, p.image_url),
             'width_inches', oi.width_inches,
             'height_inches', oi.height_inches,
@@ -323,6 +330,7 @@ const SQL = {
              'quantity', oi.quantity,
              'unit_price', oi.unit_price,
              'total_price', oi.total_price,
+             'discount_amount', COALESCE(oi.discount_amount, 0),
              'product_image', COALESCE(oi.image_url, p.image_url),
              'product_material', p.material,
              'product_description', p.description,
@@ -381,6 +389,7 @@ const SQL = {
              'quantity', oi.quantity,
              'unit_price', oi.unit_price,
              'total_price', oi.total_price,
+             'discount_amount', COALESCE(oi.discount_amount, 0),
              'product_image', COALESCE(oi.image_url, p.image_url),
              'product_material', p.material,
              'product_description', p.description,
@@ -443,8 +452,8 @@ const SQL = {
   INSERT_ORDER_ITEM_ADMIN_NO_JOB: `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price, image_url, width_inches, height_inches, selected_modifiers, selection_mode, graphic_scenario_enabled, modifier_total, base_unit_price, purchase_option_key, purchase_option_label)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16)`,
   SELECT_ORDER_BY_ID: `SELECT o.* FROM orders o WHERE o.id = $1`,
-  INSERT_ORDER_STRIPE_PENDING: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, payment_status, notes, guest_checkout, guest_tracking_token_hash, guest_tracking_token_cipher, guest_tracking_token_created_at, shipping_address_id, billing_address_id, shipping_method, shipping_charge, shipping_mode, store_pickup_address_id, subtotal_amount, tax_id, tax_name, tax_percentage, tax_amount, carrier, carrier_service_type, shipping_estimated_delivery)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+  INSERT_ORDER_STRIPE_PENDING: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, payment_status, notes, guest_checkout, guest_tracking_token_hash, guest_tracking_token_cipher, guest_tracking_token_created_at, shipping_address_id, billing_address_id, shipping_method, shipping_charge, shipping_mode, store_pickup_address_id, subtotal_amount, tax_id, tax_name, tax_percentage, tax_amount, carrier, carrier_service_type, shipping_estimated_delivery, coupon_id, coupon_code, coupon_discount_amount, coupon_discount_type, coupon_discount_value)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)
          RETURNING id, order_number`,
   UPDATE_ORDER_FEDEX_SHIPMENT_CREATED: `UPDATE orders
        SET fedex_shipment_id = $2,
@@ -574,7 +583,8 @@ const SQL = {
             'job_name', oi.job_name,
             'quantity', oi.quantity,
             'unit_price', oi.unit_price,
-            'total_price', oi.total_price
+            'total_price', oi.total_price,
+            'discount_amount', COALESCE(oi.discount_amount, 0)
           )
         ) FILTER (WHERE oi.id IS NOT NULL),
         '[]'
@@ -654,6 +664,7 @@ async function createOrderWithItems({
         item.base_unit_price ?? item.baseUnitPrice ?? item.unit_price ?? unit,
         item.purchase_option_key ?? item.purchaseOptionKey ?? null,
         item.purchase_option_label ?? item.purchaseOptionLabel ?? null,
+        item.discount_amount ?? item.discountAmount ?? 0,
       ]);
     }
     await client.query('COMMIT');
@@ -1238,6 +1249,11 @@ async function createPendingStripeOrderWithItems({
   carrier = null,
   carrierServiceType = null,
   shippingEstimatedDelivery = null,
+  couponId = null,
+  couponCode = null,
+  couponDiscountAmount = 0,
+  couponDiscountType = null,
+  couponDiscountValue = null,
 }) {
   const client = await pool.connect();
   try {
@@ -1268,6 +1284,11 @@ async function createPendingStripeOrderWithItems({
       carrier,
       carrierServiceType,
       shippingEstimatedDelivery,
+      couponId,
+      couponCode,
+      couponDiscountAmount,
+      couponDiscountType,
+      couponDiscountValue,
     ]);
     const order = orderResult.rows[0];
     const orderId = order.id;
@@ -1290,6 +1311,7 @@ async function createPendingStripeOrderWithItems({
         oi.base_unit_price ?? oi.baseUnitPrice ?? oi.unit_price ?? 0,
         oi.purchase_option_key ?? oi.purchaseOptionKey ?? null,
         oi.purchase_option_label ?? oi.purchaseOptionLabel ?? null,
+        oi.discount_amount ?? oi.discountAmount ?? 0,
       ]);
     }
     await client.query('COMMIT');

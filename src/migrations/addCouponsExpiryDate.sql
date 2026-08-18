@@ -1,0 +1,2 @@
+ALTER TABLE coupons
+  ADD COLUMN IF NOT EXISTS expires_on DATE;

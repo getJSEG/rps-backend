@@ -7,6 +7,12 @@ const cartRepository = require('../repositories/cartRepository');
 const pool = require('../config/database');
 const storePickupAddressRepository = require('../repositories/storePickupAddressRepository');
 const { computeShippingFromCartItems, computeTaxAndTotal } = require('../services/orderTotalsService');
+const couponRepository = require('../repositories/couponRepository');
+const {
+  normalizeCouponCode,
+  computeDiscountAmount,
+  allocateDiscountToLines,
+} = require('../services/couponService');
 const fedexService = require('../services/fedexService');
 const { isPersistedFedexQuotedServiceType } = require('../utils/fedexQuoteServiceType');
 const { buildFedexPackagesFromShippableCartItems } = require('../utils/fedexCartPackage');
@@ -1067,8 +1073,34 @@ const createOrderWithPaymentIntent = async (req, res) => {
       shippingComputed = await computeShippingFromCartItems(cartItems);
     }
 
-    const orderItems = cartItems.flatMap((item) => expandCartItemToOrderLines(item));
-    const subtotalSum = roundMoney2(orderItems.reduce((s, o) => s + o.total_price, 0));
+    let orderItems = cartItems.flatMap((item) => expandCartItemToOrderLines(item));
+    let subtotalSum = roundMoney2(orderItems.reduce((s, o) => s + o.total_price, 0));
+    const requestedCouponCode = normalizeCouponCode(req.body?.couponCode ?? req.body?.coupon_code);
+    let couponId = null;
+    let couponCode = null;
+    let couponDiscountAmount = 0;
+    let couponDiscountType = null;
+    let couponDiscountValue = null;
+    if (requestedCouponCode) {
+      const coupon = await couponRepository.findActiveByCode(requestedCouponCode);
+      if (!coupon) {
+        return res.status(400).json({ message: 'This coupon is invalid, expired, or no longer active.' });
+      }
+      const discount = computeDiscountAmount(coupon, subtotalSum);
+      if (discount <= 0) {
+        return res.status(400).json({ message: 'This coupon does not apply to the current order.' });
+      }
+      const allocated = allocateDiscountToLines(orderItems, discount);
+      orderItems = allocated.lines;
+      couponDiscountAmount = allocated.allocated;
+      couponId = coupon.id;
+      couponCode = coupon.code;
+      const typeRaw = String(coupon.discountType || coupon.discount_type || '').toLowerCase();
+      couponDiscountType = typeRaw === 'percent' || typeRaw === 'fixed' ? typeRaw : null;
+      const valueRaw = Number(coupon.discountValue ?? coupon.discount_value);
+      couponDiscountValue = Number.isFinite(valueRaw) && valueRaw > 0 ? valueRaw : null;
+      subtotalSum = roundMoney2(orderItems.reduce((s, o) => s + o.total_price, 0));
+    }
     let shippingSum = shippingComputed.shippingSum;
     let shippingMethod = shippingComputed.shippingMethod;
     let shippingCharge = shippingComputed.shippingCharge;
@@ -1166,6 +1198,11 @@ const createOrderWithPaymentIntent = async (req, res) => {
       carrier: shippingMode === 'store_pickup' ? null : carrier ?? null,
       carrierServiceType: shippingMode === 'store_pickup' ? null : carrierServiceType ?? null,
       shippingEstimatedDelivery: shippingMode === 'store_pickup' ? null : shippingEstimatedDelivery ?? null,
+      couponId,
+      couponCode,
+      couponDiscountAmount,
+      couponDiscountType,
+      couponDiscountValue,
     });
 
     if (!shouldUseStripePaymentIntent()) {
@@ -1193,6 +1230,8 @@ const createOrderWithPaymentIntent = async (req, res) => {
         taxName: totals.tax.name,
         taxPercentage: totals.tax.percentage,
         total: totals.total,
+        couponCode,
+        couponDiscountAmount,
       });
     }
 
@@ -1226,6 +1265,8 @@ const createOrderWithPaymentIntent = async (req, res) => {
       taxName: totals.tax.name,
       taxPercentage: totals.tax.percentage,
       total: totals.total,
+      couponCode,
+      couponDiscountAmount,
     });
   } catch (error) {
     console.error('Create order with payment intent error:', error);

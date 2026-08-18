@@ -194,8 +194,24 @@ async function ensureEmployeeColumns() {
       const sql33 = fs.readFileSync(path.join(migrationsDir, 'addAccountDeletion.sql'), 'utf8');
       await pool.query(sql33);
     }
+    if (fs.existsSync(path.join(migrationsDir, 'addCouponsAndOrderDiscount.sql'))) {
+      const sql34 = fs.readFileSync(path.join(migrationsDir, 'addCouponsAndOrderDiscount.sql'), 'utf8');
+      await pool.query(sql34);
+    }
+    if (fs.existsSync(path.join(migrationsDir, 'addCouponsExpiryDate.sql'))) {
+      const sql35 = fs.readFileSync(path.join(migrationsDir, 'addCouponsExpiryDate.sql'), 'utf8');
+      await pool.query(sql35);
+    }
   } catch (err) {
     console.warn('Migrations (optional):', err.message);
+  }
+  try {
+    const snapshotPath = path.join(__dirname, 'migrations', 'addOrderCouponSnapshot.sql');
+    if (fs.existsSync(snapshotPath)) {
+      await pool.query(fs.readFileSync(snapshotPath, 'utf8'));
+    }
+  } catch (err) {
+    console.warn('addOrderCouponSnapshot:', err.message);
   }
 }
 
@@ -222,6 +238,7 @@ const reportsRoutes = require('./routes/reports');
 const fedexRoutes = require('./routes/fedex');
 const shippingBoxesRoutes = require('./routes/shippingBoxes');
 const appSettingsRoutes = require('./routes/appSettings');
+const couponRoutes = require('./routes/coupons');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -306,6 +323,7 @@ app.use('/api/reports', reportsRoutes);
 app.use('/api/fedex', fedexRoutes);
 app.use('/api/shipping-boxes', shippingBoxesRoutes);
 app.use('/api/settings', appSettingsRoutes);
+app.use('/api/coupons', couponRoutes);
 
 // 404 handler
 app.use((req, res) => {
