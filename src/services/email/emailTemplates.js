@@ -15,6 +15,7 @@ const {
 } = require('./emailLayout');
 const { STYLES } = require('./emailStyles');
 const { getStatusMeta } = require('./emailStatusRegistry');
+const { couponLineLabel } = require('../couponService');
 
 /** Formats a currency amount, or null when the column is empty so the row can be dropped. */
 function money(value) {
@@ -121,9 +122,25 @@ function shippingTotalsRow(order = {}) {
   return { label, value: isFree ? 'Free' : money(order.shipping_charge) };
 }
 
+function couponTotalsRow(order = {}) {
+  const discount = Number(order.coupon_discount_amount);
+  if (!Number.isFinite(discount) || discount <= 0) return null;
+  const amount = money(discount);
+  if (!amount) return null;
+  return { label: couponLineLabel(order), value: `-${amount}` };
+}
+
+function originalSubtotalAmount(order = {}) {
+  const discounted = Number(order.subtotal_amount);
+  const coupon = Number(order.coupon_discount_amount) || 0;
+  if (!Number.isFinite(discounted)) return order.subtotal_amount;
+  return Math.round((discounted + (coupon > 0 ? coupon : 0)) * 100) / 100;
+}
+
 function buildOrderTotals(order = {}) {
   return renderTotals([
-    { label: 'Subtotal', value: money(order.subtotal_amount) },
+    { label: 'Subtotal', value: money(originalSubtotalAmount(order)) },
+    couponTotalsRow(order),
     { label: taxLabel(), value: moneyIfCharged(order.tax_amount) },
     shippingTotalsRow(order),
     {
