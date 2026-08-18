@@ -570,6 +570,7 @@ const SQL = {
       COALESCE(
         json_agg(
           json_build_object(
+            'id', oi.id,
             'product_name', oi.product_name,
             'job_name', oi.job_name,
             'quantity', oi.quantity,

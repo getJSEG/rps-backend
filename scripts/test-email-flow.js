@@ -23,6 +23,7 @@ const path = require('path');
 const pool = require('../src/config/database');
 const orderRepository = require('../src/repositories/orderRepository');
 const notifications = require('../src/services/orderNotifications');
+const { buildItemRefundEmailOrder } = notifications;
 const emailService = require('../src/services/emailService');
 const templates = require('../src/services/email/emailTemplates');
 const { getStatusMeta } = require('../src/services/email/emailStatusRegistry');
@@ -109,6 +110,31 @@ function buildFixture(order, target) {
   };
 }
 
+/** In-memory clone with a single line, matching the live item-refund email payload. */
+function buildItemRefundFixture(order) {
+  const items = Array.isArray(order.items) ? order.items : [];
+  const item = items[0] || {
+    product_name: 'Refunded item',
+    quantity: 1,
+    unit_price: 0,
+    total_price: 0,
+  };
+  const line = Math.round((Number(item.total_price) || 0) * 100) / 100;
+  const tax = Math.round((line * (Number(order.tax_percentage) || 0)) / 100 * 100) / 100;
+  const refundAmount = Math.round((line + tax) * 100) / 100;
+  return (
+    buildItemRefundEmailOrder(order, { refundAmount }) || {
+      ...order,
+      items: [item],
+      refund_amount: refundAmount,
+      subtotal_amount: line,
+      tax_amount: tax,
+      total_amount: refundAmount,
+      emailHideShipping: true,
+    }
+  );
+}
+
 function buildResetUrl(appUrl) {
   const base = String(appUrl || '').trim().replace(/\/+$/, '');
   return `${base}/reset-password?token=${encodeURIComponent(RESET_TOKEN)}`;
@@ -133,6 +159,14 @@ function buildSteps(order, appUrl) {
       send: (to) => emailService.sendOrderStatusUpdatedEmail(order, to, status),
     });
   }
+
+  const itemRefundOrder = buildItemRefundFixture(order);
+  steps.push({
+    key: 'item-refunded',
+    title: 'Item refunded',
+    render: () => templates.buildOrderStatusEmail(itemRefundOrder, 'refunded', { appUrl }),
+    send: (to) => emailService.sendOrderStatusUpdatedEmail(itemRefundOrder, to, 'refunded'),
+  });
 
   steps.push({
     key: 'password-reset',

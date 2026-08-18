@@ -108,6 +108,9 @@ function isStorePickup(order = {}) {
 
 /** Label + amount for the shipping totals row. Free shipping always shows as "Free". */
 function shippingTotalsRow(order = {}) {
+  if (order.emailHideShipping === true) {
+    return { label: 'Shipping', value: null };
+  }
   if (isStorePickup(order)) {
     return { label: 'Store pickup', value: 'Free' };
   }
@@ -329,7 +332,7 @@ function refundReasonLabel(order = {}) {
 /** 'Full refund' vs 'Partial refund', or null when the amounts cannot be compared. */
 function refundScopeLabel(order = {}) {
   const refunded = Number(order.refund_amount);
-  const total = Number(order.total_amount);
+  const total = Number(order.original_total_amount ?? order.total_amount);
   if (!Number.isFinite(refunded) || refunded <= 0) return null;
   if (!Number.isFinite(total) || total <= 0) return null;
   return refunded + 0.005 >= total ? 'Full refund' : 'Partial refund';

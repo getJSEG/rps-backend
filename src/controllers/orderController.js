@@ -20,6 +20,7 @@ const { deleteManyByUrl } = require('../utils/spaces');
 const {
   notifyOrderConfirmation,
   notifyOrderStatusChange,
+  notifyOrderItemRefunded,
 } = require('../services/orderNotifications');
 const {
   createGuestTrackingTokenPlain,
@@ -1511,7 +1512,7 @@ const refundOrderAdmin = async (req, res) => {
       });
     }
 
-    let paymentIntentId = await resolveStripePaymentIntentId(order);
+    const paymentIntentId = await resolveStripePaymentIntentId(order);
     if (!paymentIntentId) {
       return res.status(400).json({
         message:
@@ -1576,14 +1577,14 @@ const refundOrderItemAdmin = async (req, res) => {
       .toLowerCase()
       .trim()
       .replace(/\s+/g, '_');
+    if (itemStatus === 'refunded' || item.stripe_refund_id) {
+      return res.status(409).json({ message: 'This item has already been refunded.' });
+    }
     const allowedItemStatuses = new Set(['awaiting_refund', 'cancellation_requested']);
     if (!allowedItemStatuses.has(itemStatus)) {
       return res.status(400).json({
         message: 'Refund is allowed only when item status is Awaiting refund or Cancellation requested.',
       });
-    }
-    if (item.stripe_refund_id) {
-      return res.status(409).json({ message: 'This item has already been refunded.' });
     }
 
     const paymentIntentId = await resolveStripePaymentIntentId(order);
@@ -1612,14 +1613,25 @@ const refundOrderItemAdmin = async (req, res) => {
     });
 
     const refundedAtIso = new Date(Number(refund.created || 0) * 1000 || Date.now()).toISOString();
+    const recordedAmount = Number(refund.amount || refundCents) / 100;
+    const refundCurrency = String(refund.currency || 'usd').toLowerCase();
+    const refundReason = refund.reason || 'requested_by_customer';
+
     const updatedOrder = await orderRepository.markOrderItemRefunded({
       orderId,
       itemId,
       refundId: refund.id,
-      refundAmount: Number(refund.amount || refundCents) / 100,
+      refundAmount: recordedAmount,
       refundedAtIso,
-      refundCurrency: String(refund.currency || 'usd').toLowerCase(),
-      refundReason: refund.reason || 'requested_by_customer',
+      refundCurrency,
+      refundReason,
+    });
+
+    notifyOrderItemRefunded(orderId, {
+      itemId,
+      refundAmount: recordedAmount,
+      refundedAt: refundedAtIso,
+      refundReason,
     });
 
     return res.json({
@@ -1627,8 +1639,8 @@ const refundOrderItemAdmin = async (req, res) => {
       item: { id: itemId, status: 'refunded' },
       refund: {
         id: refund.id,
-        amount: Number(refund.amount || refundCents) / 100,
-        currency: String(refund.currency || 'usd').toLowerCase(),
+        amount: recordedAmount,
+        currency: refundCurrency,
         date: refundedAtIso,
       },
     });
