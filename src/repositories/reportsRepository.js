@@ -122,9 +122,33 @@ const RECENT_ORDERS_QUERY = `
   LIMIT $3
 `;
 
+/** Paid checkouts only (includes later cancelled/refunded). Unpaid pending_payment excluded. */
+const COUPON_USAGE_QUERY = `
+  SELECT
+    UPPER(TRIM(o.coupon_code)) AS coupon_code,
+    COUNT(*)::int AS times_used,
+    COALESCE(SUM(COALESCE(o.coupon_discount_amount, 0)), 0)::numeric AS discount_given
+  FROM orders o
+  WHERE o.created_at >= $1
+    AND o.created_at <= $2
+    AND COALESCE(o.payment_status, '') = 'paid'
+    AND o.coupon_code IS NOT NULL
+    AND TRIM(o.coupon_code) <> ''
+  GROUP BY UPPER(TRIM(o.coupon_code))
+  ORDER BY times_used DESC, discount_given DESC, coupon_code ASC
+`;
+
 async function getAdminDashboardData({ fromIso, toIso, chartYear, topLimit, recentLimit }) {
-  const [summaryResult, revenueByMonthResult, availableYearsResult, overviewResult, statusBreakdownResult, topProductsResult, recentOrdersResult] =
-    await Promise.all([
+  const [
+    summaryResult,
+    revenueByMonthResult,
+    availableYearsResult,
+    overviewResult,
+    statusBreakdownResult,
+    topProductsResult,
+    recentOrdersResult,
+    couponUsageResult,
+  ] = await Promise.all([
       pool.query(SUMMARY_QUERY, [fromIso, toIso]),
       pool.query(REVENUE_BY_MONTH_FOR_YEAR_QUERY, [chartYear]),
       pool.query(REVENUE_AVAILABLE_YEARS_QUERY),
@@ -132,6 +156,7 @@ async function getAdminDashboardData({ fromIso, toIso, chartYear, topLimit, rece
       pool.query(ORDER_STATUS_BREAKDOWN_QUERY),
       pool.query(TOP_PRODUCTS_QUERY, [fromIso, toIso, topLimit]),
       pool.query(RECENT_ORDERS_QUERY, [fromIso, toIso, recentLimit]),
+      pool.query(COUPON_USAGE_QUERY, [fromIso, toIso]),
     ]);
 
   const summary = summaryResult.rows[0] || {};
@@ -197,6 +222,11 @@ async function getAdminDashboardData({ fromIso, toIso, chartYear, topLimit, rece
       totalAmount: Number(row.total_amount || 0),
       status: row.status,
       date: row.created_at,
+    })),
+    couponUsage: couponUsageResult.rows.map((row) => ({
+      couponCode: String(row.coupon_code || ''),
+      timesUsed: Number(row.times_used || 0),
+      discountGiven: Number(row.discount_given || 0),
     })),
   };
 }
