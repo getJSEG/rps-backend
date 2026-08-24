@@ -762,7 +762,11 @@ const updateOrderStatus = async (req, res) => {
       return res.status(404).json({ message: 'Order not found' });
     }
 
-    notifyOrderStatusChange(id, { nextStatus: updated.status, previousStatus: existing.status });
+    notifyOrderStatusChange(id, {
+      nextStatus: updated.status,
+      previousStatus: existing.status,
+      previousHasTracking: Boolean(String(existing.order_tracking_id || '').trim()),
+    });
 
     res.json({ order: updated });
   } catch (error) {
@@ -833,9 +837,21 @@ const updateOrderTrackingId = async (req, res) => {
       }
       value = s || null;
     }
+    const existing = await orderRepository.findOrderByIdAdmin(id);
+    if (!existing) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+    const previousHasTracking = Boolean(String(existing.order_tracking_id || '').trim());
     const updated = await orderRepository.updateOrderTrackingIdById(id, value);
     if (!updated) {
       return res.status(404).json({ message: 'Order not found' });
+    }
+    if (value) {
+      notifyOrderStatusChange(id, {
+        nextStatus: updated.status,
+        previousStatus: existing.status,
+        previousHasTracking,
+      });
     }
     res.json({ order: updated });
   } catch (error) {

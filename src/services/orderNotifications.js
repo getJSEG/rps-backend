@@ -84,6 +84,38 @@ async function loadFullOrder(orderId) {
   }
 }
 
+function hasOrderTracking(order = {}) {
+  return Boolean(String(order.order_tracking_id || '').trim());
+}
+
+function isShippedReady(status, hasTracking) {
+  return canonicalOrderStatus(status) === 'shipped' && Boolean(hasTracking);
+}
+
+/**
+ * Shipped mail fires only the first time status is Shipped and a tracking number exists.
+ * Either action can arrive second; the email waits until both are true.
+ */
+function shouldSendShippedEmail({
+  previousStatus = null,
+  nextStatus,
+  previousHasTracking = false,
+  nextHasTracking,
+} = {}) {
+  const nowReady = isShippedReady(nextStatus, nextHasTracking);
+  if (!nowReady) {
+    if (canonicalOrderStatus(nextStatus) === 'shipped' && !nextHasTracking) {
+      return { send: false, skipped: 'shipped requires tracking number' };
+    }
+    return { send: false, skipped: 'not shipped-ready' };
+  }
+  const wasReady = isShippedReady(previousStatus, previousHasTracking);
+  if (wasReady) {
+    return { send: false, skipped: 'shipped email already eligible' };
+  }
+  return { send: true };
+}
+
 /**
  * Best-effort customer notification for an order status change.
  * Re-reads the order so the recipient comes from the users join rather than the bare
@@ -92,9 +124,21 @@ async function loadFullOrder(orderId) {
  * Pass `previousStatus` to suppress mail when a save does not actually move the status;
  * re-saving an order that is already shipped must not email the customer again. Callers
  * that cannot know the prior value omit it and no transition check is applied.
+ *
+ * Shipped is special: the customer is emailed only once both status is Shipped and a
+ * tracking number is saved. Pass `previousHasTracking` from the row before the write.
  * @returns {Promise<{ sent: boolean, skipped?: string, error?: string }>}
  */
-async function notifyOrderStatusChange(orderId, { nextStatus, previousStatus = null, guestToken = null, order = null } = {}) {
+async function notifyOrderStatusChange(
+  orderId,
+  {
+    nextStatus,
+    previousStatus = null,
+    previousHasTracking = null,
+    guestToken = null,
+    order = null,
+  } = {}
+) {
   try {
     if (!(await isEmailNotificationsEnabled())) {
       return { sent: false, skipped: 'email notifications disabled' };
@@ -103,6 +147,29 @@ async function notifyOrderStatusChange(orderId, { nextStatus, previousStatus = n
     if (!shouldNotifyForStatus(status)) {
       return { sent: false, skipped: 'status not in notify list' };
     }
+
+    if (status === 'shipped') {
+      const fullOrder = order && resolveRecipient(order) ? order : await loadFullOrder(orderId);
+      if (!fullOrder) return { sent: false, skipped: 'order not found' };
+      const nextHasTracking = hasOrderTracking(fullOrder);
+      const prevHasTracking =
+        previousHasTracking != null ? Boolean(previousHasTracking) : false;
+      const decision = shouldSendShippedEmail({
+        previousStatus,
+        nextStatus: status,
+        previousHasTracking: prevHasTracking,
+        nextHasTracking,
+      });
+      if (!decision.send) {
+        return { sent: false, skipped: decision.skipped };
+      }
+      const recipient = resolveRecipient(fullOrder);
+      if (!recipient) return { sent: false, skipped: 'no recipient on order' };
+      return await sendOrderStatusUpdatedEmail(fullOrder, recipient, status, {
+        guestToken: resolveGuestToken(fullOrder, guestToken),
+      });
+    }
+
     if (previousStatus != null && canonicalOrderStatus(previousStatus) === status) {
       return { sent: false, skipped: 'status unchanged' };
     }
@@ -185,4 +252,6 @@ module.exports = {
   notifyOrderItemRefunded,
   notifyOrderConfirmation,
   buildItemRefundEmailOrder,
+  hasOrderTracking,
+  shouldSendShippedEmail,
 };

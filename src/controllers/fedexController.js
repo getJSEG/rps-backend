@@ -103,6 +103,7 @@ const createShipmentForOrder = async (req, res) => {
     notifyOrderStatusChange(orderId, {
       nextStatus: 'shipped',
       previousStatus: order.status,
+      previousHasTracking: Boolean(String(order.order_tracking_id || '').trim()),
       order: updated,
     });
     return res.status(201).json({

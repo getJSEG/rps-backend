@@ -83,6 +83,10 @@ const STYLES = {
   kvTable: 'margin:0 0 4px;border-collapse:collapse;',
   kvLabel: `padding:4px 16px 4px 0;color:${COLORS.muted};font-size:13px;font-weight:normal;vertical-align:top;`,
   kvValue: 'padding:4px 0;font-size:13px;font-weight:normal;vertical-align:top;',
+  trackingCtaSection: 'margin:16px 0 0;',
+  trackingIntro: `margin:0;font-size:14px;line-height:21px;font-weight:normal;color:${COLORS.text};font-family:${FONT};`,
+  trackingButtonWrap: 'width:100%;margin:14px 0 14px;border-collapse:collapse;',
+  trackingButton: `display:inline-block;background:${COLORS.brand};color:${COLORS.surface};text-decoration:none;padding:9px 28px;font-weight:bold;font-size:14px;line-height:18px;font-family:${FONT};border-radius:999px;`,
 };
 
 module.exports = { STYLES };

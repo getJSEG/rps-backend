@@ -43,8 +43,8 @@ const LIVE_SEND_GAP_MS = 700;
  * Re-saving the same status and any non-whitelisted status must stay silent.
  */
 const TRANSITION_CASES = [
-  { from: 'processing', to: 'shipped', expect: true },
-  { from: 'shipped', to: 'shipped', expect: false, why: 're-save' },
+  { from: 'processing', to: 'shipped', expect: true, previousHasTracking: false },
+  { from: 'shipped', to: 'shipped', expect: false, why: 're-save', previousHasTracking: true },
   { from: 'processing', to: 'on_hold', expect: true },
   { from: 'on_hold', to: 'on_hold', expect: false, why: 're-save' },
   { from: 'processing', to: 'cancelled', expect: true },
@@ -54,6 +54,38 @@ const TRANSITION_CASES = [
   { from: 'processing', to: 'completed', expect: false, why: 'not whitelisted' },
   { from: 'processing', to: 'awaiting_refund', expect: false, why: 'not whitelisted' },
   { from: 'awaiting_artwork', to: 'printing', expect: false, why: 'not whitelisted' },
+];
+
+/** Shipped mail requires both status and tracking; either write path can complete the pair. */
+const SHIPPED_TRACKING_CASES = [
+  {
+    label: 'processing -> shipped without tracking silent',
+    from: 'processing',
+    to: 'shipped',
+    orderOverride: { order_tracking_id: '' },
+    previousHasTracking: false,
+    expect: false,
+  },
+  {
+    label: 'shipped -> shipped first tracking send',
+    from: 'shipped',
+    to: 'shipped',
+    previousHasTracking: false,
+    expect: true,
+  },
+  {
+    label: 'shipped -> shipped tracking already saved silent',
+    from: 'shipped',
+    to: 'shipped',
+    previousHasTracking: true,
+    expect: false,
+  },
+  {
+    label: 'processing -> processing tracking-only silent',
+    from: 'processing',
+    to: 'processing',
+    expect: false,
+  },
 ];
 
 let failures = 0;
@@ -230,9 +262,22 @@ async function main() {
       nextStatus: c.to,
       previousStatus: c.from,
       order,
+      ...(c.previousHasTracking != null ? { previousHasTracking: c.previousHasTracking } : {}),
     });
     const label = `${c.from} -> ${c.to} ${c.expect ? 'sends' : 'silent'}${c.why ? ` (${c.why})` : ''}`;
     assert(res.sent === c.expect, label, res.sent ? '' : res.skipped || res.error || '');
+  }
+
+  console.log('\n--- Phase 1b: shipped requires tracking ---');
+  for (const c of SHIPPED_TRACKING_CASES) {
+    const caseOrder = c.orderOverride ? { ...order, ...c.orderOverride } : order;
+    const res = await notifications.notifyOrderStatusChange(order.id, {
+      nextStatus: c.to,
+      previousStatus: c.from,
+      order: caseOrder,
+      ...(c.previousHasTracking != null ? { previousHasTracking: c.previousHasTracking } : {}),
+    });
+    assert(res.sent === c.expect, c.label, res.sent ? '' : res.skipped || res.error || '');
   }
 
   console.log('\n--- Phase 2: send failure is non-fatal ---');

@@ -181,6 +181,7 @@ function renderOrderSummaryBlock(
     omitPaymentStatus = false,
     leadingMetaRows = [],
     extraMetaRows = [],
+    beforeItemsHtml = '',
   } = {}
 ) {
   const number = orderNumberOf(order);
@@ -203,6 +204,7 @@ function renderOrderSummaryBlock(
   }
   return `
     ${renderKeyValue(metaRows)}
+    ${beforeItemsHtml}
     ${renderOrderItemsTable(order.items)}
     ${buildOrderTotals(order)}
   `;
@@ -362,6 +364,42 @@ function shippedCarrierLabel(order = {}) {
   return raw.replace(/_/g, ' ');
 }
 
+/** Public carrier tracking page when carrier + tracking number are known. */
+function resolveShipmentTrackingUrl(order = {}) {
+  const tracking = String(order.order_tracking_id || '').trim();
+  if (!tracking) return null;
+  const carrier = String(order.carrier || '').trim().toLowerCase();
+  if (carrier === 'fedex') {
+    return `https://www.fedex.com/fedextrack/?trknbr=${encodeURIComponent(tracking)}`;
+  }
+  if (carrier === 'ups') {
+    return `https://www.ups.com/track?tracknum=${encodeURIComponent(tracking)}`;
+  }
+  if (carrier === 'usps') {
+    return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${encodeURIComponent(tracking)}`;
+  }
+  return null;
+}
+
+function renderTrackShipmentButton(url) {
+  if (!url) return '';
+  const inner = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center"><tr><td><a href="${escapeHtml(url)}" style="${STYLES.trackingButton}">Track Shipment</a></td></tr></table>`;
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="${STYLES.trackingButtonWrap}"><tr><td align="center" style="text-align:center;width:100%;">${inner}</td></tr></table>`;
+}
+
+function renderShippedTrackingCta(order = {}) {
+  const tracking = String(order.order_tracking_id || '').trim();
+  if (!tracking) return '';
+  const trackingUrl = resolveShipmentTrackingUrl(order);
+  const trackButton = trackingUrl ? renderTrackShipmentButton(trackingUrl) : '';
+  return `
+    <div style="${STYLES.trackingCtaSection}">
+      <p style="${STYLES.trackingIntro}">You can track your shipment using the tracking number below:</p>
+      ${trackButton}
+    </div>
+  `;
+}
+
 /**
  * Status-specific facts, pulled only from populated columns. A status reached without the
  * usual side effects (for example an admin setting `shipped` with no FedEx shipment)
@@ -474,6 +512,7 @@ function buildOrderStatusEmail(order = {}, nextStatus = '', { appUrl = '', guest
     ctaBlock = `
       <div style="${STYLES.ctaSection}">
         <p style="${STYLES.sectionMessage}">Your package is on its way.</p>
+        ${renderShippedTrackingCta(order)}
         ${guestAccess}
         ${renderSubtleThankYou('Thank you for choosing Resourceful Print Solutions. We appreciate your business.')}
       </div>
@@ -520,6 +559,19 @@ function buildOrderStatusEmail(order = {}, nextStatus = '', { appUrl = '', guest
     .filter((r) => r.value != null && String(r.value).trim() !== '')
     .map((r) => `${r.label}: ${r.value}`)
     .join(' ');
+  const shippedTrackingText = isShipped
+    ? (() => {
+        const tracking = String(order.order_tracking_id || '').trim();
+        if (!tracking) return '';
+        const trackingUrl = resolveShipmentTrackingUrl(order);
+        return [
+          'You can track your shipment using the tracking number below:',
+          trackingUrl ? `Track shipment: ${trackingUrl}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n');
+      })()
+    : '';
   const textMessage = isShipped
     ? 'Your package is on its way.'
     : isOnHold
@@ -548,6 +600,7 @@ function buildOrderStatusEmail(order = {}, nextStatus = '', { appUrl = '', guest
               : `Order ${number} is now ${meta.label}.${textMessage ? ` ${textMessage}` : ''}`,
       textRows,
       isHeadlineStatus ? textMessage : '',
+      shippedTrackingText,
       isCancelled ? `Contact Support: ${contactUrl}` : '',
       isGuest && orderUrl
         ? [
