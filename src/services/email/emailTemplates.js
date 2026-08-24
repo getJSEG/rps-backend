@@ -182,6 +182,7 @@ function renderOrderSummaryBlock(
     leadingMetaRows = [],
     extraMetaRows = [],
     beforeItemsHtml = '',
+    omitOrderReceipt = false,
   } = {}
 ) {
   const number = orderNumberOf(order);
@@ -202,11 +203,13 @@ function renderOrderSummaryBlock(
   if (Array.isArray(extraMetaRows) && extraMetaRows.length) {
     metaRows.push(...extraMetaRows);
   }
+  const receipt = omitOrderReceipt
+    ? ''
+    : `${renderOrderItemsTable(order.items)}${buildOrderTotals(order)}`;
   return `
     ${renderKeyValue(metaRows)}
     ${beforeItemsHtml}
-    ${renderOrderItemsTable(order.items)}
-    ${buildOrderTotals(order)}
+    ${receipt}
   `;
 }
 
@@ -468,6 +471,7 @@ function buildOrderStatusEmail(order = {}, nextStatus = '', { appUrl = '', guest
     omitPaymentStatus: meta.omitPaymentStatus === true,
     leadingMetaRows: isCancelled || isRefunded ? statusRows : [],
     extraMetaRows: isShipped ? statusRows : [],
+    omitOrderReceipt: isOnHold,
   });
 
   // Name-as-header layout is unused for notifying statuses that now use a status title.
@@ -494,7 +498,7 @@ function buildOrderStatusEmail(order = {}, nextStatus = '', { appUrl = '', guest
   const statusLine = isHeadlineStatus
     ? ''
     : `<p>Order #${escapeHtml(number)} is now ${escapeHtml(meta.label)}.</p>`;
-  const bodyParagraph = body ? `<p>${escapeHtml(body)}</p>` : '';
+  const bodyParagraph = body && !isHeadlineStatus ? `<p>${escapeHtml(body)}</p>` : '';
 
   const refundMessageBlock = isRefunded
     ? `
@@ -520,7 +524,7 @@ function buildOrderStatusEmail(order = {}, nextStatus = '', { appUrl = '', guest
   } else if (isOnHold) {
     ctaBlock = `
       <div style="${STYLES.ctaSection}">
-        <p style="${STYLES.sectionMessage}">Your order is on hold and will continue once it is ready. No action is needed from you right now.</p>
+        <p style="${STYLES.sectionMessage}">${escapeHtml(body)}</p>
         ${guestAccess}
         ${renderSubtleThankYou('Thank you for your patience and for choosing Resourceful Print Solutions.')}
       </div>
@@ -575,7 +579,7 @@ function buildOrderStatusEmail(order = {}, nextStatus = '', { appUrl = '', guest
   const textMessage = isShipped
     ? 'Your package is on its way.'
     : isOnHold
-      ? 'Your order is on hold and will continue once it is ready. No action is needed from you right now.'
+      ? body
       : isCancelled
         ? 'If you did not request this or believe it was a mistake, please contact our support team.'
         : isRefunded

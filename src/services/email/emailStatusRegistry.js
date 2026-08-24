@@ -67,7 +67,7 @@ const STATUS_REGISTRY = {
     heading: 'Order On Hold',
     titleAlign: 'center',
     preheader: '',
-    body: '',
+    body: "There's an issue with your job. We'll email you with further instructions.",
     omitPaymentMethod: true,
   },
   shipped: {
