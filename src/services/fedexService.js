@@ -1,6 +1,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 const storeAddressRepository = require('../repositories/storeAddressRepository');
+const { toUsStateCode } = require('../utils/usState');
 
 const FEDEX_API_URL = () =>
   (process.env.FEDEX_API_URL || 'https://apis-sandbox.fedex.com').replace(/\/+$/, '');
@@ -230,7 +231,7 @@ function storeAddressToFedexAddress(address) {
   return {
     streetLines: [address.street_address, address.address_line2].map((s) => String(s || '').trim()).filter(Boolean),
     city: String(address.city || '').trim(),
-    stateOrProvinceCode: String(address.state || '').trim().toUpperCase().slice(0, 2),
+    stateOrProvinceCode: toUsStateCode(address.state),
     postalCode: String(address.postcode || '').trim(),
     countryCode: normalizeCountryCode(address.country),
   };
@@ -263,10 +264,7 @@ function padStreetLinesTo3(streetLines) {
 
 function fedexAddressValidationPayload(address) {
   const city = String(address?.city || '').trim();
-  const stateOrProvinceCode = String(address?.stateOrProvinceCode || '')
-    .trim()
-    .toUpperCase()
-    .slice(0, 2);
+  const stateOrProvinceCode = toUsStateCode(address?.stateOrProvinceCode);
   const postalCode = String(address?.postalCode || '').trim();
   // Always send city (required for better residential/business classification).
   return {
@@ -361,10 +359,7 @@ async function resolveRecipientAddressResidential(address) {
   const normalized = {
     ...address,
     city: String(address?.city || '').trim(),
-    stateOrProvinceCode: String(address?.stateOrProvinceCode || '')
-      .trim()
-      .toUpperCase()
-      .slice(0, 2),
+    stateOrProvinceCode: toUsStateCode(address?.stateOrProvinceCode),
     postalCode: String(address?.postalCode || '').trim(),
     countryCode: normalizeCountryCode(address?.countryCode),
   };
@@ -445,7 +440,7 @@ async function ensureDefaultShipperStoreAddress() {
 function buildRecipientAddressForRating(destinationInput) {
   const postalCode = String(destinationInput?.postalCode || '').trim();
   const countryCode = String(destinationInput?.countryCode || 'US').trim().toUpperCase();
-  const stateOrProvinceCode = String(destinationInput?.stateOrProvinceCode || '').trim().toUpperCase();
+  const stateOrProvinceCode = toUsStateCode(destinationInput?.stateOrProvinceCode);
   const city = String(destinationInput?.city || '').trim();
   const fromArray =
     Array.isArray(destinationInput?.streetLines) && destinationInput.streetLines.length > 0
@@ -459,7 +454,7 @@ function buildRecipientAddressForRating(destinationInput) {
   return {
     streetLines,
     city,
-    ...(stateOrProvinceCode.length >= 2 ? { stateOrProvinceCode: stateOrProvinceCode.slice(0, 2) } : {}),
+    ...(stateOrProvinceCode ? { stateOrProvinceCode } : {}),
     postalCode,
     countryCode: countryCode.length === 2 ? countryCode : 'US',
   };
@@ -721,7 +716,7 @@ function recipientFromOrderRow(order) {
   const build = (street1, street2, city, state, postal, country) => {
     const pc = String(postal || '').trim();
     if (!pc) return null;
-    const st = String(state || '').trim().toUpperCase();
+    const st = toUsStateCode(state);
     return {
       contact: {
         personName: String(order.user_name || order.user_email || 'Recipient').slice(0, 35),
@@ -732,7 +727,7 @@ function recipientFromOrderRow(order) {
       address: {
         streetLines: linesFrom(street1, street2),
         city: String(city || '').trim() || 'City',
-        ...(st.length >= 2 ? { stateOrProvinceCode: st.slice(0, 2) } : {}),
+        ...(st ? { stateOrProvinceCode: st } : {}),
         postalCode: pc,
         countryCode: usa(country),
       },

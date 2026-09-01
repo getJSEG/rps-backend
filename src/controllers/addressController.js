@@ -1,4 +1,5 @@
 const pool = require('../config/database');
+const { normalizeUsStateForStorage, withNormalizedState } = require('../utils/usState');
 
 function coerceBooleanDefault(v) {
   if (v === true || v === 1) return true;
@@ -32,7 +33,7 @@ const getAddresses = async (req, res) => {
       result = await pool.query(orderSql, [userId]);
       rows = result.rows;
     }
-    res.json({ addresses: rows });
+    res.json({ addresses: rows.map(withNormalizedState) });
   } catch (error) {
     console.error('Get addresses error:', error);
     res.status(500).json({ message: 'Failed to fetch addresses' });
@@ -44,8 +45,9 @@ const createAddress = async (req, res) => {
     const userId = req.user.id;
     const { streetAddress, addressLine2, city, state, postcode, country, addressType } = req.body;
     const wantsDefault = coerceBooleanDefault(req.body.isDefault ?? req.body.is_default);
+    const stateCode = normalizeUsStateForStorage(state);
 
-    if (!streetAddress || !city || !state || !postcode) {
+    if (!streetAddress || !city || !stateCode || !postcode) {
       return res.status(400).json({ message: 'Missing required fields' });
     }
 
@@ -57,10 +59,10 @@ const createAddress = async (req, res) => {
       `INSERT INTO addresses (user_id, street_address, address_line2, city, state, postcode, country, is_default, address_type)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
-      [userId, streetAddress, addressLine2 || null, city, state, postcode, country || 'United States', wantsDefault, addressType || 'billing']
+      [userId, streetAddress, addressLine2 || null, city, stateCode, postcode, country || 'United States', wantsDefault, addressType || 'billing']
     );
 
-    res.status(201).json({ address: result.rows[0] });
+    res.status(201).json({ address: withNormalizedState(result.rows[0]) });
   } catch (error) {
     console.error('Create address error:', error);
     res.status(500).json({ message: 'Failed to create address' });
@@ -88,7 +90,7 @@ const setAddressDefault = async (req, res) => {
       [addressId, userId]
     );
 
-    res.json({ address: result.rows[0] });
+    res.json({ address: withNormalizedState(result.rows[0]) });
   } catch (error) {
     console.error('Set default address error:', error);
     res.status(500).json({ message: 'Failed to set default address' });
@@ -104,6 +106,7 @@ const updateAddress = async (req, res) => {
     const userId = req.user.id;
     const { streetAddress, addressLine2, city, state, postcode, country, addressType } = req.body;
     const wantsDefault = coerceBooleanDefault(req.body.isDefault ?? req.body.is_default);
+    const stateCode = normalizeUsStateForStorage(state);
 
     const checkResult = await pool.query('SELECT id FROM addresses WHERE id = $1 AND user_id = $2', [addressId, userId]);
 
@@ -125,7 +128,7 @@ const updateAddress = async (req, res) => {
         streetAddress,
         addressLine2 || null,
         city,
-        state,
+        stateCode,
         postcode,
         country || 'United States',
         wantsDefault,
@@ -135,7 +138,7 @@ const updateAddress = async (req, res) => {
       ]
     );
 
-    res.json({ address: result.rows[0] });
+    res.json({ address: withNormalizedState(result.rows[0]) });
   } catch (error) {
     console.error('Update address error:', error);
     res.status(500).json({ message: 'Failed to update address' });

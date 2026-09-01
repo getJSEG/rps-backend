@@ -15,6 +15,7 @@ const {
 } = require('../services/couponService');
 const fedexService = require('../services/fedexService');
 const { isPersistedFedexQuotedServiceType } = require('../utils/fedexQuoteServiceType');
+const { toUsStateCode } = require('../utils/usState');
 const { buildFedexPackagesFromShippableCartItems } = require('../utils/fedexCartPackage');
 const {
   fedexDeliveryEstimateWithProduction,
@@ -379,7 +380,7 @@ function fedexDestinationFromAddress(address) {
   return {
     postalCode,
     countryCode: checkoutCountryCode(countryRaw),
-    stateOrProvinceCode: String(address.state || '').trim().toUpperCase() || undefined,
+    stateOrProvinceCode: toUsStateCode(address.state) || undefined,
     city,
     ...(streetLines.length > 0 ? { streetLines } : {}),
   };
