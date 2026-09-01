@@ -52,7 +52,7 @@ const US_STATE_NAME_TO_CODE = {
   'district of columbia': 'DC',
 };
 
-/** "Texas" | "tx" | "TX" → "TX". Unknown values return "". */
+/** Map "Texas" / "tx" to "TX" for FedEx. Unknown values return "". */
 function toUsStateCode(raw) {
   const v = String(raw ?? '').trim();
   if (!v) return '';
@@ -61,15 +61,4 @@ function toUsStateCode(raw) {
   return US_STATE_NAME_TO_CODE[v.toLowerCase()] || '';
 }
 
-/** Prefer a 2-letter code; keep the original string if it cannot be mapped. */
-function normalizeUsStateForStorage(raw) {
-  const v = String(raw ?? '').trim();
-  return toUsStateCode(v) || v;
-}
-
-function withNormalizedState(row) {
-  if (!row || typeof row !== 'object') return row;
-  return { ...row, state: normalizeUsStateForStorage(row.state) };
-}
-
-module.exports = { toUsStateCode, normalizeUsStateForStorage, withNormalizedState };
+module.exports = { toUsStateCode };

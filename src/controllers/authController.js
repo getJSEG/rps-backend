@@ -2,7 +2,6 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const pool = require('../config/database');
 const { generateToken } = require('../utils/jwt');
-const { normalizeUsStateForStorage } = require('../utils/usState');
 const { sendPasswordResetEmail, sendPasswordChangedEmail } = require('../services/emailService');
 const STRONG_PASSWORD_REGEX = /^(?=.*[A-Z])(?=.*\d).+$/;
 
@@ -82,14 +81,12 @@ const register = async (req, res) => {
 
       const user = userResult.rows[0];
 
-      const billingState = normalizeUsStateForStorage(state);
-
       // Create default billing address
-      if (streetAddress && city && billingState && postcode) {
+      if (streetAddress && city && state && postcode) {
         await client.query(
           `INSERT INTO addresses (user_id, street_address, address_line2, city, state, postcode, country, is_default, address_type)
            VALUES ($1, $2, $3, $4, $5, $6, $7, true, 'billing')`,
-          [user.id, streetAddress, addressLine2 || null, city, billingState, postcode, 'United States']
+          [user.id, streetAddress, addressLine2 || null, city, state, postcode, 'United States']
         );
       }
 
@@ -98,7 +95,7 @@ const register = async (req, res) => {
       const finalShippingStreetAddress = shippingSameAsBilling ? streetAddress : shippingStreetAddress;
       const finalShippingAddressLine2 = shippingSameAsBilling ? (addressLine2 || null) : (shippingAddressLine2 || null);
       const finalShippingCity = shippingSameAsBilling ? city : shippingCity;
-      const finalShippingState = normalizeUsStateForStorage(shippingSameAsBilling ? state : shippingState);
+      const finalShippingState = shippingSameAsBilling ? state : shippingState;
       const finalShippingPostcode = shippingSameAsBilling ? postcode : shippingPostcode;
       const finalShippingCountry = shippingCountry || 'United States';
 
