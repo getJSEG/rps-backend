@@ -28,6 +28,27 @@ function computeDiscountAmount(coupon, subtotal) {
   return amount;
 }
 
+function getCouponMinimumPurchase(coupon) {
+  const min = Number(coupon?.minimumPurchaseAmount ?? coupon?.minimum_purchase_amount ?? 0);
+  if (!Number.isFinite(min) || min <= 0) return 0;
+  return roundMoney2(min);
+}
+
+function formatMinimumPurchaseLabel(amount) {
+  const n = roundMoney2(amount);
+  if (!Number.isFinite(n) || n <= 0) return '$0';
+  if (Number.isInteger(n)) return `$${n}`;
+  return `$${n.toFixed(2)}`;
+}
+
+/** Returns an error message when subtotal is below the coupon minimum; otherwise null. */
+function couponMinimumNotMetMessage(coupon, subtotal) {
+  const min = getCouponMinimumPurchase(coupon);
+  if (min <= 0) return null;
+  if (roundMoney2(subtotal) >= min) return null;
+  return `This coupon requires a minimum purchase of ${formatMinimumPurchaseLabel(min)}.`;
+}
+
 /**
  * Split a coupon across product lines by share of subtotal. Leftover cents go to
  * the largest remainders so allocated discounts always equal the coupon amount.
@@ -99,6 +120,9 @@ module.exports = {
   roundMoney2,
   normalizeCouponCode,
   computeDiscountAmount,
+  getCouponMinimumPurchase,
+  formatMinimumPurchaseLabel,
+  couponMinimumNotMetMessage,
   allocateDiscountToLines,
   couponOfferLabel,
   couponLineLabel,

@@ -30,11 +30,15 @@ function mapCoupon(row) {
   if (!row) return null;
   const expiresOn = dateOnly(row.expires_on);
   const expired = isExpired(expiresOn);
+  const minRaw = Number(row.minimum_purchase_amount);
+  const minimumPurchaseAmount =
+    Number.isFinite(minRaw) && minRaw > 0 ? Math.round(minRaw * 100) / 100 : 0;
   return {
     id: Number(row.id),
     code: String(row.code || ''),
     discountType: String(row.discount_type || ''),
     discountValue: Number(row.discount_value),
+    minimumPurchaseAmount,
     isActive: row.is_active !== false && !expired,
     expiresOn,
     expired,
@@ -43,7 +47,7 @@ function mapCoupon(row) {
   };
 }
 
-const SELECT_COLS = `id, code, discount_type, discount_value, is_active, expires_on, created_at, updated_at`;
+const SELECT_COLS = `id, code, discount_type, discount_value, minimum_purchase_amount, is_active, expires_on, created_at, updated_at`;
 
 async function deactivateExpired() {
   await pool.query(
@@ -88,14 +92,25 @@ async function findActiveByCode(code) {
   return coupon;
 }
 
-async function create({ code, discountType, discountValue, isActive = true, expiresOn = null }) {
+async function create({
+  code,
+  discountType,
+  discountValue,
+  isActive = true,
+  expiresOn = null,
+  minimumPurchaseAmount = 0,
+}) {
   const expires = dateOnly(expiresOn);
   const active = isActive !== false && !isExpired(expires);
+  const min =
+    Number.isFinite(Number(minimumPurchaseAmount)) && Number(minimumPurchaseAmount) > 0
+      ? Math.round(Number(minimumPurchaseAmount) * 100) / 100
+      : 0;
   const r = await pool.query(
-    `INSERT INTO coupons (code, discount_type, discount_value, is_active, expires_on)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO coupons (code, discount_type, discount_value, is_active, expires_on, minimum_purchase_amount)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING ${SELECT_COLS}`,
-    [code, discountType, discountValue, active, expires]
+    [code, discountType, discountValue, active, expires, min]
   );
   return mapCoupon(r.rows[0]);
 }
@@ -110,6 +125,12 @@ async function update(id, payload) {
     payload.expiresOn !== undefined ? dateOnly(payload.expiresOn) : dateOnly(current.expiresOn);
   let isActive = payload.isActive !== undefined ? !!payload.isActive : current.isActive;
   if (isExpired(expiresOn)) isActive = false;
+  const minimumPurchaseAmount =
+    payload.minimumPurchaseAmount !== undefined
+      ? Number(payload.minimumPurchaseAmount) > 0
+        ? Math.round(Number(payload.minimumPurchaseAmount) * 100) / 100
+        : 0
+      : current.minimumPurchaseAmount || 0;
   const r = await pool.query(
     `UPDATE coupons
      SET code = $2,
@@ -117,10 +138,11 @@ async function update(id, payload) {
          discount_value = $4,
          is_active = $5,
          expires_on = $6,
+         minimum_purchase_amount = $7,
          updated_at = CURRENT_TIMESTAMP
      WHERE id = $1
      RETURNING ${SELECT_COLS}`,
-    [id, code, discountType, discountValue, isActive, expiresOn]
+    [id, code, discountType, discountValue, isActive, expiresOn, minimumPurchaseAmount]
   );
   return mapCoupon(r.rows[0]);
 }

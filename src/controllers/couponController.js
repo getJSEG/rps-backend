@@ -2,6 +2,7 @@ const couponRepository = require('../repositories/couponRepository');
 const {
   normalizeCouponCode,
   computeDiscountAmount,
+  couponMinimumNotMetMessage,
   roundMoney2,
 } = require('../services/couponService');
 
@@ -52,6 +53,22 @@ function validateCouponPayload(body, { partial = false } = {}) {
       out.expiresOn = expiresOn;
     }
   }
+  if (
+    !partial ||
+    body.minimumPurchaseAmount !== undefined ||
+    body.minimum_purchase_amount !== undefined
+  ) {
+    const raw = body.minimumPurchaseAmount ?? body.minimum_purchase_amount;
+    if (raw == null || String(raw).trim() === '') {
+      out.minimumPurchaseAmount = 0;
+    } else {
+      const min = Number(raw);
+      if (!Number.isFinite(min) || min < 0) {
+        return { error: 'Minimum purchase must be a non-negative number.' };
+      }
+      out.minimumPurchaseAmount = roundMoney2(min);
+    }
+  }
   const type = out.discountType;
   const value = out.discountValue;
   if (type === 'percent' && value != null && value > 100) {
@@ -80,6 +97,7 @@ const createCouponAdmin = async (req, res) => {
       discountValue: parsed.value.discountValue,
       isActive: parsed.value.isActive !== false,
       expiresOn: parsed.value.expiresOn ?? null,
+      minimumPurchaseAmount: parsed.value.minimumPurchaseAmount ?? 0,
     });
     res.status(201).json({ coupon });
   } catch (error) {
@@ -141,6 +159,10 @@ const previewCoupon = async (req, res) => {
     if (!coupon) {
       return res.status(400).json({ message: 'This coupon is invalid, expired, or no longer active.' });
     }
+    const minMsg = couponMinimumNotMetMessage(coupon, subtotal);
+    if (minMsg) {
+      return res.status(400).json({ message: minMsg });
+    }
     const discountAmount = computeDiscountAmount(coupon, subtotal);
     if (discountAmount <= 0) {
       return res.status(400).json({ message: 'This coupon does not apply to the current order.' });
@@ -149,6 +171,7 @@ const previewCoupon = async (req, res) => {
       code: coupon.code,
       discountType: coupon.discountType,
       discountValue: coupon.discountValue,
+      minimumPurchaseAmount: coupon.minimumPurchaseAmount || 0,
       discountAmount,
       discountedSubtotal: roundMoney2(Math.max(0, subtotal - discountAmount)),
     });

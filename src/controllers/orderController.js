@@ -12,6 +12,7 @@ const {
   normalizeCouponCode,
   computeDiscountAmount,
   allocateDiscountToLines,
+  couponMinimumNotMetMessage,
 } = require('../services/couponService');
 const fedexService = require('../services/fedexService');
 const { isPersistedFedexQuotedServiceType } = require('../utils/fedexQuoteServiceType');
@@ -1103,6 +1104,10 @@ const createOrderWithPaymentIntent = async (req, res) => {
       const coupon = await couponRepository.findActiveByCode(requestedCouponCode);
       if (!coupon) {
         return res.status(400).json({ message: 'This coupon is invalid, expired, or no longer active.' });
+      }
+      const minMsg = couponMinimumNotMetMessage(coupon, subtotalSum);
+      if (minMsg) {
+        return res.status(400).json({ message: minMsg });
       }
       const discount = computeDiscountAmount(coupon, subtotalSum);
       if (discount <= 0) {

@@ -213,6 +213,14 @@ async function ensureEmployeeColumns() {
   } catch (err) {
     console.warn('addOrderCouponSnapshot:', err.message);
   }
+  try {
+    const minPath = path.join(__dirname, 'migrations', 'addCouponsMinimumPurchase.sql');
+    if (fs.existsSync(minPath)) {
+      await pool.query(fs.readFileSync(minPath, 'utf8'));
+    }
+  } catch (err) {
+    console.warn('addCouponsMinimumPurchase:', err.message);
+  }
 }
 
 // Import routes
