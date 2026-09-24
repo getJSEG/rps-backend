@@ -2856,6 +2856,32 @@ const uploadDesignTemplateFile = async (req, res) => {
   res.json({ ...stored, original_name: req.file.originalname });
 };
 
+/**
+ * Public: stream a design template PNG through the API. The editor loads templates as cross-origin canvas
+ * images, which Spaces blocks unless the bucket has CORS rules; the API already sends CORS headers.
+ */
+const getDesignTemplateImage = async (req, res) => {
+  const id = parseInt(String(req.params.templateId), 10);
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ message: 'Invalid template id' });
+  try {
+    const result = await pool.query('SELECT image_url FROM product_design_templates WHERE id = $1', [id]);
+    const imageUrl = result.rows[0]?.image_url;
+    if (!imageUrl) return res.status(404).json({ message: 'Template not found' });
+    const upstream = await fetch(imageUrl);
+    if (!upstream.ok) {
+      console.error('Design template image fetch failed:', id, upstream.status);
+      return res.status(502).json({ message: 'Template image unavailable' });
+    }
+    res.set('Content-Type', upstream.headers.get('content-type') || 'image/png');
+    // Template files are never overwritten (a new upload gets a new key), so the response can be cached.
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.send(Buffer.from(await upstream.arrayBuffer()));
+  } catch (err) {
+    console.error('Get design template image error:', err);
+    res.status(500).json({ message: 'Could not load template image' });
+  }
+};
+
 /** Admin: remove a design template upload that was never saved to a product. */
 const deleteUploadedDesignTemplateFile = async (req, res) => {
   try {
@@ -2915,6 +2941,7 @@ module.exports = {
   uploadProductTemplateFile,
   uploadDesignTemplateFile,
   deleteUploadedDesignTemplateFile,
+  getDesignTemplateImage,
   deleteUploadedProductTemplateFile,
   getProductModifierConfigAdmin,
   updateProductModifierConfigAdmin,

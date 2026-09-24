@@ -41,3 +41,6 @@ CREATE TABLE IF NOT EXISTS designs (
 
 CREATE INDEX IF NOT EXISTS idx_designs_user_id ON designs(user_id);
 CREATE INDEX IF NOT EXISTS idx_designs_guest_session_id ON designs(guest_session_id);
+
+-- Uploaded designs keep the customer's original image so "Edit my design" can reopen it with its edit layers.
+ALTER TABLE designs ADD COLUMN IF NOT EXISTS original_file_url TEXT;

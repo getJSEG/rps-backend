@@ -219,6 +219,8 @@ function expandCartItemToOrderLines(item) {
         base_unit_price: baseUnitPrice,
         purchase_option_key: purchaseOptionKey,
         purchase_option_label: purchaseOptionLabel,
+        // Set by the cart from a verified, approved design; never taken from checkout input.
+        customer_artwork_url: j.designUrl || null,
       };
     });
   }
@@ -1201,6 +1203,8 @@ const createOrderWithPaymentIntent = async (req, res) => {
       }
     }
 
+    /** True when some line has no design yet; the storefront then sends the buyer to upload artwork. */
+    const needsArtwork = orderItems.some((line) => !line.customer_artwork_url);
     const orderNumber = generateOrderNumber();
     const { orderId, orderNumber: savedOrderNumber } = await orderRepository.createPendingStripeOrderWithItems({
       userId,
@@ -1247,6 +1251,7 @@ const createOrderWithPaymentIntent = async (req, res) => {
         guestTrackingUrl:
           guestTrackingToken && !userId ? buildGuestTrackingUrl(req, orderId, guestTrackingToken) : undefined,
         stripePaymentSkipped: true,
+        needsArtwork,
         subtotal: totals.subtotal,
         shipping: totals.shipping,
         taxAmount: totals.tax.amount,
@@ -1282,6 +1287,7 @@ const createOrderWithPaymentIntent = async (req, res) => {
       guestTrackingUrl:
         guestTrackingToken && !userId ? buildGuestTrackingUrl(req, orderId, guestTrackingToken) : undefined,
       stripePaymentSkipped: false,
+      needsArtwork,
       subtotal: totals.subtotal,
       shipping: totals.shipping,
       taxAmount: totals.tax.amount,

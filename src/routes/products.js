@@ -18,6 +18,7 @@ const {
   uploadProductTemplateFile,
   uploadDesignTemplateFile,
   deleteUploadedDesignTemplateFile,
+  getDesignTemplateImage,
   deleteUploadedProductTemplateFile,
   getProductModifierConfigAdmin,
   updateProductModifierConfigAdmin,
@@ -56,6 +57,7 @@ router.get('/', optionalAuth, getAllProducts);
 router.get('/categories', getCategories);
 router.get('/related', optionalAuth, getRelatedProducts);
 router.post('/:id/price-preview', optionalAuth, previewProductPrice);
+router.get('/design-templates/:templateId/image', getDesignTemplateImage);
 
 // Admin: products and categories (must be before /:id)
 router.get('/admin/products', authenticateToken, requireAdmin, getAllProductsAdmin);

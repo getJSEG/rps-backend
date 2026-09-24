@@ -1,3 +1,4 @@
+const path = require('path');
 const pool = require('../config/database');
 const { deleteManyByUrl } = require('../utils/spaces');
 const {
@@ -5,27 +6,10 @@ const {
   validateArtworkBufferAgainstOrderDimensions,
 } = require('./artworkController');
 
+const { readGuestSessionId, designOwnerFilter: ownerFilter } = require('../services/designService');
+
 const DESIGN_COLUMNS = `id, user_id, guest_session_id, product_id, template_id, source, design_state,
-  file_url, mime_type, width_px, height_px, approved_at, created_at, updated_at`;
-
-function readGuestSessionId(req) {
-  if (req.guestSessionId) return req.guestSessionId;
-  const sid = String(req.headers['x-guest-session-id'] || '').trim();
-  return sid.length >= 8 && sid.length <= 128 ? sid : null;
-}
-
-/**
- * Designs belong to a user or a guest session. A guest who logs in mid-flow still sends the guest header,
- * so either identity grants access.
- */
-function ownerFilter(req, startIndex) {
-  const userId = req.user?.id ?? null;
-  const guestSessionId = readGuestSessionId(req);
-  return {
-    sql: `((user_id IS NOT NULL AND user_id = $${startIndex}) OR (guest_session_id IS NOT NULL AND guest_session_id = $${startIndex + 1}))`,
-    params: [userId, guestSessionId],
-  };
-}
+  file_url, original_file_url, mime_type, width_px, height_px, approved_at, created_at, updated_at`;
 
 function toDesignDto(row) {
   return {
@@ -35,6 +19,7 @@ function toDesignDto(row) {
     source: row.source,
     designState: row.design_state,
     fileUrl: row.file_url,
+    hasOriginal: Boolean(row.original_file_url),
     mimeType: row.mime_type,
     widthPx: row.width_px,
     heightPx: row.height_px,
@@ -74,7 +59,9 @@ function parseDesignState(raw) {
  * @returns {Promise<{ source, productId, templateId, designState, fileUrl, mimeType, widthPx, heightPx }>}
  */
 async function readAndStoreDesignFile(req) {
-  if (!req.file || !req.file.buffer) {
+  const file = req.files?.file?.[0];
+  const original = req.files?.original?.[0];
+  if (!file || !file.buffer) {
     throw Object.assign(new Error('No design file uploaded.'), { statusCode: 400 });
   }
   const source = String(req.body?.source || '').trim();
@@ -101,13 +88,13 @@ async function readAndStoreDesignFile(req) {
     }
   }
 
-  const mimeType = normalizeMime(req.file);
+  const mimeType = normalizeMime(file);
   // Custom-size (blank canvas) designs and uploads must match the job's print size; template shapes are fixed by the admin.
   const enforceSize = !templateId;
   let dimensions;
   try {
     dimensions = await validateArtworkBufferAgainstOrderDimensions(
-      req.file.buffer,
+      file.buffer,
       mimeType,
       enforceSize ? req.body?.width_in : null,
       enforceSize ? req.body?.height_in : null
@@ -115,18 +102,35 @@ async function readAndStoreDesignFile(req) {
   } catch (err) {
     throw Object.assign(new Error(err.message || 'Could not read the design file.'), { statusCode: 400 });
   }
-  const { url } = await saveArtworkBufferToStorage(req.file.buffer, mimeType, dimensions);
+  const { url } = await saveArtworkBufferToStorage(file.buffer, mimeType, dimensions);
+
+  // Uploaded image before editing; with design_state it lets the editor reopen the customer's layers.
+  let originalUrl = null;
+  if (original?.buffer) {
+    const originalMime = normalizeMime(original);
+    if (originalMime !== 'image/png' && originalMime !== 'image/jpeg') {
+      await deleteManyByUrl([url]).catch(() => {});
+      throw Object.assign(new Error('The original upload must be a PNG or JPG image.'), { statusCode: 400 });
+    }
+    ({ url: originalUrl } = await saveArtworkBufferToStorage(original.buffer, originalMime));
+  }
 
   return {
     source,
     productId,
     templateId,
-    designState: source === 'created' ? parseDesignState(req.body?.design_state) : null,
+    designState: source === 'created' || originalUrl ? parseDesignState(req.body?.design_state) : null,
     fileUrl: url,
+    originalUrl,
     mimeType,
     widthPx: dimensions.widthPx,
     heightPx: dimensions.heightPx,
   };
+}
+
+async function deleteStoredFiles(stored) {
+  const urls = [stored?.fileUrl, stored?.originalUrl].filter(Boolean);
+  if (urls.length) await deleteManyByUrl(urls).catch(() => {});
 }
 
 function sendError(res, error, fallback) {
@@ -142,8 +146,8 @@ const createDesign = async (req, res) => {
     stored = await readAndStoreDesignFile(req);
     const result = await pool.query(
       `INSERT INTO designs
-        (user_id, guest_session_id, product_id, template_id, source, design_state, file_url, mime_type, width_px, height_px)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10)
+        (user_id, guest_session_id, product_id, template_id, source, design_state, file_url, mime_type, width_px, height_px, original_file_url)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11)
        RETURNING ${DESIGN_COLUMNS}`,
       [
         req.user?.id ?? null,
@@ -156,11 +160,12 @@ const createDesign = async (req, res) => {
         stored.mimeType,
         stored.widthPx,
         stored.heightPx,
+        stored.originalUrl,
       ]
     );
     return res.status(201).json({ design: toDesignDto(result.rows[0]) });
   } catch (error) {
-    if (stored?.fileUrl) await deleteManyByUrl([stored.fileUrl]).catch(() => {});
+    await deleteStoredFiles(stored);
     return sendError(res, error, 'Could not save design.');
   }
 };
@@ -173,7 +178,7 @@ const updateDesign = async (req, res) => {
   try {
     const owner = ownerFilter(req, 2);
     const existing = await pool.query(
-      `SELECT file_url FROM designs WHERE id = $1 AND ${owner.sql}`,
+      `SELECT file_url, original_file_url FROM designs WHERE id = $1 AND ${owner.sql}`,
       [id, ...owner.params]
     );
     if (existing.rowCount === 0) return res.status(404).json({ message: 'Design not found.' });
@@ -182,7 +187,8 @@ const updateDesign = async (req, res) => {
     const result = await pool.query(
       `UPDATE designs
        SET product_id = $2, template_id = $3, source = $4, design_state = $5::jsonb, file_url = $6,
-           mime_type = $7, width_px = $8, height_px = $9, approved_at = NULL, updated_at = CURRENT_TIMESTAMP
+           mime_type = $7, width_px = $8, height_px = $9, original_file_url = $10,
+           approved_at = NULL, updated_at = CURRENT_TIMESTAMP
        WHERE id = $1
        RETURNING ${DESIGN_COLUMNS}`,
       [
@@ -195,15 +201,17 @@ const updateDesign = async (req, res) => {
         stored.mimeType,
         stored.widthPx,
         stored.heightPx,
+        stored.originalUrl,
       ]
     );
-    const previousUrl = existing.rows[0].file_url;
-    if (previousUrl && previousUrl !== stored.fileUrl) {
-      await deleteManyByUrl([previousUrl]).catch(() => {});
-    }
+    const previous = existing.rows[0];
+    const stale = [previous.file_url, previous.original_file_url].filter(
+      (u) => u && u !== stored.fileUrl && u !== stored.originalUrl
+    );
+    if (stale.length) await deleteManyByUrl(stale).catch(() => {});
     return res.json({ design: toDesignDto(result.rows[0]) });
   } catch (error) {
-    if (stored?.fileUrl) await deleteManyByUrl([stored.fileUrl]).catch(() => {});
+    await deleteStoredFiles(stored);
     return sendError(res, error, 'Could not update design.');
   }
 };
@@ -244,4 +252,32 @@ const getDesign = async (req, res) => {
   }
 };
 
-module.exports = { createDesign, updateDesign, approveDesign, getDesign };
+/**
+ * GET /api/designs/:id/original: the customer's uploaded image (or the design itself when there is none), streamed
+ * through the API so the editor can load it without storage CORS rules. Owner only.
+ */
+const getDesignOriginal = async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) return res.status(400).json({ message: 'Invalid design id.' });
+  try {
+    const owner = ownerFilter(req, 2);
+    const result = await pool.query(
+      `SELECT COALESCE(original_file_url, file_url) AS url FROM designs WHERE id = $1 AND ${owner.sql}`,
+      [id, ...owner.params]
+    );
+    const url = result.rows[0]?.url;
+    if (!url) return res.status(404).json({ message: 'Design not found.' });
+    res.set('Cache-Control', 'private, no-store');
+    if (url.startsWith('/uploads/')) {
+      return res.sendFile(path.join(__dirname, '../..', url));
+    }
+    const upstream = await fetch(url);
+    if (!upstream.ok) return res.status(502).json({ message: 'Design file unavailable.' });
+    res.set('Content-Type', upstream.headers.get('content-type') || 'application/octet-stream');
+    return res.send(Buffer.from(await upstream.arrayBuffer()));
+  } catch (error) {
+    return sendError(res, error, 'Could not load design file.');
+  }
+};
+
+module.exports = { createDesign, updateDesign, approveDesign, getDesign, getDesignOriginal };

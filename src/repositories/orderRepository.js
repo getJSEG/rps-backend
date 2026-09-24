@@ -6,7 +6,8 @@ const SQL = {
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING *`,
   INSERT_ORDER_ITEM_WITH_JOB: `INSERT INTO order_items (order_id, product_id, product_name, job_name, quantity, unit_price, total_price, image_url, width_inches, height_inches, selected_modifiers, selection_mode, graphic_scenario_enabled, modifier_total, base_unit_price, purchase_option_key, purchase_option_label, discount_amount)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15, $16, $17, $18)`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15, $16, $17, $18)
+         RETURNING id`,
   SELECT_ORDER_WITH_ITEMS_AGG: `SELECT o.*, 
          json_agg(json_build_object(
            'id', oi.id,
@@ -432,6 +433,12 @@ const SQL = {
        SET status = $1
        WHERE id = $2 AND order_id = $3
        RETURNING id, order_id, status`,
+  SET_ORDER_ITEM_CUSTOMER_ARTWORK: `UPDATE order_items SET customer_artwork_url = $1 WHERE id = $2`,
+  ADVANCE_DESIGNED_ORDER_ITEMS_TO_PROCESSING: `UPDATE order_items
+       SET status = 'processing'
+       WHERE order_id = $1
+         AND lower(trim(COALESCE(status, ''))) = 'awaiting_artwork'
+         AND TRIM(COALESCE(customer_artwork_url, '')) <> ''`,
   ADVANCE_ORDER_ITEM_TO_PROCESSING_IF_AWAITING: `UPDATE order_items
        SET status = 'processing'
        WHERE id = $1
@@ -1294,7 +1301,7 @@ async function createPendingStripeOrderWithItems({
     const order = orderResult.rows[0];
     const orderId = order.id;
     for (const oi of orderItems) {
-      await client.query(SQL.INSERT_ORDER_ITEM_WITH_JOB, [
+      const inserted = await client.query(SQL.INSERT_ORDER_ITEM_WITH_JOB, [
         orderId,
         oi.product_id,
         oi.product_name,
@@ -1314,6 +1321,10 @@ async function createPendingStripeOrderWithItems({
         oi.purchase_option_label ?? oi.purchaseOptionLabel ?? null,
         oi.discount_amount ?? oi.discountAmount ?? 0,
       ]);
+      // Approved design from the design tool; the line moves to processing once the order is paid.
+      if (oi.customer_artwork_url) {
+        await client.query(SQL.SET_ORDER_ITEM_CUSTOMER_ARTWORK, [oi.customer_artwork_url, inserted.rows[0].id]);
+      }
     }
     await client.query('COMMIT');
     return { orderId, orderNumber: order.order_number };
@@ -1348,7 +1359,15 @@ async function markOrderPaidFromStripe(orderId, paidAtIso, paymentIntentId = nul
   if (paymentIntentId) {
     await pool.query(SQL.UPDATE_ORDER_STRIPE_PAYMENT_INTENT, [String(paymentIntentId), orderId]);
   }
-  return result.rowCount > 0;
+  const transitioned = result.rowCount > 0;
+  if (transitioned) await advanceDesignedLinesAfterPayment(orderId);
+  return transitioned;
+}
+
+/** After payment: lines that already have artwork from the design tool skip awaiting_artwork. */
+async function advanceDesignedLinesAfterPayment(orderId) {
+  await pool.query(SQL.ADVANCE_DESIGNED_ORDER_ITEMS_TO_PROCESSING, [orderId]);
+  await maybeAdvanceOrderToProcessingAfterArtwork(orderId);
 }
 
 async function setOrderStripePaymentIntent(orderId, paymentIntentId) {
@@ -1359,6 +1378,7 @@ async function setOrderStripePaymentIntent(orderId, paymentIntentId) {
 async function markOrderPaidWithoutStripe(orderId) {
   const suffix = ` | Completed without Stripe (STRIPE_PAYMENT_ENABLED=false) ${new Date().toISOString()}`;
   await pool.query(SQL.UPDATE_ORDER_PAID_WITHOUT_STRIPE, ['paid', 'awaiting_artwork', 'manual', suffix, orderId]);
+  await advanceDesignedLinesAfterPayment(orderId);
 }
 
 /**
