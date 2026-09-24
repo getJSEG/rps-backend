@@ -10,6 +10,16 @@ const {
 } = require('../utils/spaces');
 const { getProductPricingConfig, validateAndCalculatePricing } = require('../services/pricingService');
 const { normalizeProductionTimeRules, validateProductionTimeRules } = require('../utils/productionTimeRules');
+const {
+  storeDesignTemplateSvg,
+  getProductDesignTemplates,
+  parseDesignTemplatesInput,
+  validateDesignTemplates,
+  replaceProductDesignTemplates,
+  listProductDesignTemplateKeys,
+  deleteStorageKeys,
+  deleteUnsavedDesignTemplateUpload,
+} = require('../services/designTemplateService');
 
 /** @param {unknown} value */
 function normalizeGalleryArrayInput(value) {
@@ -1121,7 +1131,8 @@ const getProductById = async (req, res) => {
       }
     }
     product.template_files = await getProductTemplateFiles(product.id);
-    const sm = product.size_mode != null ? String(product.size_mode).trim() : '';
+    product.design_templates = await getProductDesignTemplates(product.id);
+    const sm =product.size_mode != null ? String(product.size_mode).trim() : '';
     if (!sm && Array.isArray(product.size_options) && product.size_options.length > 0) {
       product.size_mode = 'predefined';
     }
@@ -2346,6 +2357,7 @@ const createProduct = async (req, res) => {
       production_time_rules,
       product_highlights,
       template_files,
+      design_templates,
     } = req.body;
     if (!name) return res.status(400).json({ message: 'Product name is required' });
     const slugVal = slug || name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') + '-' + Date.now();
@@ -2414,6 +2426,9 @@ const createProduct = async (req, res) => {
     const parsedTemplateFiles = parseProductTemplateFilesInput(template_files);
     const templateFilesError = validateProductTemplateFiles(parsedTemplateFiles);
     if (templateFilesError) return res.status(400).json({ message: templateFilesError });
+    const parsedDesignTemplates = parseDesignTemplatesInput(design_templates);
+    const designTemplatesError = validateDesignTemplates(parsedDesignTemplates);
+    if (designTemplatesError) return res.status(400).json({ message: designTemplatesError });
     if (sizeModeVal === 'predefined' && parsedSizeOptions.length === 0) {
       return res.status(400).json({ message: 'size_options are required when size_mode is predefined.' });
     }
@@ -2475,9 +2490,11 @@ const createProduct = async (req, res) => {
     const parsedPurchaseOptions = parsePurchaseOptionsInput(purchase_options);
     await replaceProductPurchaseOptions(created.id, parsedPurchaseOptions);
     await replaceProductTemplateFiles(created.id, parsedTemplateFiles);
+    await replaceProductDesignTemplates(created.id, parsedDesignTemplates);
     created.size_options = await getProductSizeOptions(created.id);
     created.purchase_options = await getProductPurchaseOptions(created.id);
     created.template_files = await getProductTemplateFiles(created.id);
+    created.design_templates = await getProductDesignTemplates(created.id);
     res.status(201).json({ product: created });
   } catch (error) {
     if (error.code === '23505') return res.status(400).json({ message: 'Product slug already exists' });
@@ -2624,6 +2641,11 @@ const updateProduct = async (req, res) => {
       : null;
     const templateFilesError = parsedTemplateFiles === null ? null : validateProductTemplateFiles(parsedTemplateFiles);
     if (templateFilesError) return res.status(400).json({ message: templateFilesError });
+    const parsedDesignTemplates = req.body.design_templates !== undefined
+      ? parseDesignTemplatesInput(req.body.design_templates)
+      : null;
+    const designTemplatesError = parsedDesignTemplates === null ? null : validateDesignTemplates(parsedDesignTemplates);
+    if (designTemplatesError) return res.status(400).json({ message: designTemplatesError });
     const result = await pool.query(
       `UPDATE products SET name = $1, slug = $2, description = $3, spec = $4, file_setup = $5, installation_guide = $6, faq = $7::jsonb, category_id = $8, subcategory = $9, price = $10, price_per_sqft = $11, min_charge = $12, material = $13, image_url = $14, is_new = $15, is_active = $16, sku = $17, properties = $18::jsonb, gallery_images = $19::jsonb, pricing_mode = $20, size_mode = $21, base_unit = $22, min_width = $23, max_width = $24, min_height = $25, max_height = $26, graphic_scenario_enabled = $27, hardware_template_id = $28, weight = $29, weight_per_sqft = $30, length = $31, shipping_length = $32, shipping_width = $33, shipping_height = $34, shipping_weight = $35, production_time = $36, production_time_rules = $37::jsonb, product_highlights = $38::jsonb, updated_at = CURRENT_TIMESTAMP WHERE id = $39 RETURNING *`,
       [nameVal, slugVal, descriptionVal, specVal, fileSetupVal, installationGuideVal, faqVal, categoryIdVal, subcategoryVal, priceVal, pricePerSqftVal, minChargeVal, materialVal, imageUrlVal, isNewVal, isActiveVal, skuVal, propertiesVal, galleryJson, pricingModeVal, sizeModeVal, baseUnitVal, minWidthVal, maxWidthVal, minHeightVal, maxHeightVal, graphicScenarioEnabledVal, hardwareTemplateIdVal, weightVal, weightPerSqftVal, lengthVal, shippingLengthVal, shippingWidthVal, shippingHeightVal, shippingWeightVal, productionTimeVal, productionTimeRulesVal, highlightsVal, id]
@@ -2644,10 +2666,14 @@ const updateProduct = async (req, res) => {
     if (parsedTemplateFiles !== null) {
       await replaceProductTemplateFiles(id, parsedTemplateFiles);
     }
+    if (parsedDesignTemplates !== null) {
+      await replaceProductDesignTemplates(id, parsedDesignTemplates);
+    }
     updated.size_options = await getProductSizeOptions(id);
     updated.purchase_options = await getProductPurchaseOptions(id);
     updated.shipping_box_rules = await getProductShippingBoxRules(id);
     updated.template_files = await getProductTemplateFiles(id);
+    updated.design_templates = await getProductDesignTemplates(id);
     res.json({ product: updated });
   } catch (error) {
     if (error.code === '23505') return res.status(400).json({ message: 'Product slug already exists' });
@@ -2670,7 +2696,12 @@ const getAllProductsAdmin = async (req, res) => {
           SELECT json_agg(tf ORDER BY tf.sort_order ASC, tf.id ASC)
           FROM product_template_files tf
           WHERE tf.product_id = p.id
-        ), '[]'::json) AS template_files
+        ), '[]'::json) AS template_files,
+        COALESCE((
+          SELECT json_agg(dt ORDER BY dt.sort_order ASC, dt.id ASC)
+          FROM product_design_templates dt
+          WHERE dt.product_id = p.id
+        ), '[]'::json) AS design_templates
        FROM products p
        LEFT JOIN categories c ON p.category_id = c.id
        ORDER BY p.created_at DESC LIMIT $1 OFFSET $2`,
@@ -2693,11 +2724,13 @@ const deleteProductAdmin = async (req, res) => {
   try {
     const { id } = req.params;
     const templateFiles = await getProductTemplateFiles(id);
+    const designTemplateKeys = await listProductDesignTemplateKeys(id);
     const result = await pool.query('DELETE FROM products WHERE id = $1 RETURNING id, image_url, gallery_images', [id]);
     if (result.rows.length === 0) {
       return res.status(404).json({ message: 'Product not found' });
     }
     await deleteStoredImageUrls(galleryFromRow(result.rows[0]));
+    await deleteStorageKeys(designTemplateKeys);
     for (const file of templateFiles) {
       try {
         await deleteByKey(file.storage_key);
@@ -2802,6 +2835,47 @@ const uploadProductTemplateFile = async (req, res) => {
   }
 };
 
+/** Admin: upload a design-editor template SVG. Stores the SVG plus a rendered PNG; returns both for the product form. */
+const uploadDesignTemplateFile = async (req, res) => {
+  if (!req.file || !req.file.buffer) {
+    return res.status(400).json({ message: 'No SVG file uploaded' });
+  }
+  if (!spacesConfigured()) {
+    return res.status(503).json({ message: 'DigitalOcean Spaces is not configured.' });
+  }
+  let stored;
+  try {
+    stored = await storeDesignTemplateSvg(req.file.buffer, req.file.originalname);
+  } catch (err) {
+    if (/SVG|Input buffer|unsupported image format/i.test(String(err?.message || ''))) {
+      return res.status(400).json({ message: 'Could not read this SVG. Export it again with a width/height or viewBox.' });
+    }
+    console.error('Upload design template error:', err);
+    return res.status(500).json({ message: 'Design template upload failed' });
+  }
+  res.json({ ...stored, original_name: req.file.originalname });
+};
+
+/** Admin: remove a design template upload that was never saved to a product. */
+const deleteUploadedDesignTemplateFile = async (req, res) => {
+  try {
+    const deleted = await deleteUnsavedDesignTemplateUpload(
+      req.body?.svg_storage_key,
+      req.body?.image_storage_key
+    );
+    if (!deleted) {
+      return res.status(409).json({ message: 'This design template is attached to a product.' });
+    }
+    res.json({ message: 'Design template upload deleted.' });
+  } catch (err) {
+    if (/storage key/i.test(String(err?.message || ''))) {
+      return res.status(400).json({ message: err.message });
+    }
+    console.error('Delete uploaded design template error:', err);
+    res.status(500).json({ message: 'Design template delete failed' });
+  }
+};
+
 const deleteUploadedProductTemplateFile = async (req, res) => {
   const storageKey = String(req.body?.storage_key || '').trim();
   if (!storageKey || !storageKey.startsWith('elmer/product-templates/')) {
@@ -2839,6 +2913,8 @@ module.exports = {
   uploadProductImage,
   uploadCategoryImage,
   uploadProductTemplateFile,
+  uploadDesignTemplateFile,
+  deleteUploadedDesignTemplateFile,
   deleteUploadedProductTemplateFile,
   getProductModifierConfigAdmin,
   updateProductModifierConfigAdmin,

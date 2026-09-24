@@ -64,6 +64,29 @@ const uploadProductTemplateFile = multer({
   limits: { fileSize: 50 * 1024 * 1024 },
 });
 
+const svgFileFilter = (req, file, cb) => {
+  const mime = String(file.mimetype || '').toLowerCase();
+  const name = String(file.originalname || '').toLowerCase();
+  if (mime === 'image/svg+xml' || name.endsWith('.svg')) {
+    cb(null, true);
+  } else {
+    cb(new Error('Design templates must be SVG files'), false);
+  }
+};
+const uploadDesignTemplateFile = multer({
+  storage: memoryStorage,
+  fileFilter: svgFileFilter,
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
+
+// Customer designs: editor exports (PNG/JPG) or uploaded artwork (PNG/JPG/PDF). design_state can carry
+// embedded images, so the text field limit is raised above multer's 1MB default.
+const uploadDesignFile = multer({
+  storage: memoryStorage,
+  fileFilter: guestArtworkFileFilter,
+  limits: { fileSize: 25 * 1024 * 1024, fieldSize: 15 * 1024 * 1024 },
+});
+
 // Employee profile: memory when using Spaces
 const uploadEmployeeMemory = multer({ storage: memoryStorage, fileFilter, limits: limit });
 const uploadArtworkFile = multer({ storage: memoryStorage, fileFilter: artworkFileFilter, limits: limit });
@@ -74,6 +97,8 @@ module.exports = {
   uploadProductImage,
   uploadCategoryImage,
   uploadProductTemplateFile,
+  uploadDesignTemplateFile,
+  uploadDesignFile,
   uploadEmployeeMemory,
   uploadArtworkFile,
   uploadGuestArtworkFile,

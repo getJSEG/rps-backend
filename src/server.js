@@ -214,6 +214,14 @@ async function ensureEmployeeColumns() {
     console.warn('addOrderCouponSnapshot:', err.message);
   }
   try {
+    const designPath = path.join(__dirname, 'migrations', 'zzAddDesignTemplatesAndDesigns.sql');
+    if (fs.existsSync(designPath)) {
+      await pool.query(fs.readFileSync(designPath, 'utf8'));
+    }
+  } catch (err) {
+    console.warn('zzAddDesignTemplatesAndDesigns:', err.message);
+  }
+  try {
     const minPath = path.join(__dirname, 'migrations', 'addCouponsMinimumPurchase.sql');
     if (fs.existsSync(minPath)) {
       await pool.query(fs.readFileSync(minPath, 'utf8'));
@@ -247,6 +255,7 @@ const fedexRoutes = require('./routes/fedex');
 const shippingBoxesRoutes = require('./routes/shippingBoxes');
 const appSettingsRoutes = require('./routes/appSettings');
 const couponRoutes = require('./routes/coupons');
+const designRoutes = require('./routes/designs');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -332,6 +341,7 @@ app.use('/api/fedex', fedexRoutes);
 app.use('/api/shipping-boxes', shippingBoxesRoutes);
 app.use('/api/settings', appSettingsRoutes);
 app.use('/api/coupons', couponRoutes);
+app.use('/api/designs', designRoutes);
 
 // 404 handler
 app.use((req, res) => {
