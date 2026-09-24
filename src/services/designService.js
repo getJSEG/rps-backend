@@ -1,4 +1,7 @@
+const fs = require('fs');
+const path = require('path');
 const pool = require('../config/database');
+const { deleteManyByUrl } = require('../utils/spaces');
 
 function readGuestSessionId(req) {
   if (req.guestSessionId) return req.guestSessionId;
@@ -50,4 +53,58 @@ async function attachVerifiedDesignsToCartJobs(req, cartItem) {
   return cartItem;
 }
 
-module.exports = { readGuestSessionId, designOwnerFilter, attachVerifiedDesignsToCartJobs };
+function designCleanupDays() {
+  const n = Number(process.env.DESIGN_CLEANUP_DAYS);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 14;
+}
+
+/** Local-disk files (Spaces not configured) are removed directly; deleteManyByUrl only handles Spaces. */
+async function deleteDesignFiles(urls) {
+  const localUrls = urls.filter((u) => u.startsWith('/uploads/'));
+  const remoteUrls = urls.filter((u) => !u.startsWith('/uploads/'));
+  for (const url of localUrls) {
+    const fullPath = path.join(__dirname, '../..', url);
+    try {
+      if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+    } catch (err) {
+      console.error('Design file delete failed:', url, err.message);
+    }
+  }
+  if (remoteUrls.length) await deleteManyByUrl(remoteUrls);
+}
+
+/**
+ * Delete design-tool designs nobody can reach any more: older than DESIGN_CLEANUP_DAYS (default 14),
+ * not on any cart job and not used as artwork on any order line. Designs in a cart are protected until the
+ * cart itself expires; ordered designs are kept for good. Admin templates and "My Artworks" are untouched.
+ * @returns {Promise<number>} number of designs removed
+ */
+async function deleteAbandonedDesigns() {
+  const result = await pool.query(
+    `DELETE FROM designs d
+     WHERE d.updated_at < NOW() - make_interval(days => $1)
+       AND NOT EXISTS (
+         SELECT 1 FROM order_items oi WHERE oi.customer_artwork_url = d.file_url
+       )
+       AND NOT EXISTS (
+         SELECT 1
+         FROM cart_items ci,
+              jsonb_array_elements(
+                CASE WHEN jsonb_typeof(ci.item_data->'jobs') = 'array' THEN ci.item_data->'jobs' ELSE '[]'::jsonb END
+              ) AS job
+         WHERE job->>'designId' = d.id::text
+       )
+     RETURNING d.file_url, d.original_file_url`,
+    [designCleanupDays()]
+  );
+  const urls = result.rows.flatMap((row) => [row.file_url, row.original_file_url]).filter(Boolean);
+  await deleteDesignFiles(urls);
+  return result.rowCount;
+}
+
+module.exports = {
+  readGuestSessionId,
+  designOwnerFilter,
+  attachVerifiedDesignsToCartJobs,
+  deleteAbandonedDesigns,
+};

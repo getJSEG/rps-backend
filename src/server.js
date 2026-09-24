@@ -8,6 +8,7 @@ require('dotenv').config();
 const pool = require('./config/database');
 const { startCartCleanupJob } = require('./jobs/cartCleanupJob');
 const { startAccountDeletionJob } = require('./jobs/accountDeletionJob');
+const { startDesignCleanupJob } = require('./jobs/designCleanupJob');
 
 /**
  * Warn about production settings that silently break customer email instead of erroring:
@@ -371,6 +372,7 @@ ensureBaseTables()
     warnOnProductionEmailConfig();
     startCartCleanupJob();
     startAccountDeletionJob();
+    startDesignCleanupJob();
   });
 
   server.on('error', (err) => {

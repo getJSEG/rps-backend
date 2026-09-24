@@ -221,6 +221,7 @@ function expandCartItemToOrderLines(item) {
         purchase_option_label: purchaseOptionLabel,
         // Set by the cart from a verified, approved design; never taken from checkout input.
         customer_artwork_url: j.designUrl || null,
+        design_id: j.designUrl && j.designId != null ? j.designId : null,
       };
     });
   }

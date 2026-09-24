@@ -343,6 +343,7 @@ const SQL = {
              'width_inches', oi.width_inches,
              'height_inches', oi.height_inches,
              'customer_artwork_url', oi.customer_artwork_url,
+             'design_id', oi.design_id,
              'selected_modifiers', oi.selected_modifiers,
              'modifier_total', oi.modifier_total,
              'base_unit_price', oi.base_unit_price,
@@ -433,7 +434,7 @@ const SQL = {
        SET status = $1
        WHERE id = $2 AND order_id = $3
        RETURNING id, order_id, status`,
-  SET_ORDER_ITEM_CUSTOMER_ARTWORK: `UPDATE order_items SET customer_artwork_url = $1 WHERE id = $2`,
+  SET_ORDER_ITEM_CUSTOMER_ARTWORK: `UPDATE order_items SET customer_artwork_url = $1, design_id = $3 WHERE id = $2`,
   ADVANCE_DESIGNED_ORDER_ITEMS_TO_PROCESSING: `UPDATE order_items
        SET status = 'processing'
        WHERE order_id = $1
@@ -490,7 +491,7 @@ const SQL = {
        RETURNING id`,
   UPDATE_ORDER_PAID_WITHOUT_STRIPE: `UPDATE orders SET payment_status = $1, status = $2, payment_method = $3, notes = COALESCE(notes, '') || $4 WHERE id = $5`,
   UPDATE_CUSTOMER_ARTWORK_ON_ORDER_ITEM: `UPDATE order_items oi
-    SET customer_artwork_url = $4
+    SET customer_artwork_url = $4, design_id = NULL
     FROM orders o
     WHERE oi.id = $1
       AND oi.order_id = $2
@@ -531,7 +532,7 @@ const SQL = {
       AND oi.order_id = $2
       AND lower(trim(COALESCE(o.status, ''))) IN ('awaiting_artwork', 'awaiting_customer_approval', 'on_hold', 'processing')`,
   UPDATE_CUSTOMER_ARTWORK_ON_ORDER_ITEM_BY_ORDER: `UPDATE order_items oi
-    SET customer_artwork_url = $3
+    SET customer_artwork_url = $3, design_id = NULL
     FROM orders o
     WHERE oi.id = $1
       AND oi.order_id = $2
@@ -1323,7 +1324,11 @@ async function createPendingStripeOrderWithItems({
       ]);
       // Approved design from the design tool; the line moves to processing once the order is paid.
       if (oi.customer_artwork_url) {
-        await client.query(SQL.SET_ORDER_ITEM_CUSTOMER_ARTWORK, [oi.customer_artwork_url, inserted.rows[0].id]);
+        await client.query(SQL.SET_ORDER_ITEM_CUSTOMER_ARTWORK, [
+          oi.customer_artwork_url,
+          inserted.rows[0].id,
+          oi.design_id ?? null,
+        ]);
       }
     }
     await client.query('COMMIT');

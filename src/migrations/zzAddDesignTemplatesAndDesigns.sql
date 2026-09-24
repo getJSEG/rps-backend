@@ -44,3 +44,6 @@ CREATE INDEX IF NOT EXISTS idx_designs_guest_session_id ON designs(guest_session
 
 -- Uploaded designs keep the customer's original image so "Edit my design" can reopen it with its edit layers.
 ALTER TABLE designs ADD COLUMN IF NOT EXISTS original_file_url TEXT;
+
+-- Order line artwork that came from the design tool; cleared when the artwork is replaced by a normal upload.
+ALTER TABLE order_items ADD COLUMN IF NOT EXISTS design_id INTEGER REFERENCES designs(id) ON DELETE SET NULL;
