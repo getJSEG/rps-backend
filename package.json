@@ -17,6 +17,7 @@
     "seed": "node src/migrations/seed.js",
     "seed:modifiers": "node src/migrations/seedModifiers.js",
     "seed-subcategory-products": "node src/migrations/seedSubcategoryProducts.js",
+    "seed:demo-products": "node src/migrations/seedDemoProducts.js",
     "create-admin": "node src/migrations/createAdminUser.js",
     "email:test": "node scripts/test-email-flow.js"
   },
