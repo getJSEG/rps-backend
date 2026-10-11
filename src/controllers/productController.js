@@ -11,7 +11,7 @@ const {
 const { getProductPricingConfig, validateAndCalculatePricing } = require('../services/pricingService');
 const { normalizeProductionTimeRules, validateProductionTimeRules } = require('../utils/productionTimeRules');
 const {
-  storeDesignTemplateSvg,
+  storeDesignTemplateFile,
   getProductDesignTemplates,
   parseDesignTemplatesInput,
   validateDesignTemplates,
@@ -2835,20 +2835,20 @@ const uploadProductTemplateFile = async (req, res) => {
   }
 };
 
-/** Admin: upload a design-editor template SVG. Stores the SVG plus a rendered PNG; returns both for the product form. */
+/** Admin: upload a design-editor template (SVG or PNG). Stored as uploaded, with no conversion. */
 const uploadDesignTemplateFile = async (req, res) => {
   if (!req.file || !req.file.buffer) {
-    return res.status(400).json({ message: 'No SVG file uploaded' });
+    return res.status(400).json({ message: 'No template file uploaded' });
   }
   if (!spacesConfigured()) {
     return res.status(503).json({ message: 'DigitalOcean Spaces is not configured.' });
   }
   let stored;
   try {
-    stored = await storeDesignTemplateSvg(req.file.buffer, req.file.originalname);
+    stored = await storeDesignTemplateFile(req.file.buffer);
   } catch (err) {
-    if (/SVG|Input buffer|unsupported image format/i.test(String(err?.message || ''))) {
-      return res.status(400).json({ message: 'Could not read this SVG. Export it again with a width/height or viewBox.' });
+    if (/SVG|PNG|Input buffer|unsupported image format/i.test(String(err?.message || ''))) {
+      return res.status(400).json({ message: 'Could not read this file. Upload a PNG, or an SVG with a width/height or viewBox.' });
     }
     console.error('Upload design template error:', err);
     return res.status(500).json({ message: 'Design template upload failed' });

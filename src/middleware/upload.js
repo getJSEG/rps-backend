@@ -67,10 +67,10 @@ const uploadProductTemplateFile = multer({
 const svgFileFilter = (req, file, cb) => {
   const mime = String(file.mimetype || '').toLowerCase();
   const name = String(file.originalname || '').toLowerCase();
-  if (mime === 'image/svg+xml' || name.endsWith('.svg')) {
+  if (mime === 'image/svg+xml' || mime === 'image/png' || name.endsWith('.svg') || name.endsWith('.png')) {
     cb(null, true);
   } else {
-    cb(new Error('Design templates must be SVG files'), false);
+    cb(new Error('Design templates must be SVG or PNG files'), false);
   }
 };
 const uploadDesignTemplateFile = multer({

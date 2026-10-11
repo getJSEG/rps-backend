@@ -4,57 +4,50 @@ const { uploadObjectFromBuffer, deleteByKey } = require('../utils/spaces');
 
 const STORAGE_PREFIX = 'elmer/design-templates';
 
-/** Longest side of the PNG the editor loads. Browsers struggle with canvases much larger than ~16MP. */
+/** Longest side of an SVG template on the editor canvas. Browsers struggle with canvases much larger than ~16MP. */
 function templateMaxPx() {
   const n = Number(process.env.DESIGN_TEMPLATE_MAX_PX);
   return Number.isFinite(n) && n >= 500 ? Math.floor(n) : 4000;
 }
 
 /**
- * Render an SVG to a white-backed PNG whose longest side is `templateMaxPx()`.
- * Rasterises at a density that lands on the target size directly, so the result is sharp rather than upscaled.
- * @returns {Promise<{ buffer: Buffer, width: number, height: number }>}
+ * Read the template's pixel size. PNGs keep their own size; an SVG has no pixels, so it is sized so its
+ * longest side is `templateMaxPx()` (the editor canvas size; the SVG itself stays vector).
+ * @returns {Promise<{ format: 'svg' | 'png', width: number, height: number }>}
  */
-async function renderSvgToPng(svgBuffer) {
-  const meta = await sharp(svgBuffer).metadata();
-  if (meta.format !== 'svg' || !meta.width || !meta.height) {
-    throw new Error('The file is not a valid SVG with a width and height (or viewBox).');
+async function readTemplateSize(buffer) {
+  const meta = await sharp(buffer).metadata();
+  if ((meta.format !== 'svg' && meta.format !== 'png') || !meta.width || !meta.height) {
+    throw new Error('The file is not a valid SVG (with a width and height or viewBox) or PNG.');
   }
-  const maxPx = templateMaxPx();
-  const longest = Math.max(meta.width, meta.height);
-  const density = Math.min(100000, Math.max(1, (72 * maxPx) / longest));
-  const { data, info } = await sharp(svgBuffer, { density })
-    .resize({ width: maxPx, height: maxPx, fit: 'inside' })
-    .flatten({ background: '#ffffff' })
-    .png()
-    .toBuffer({ resolveWithObject: true });
-  return { buffer: data, width: info.width, height: info.height };
+  if (meta.format === 'png') return { format: 'png', width: meta.width, height: meta.height };
+  const scale = templateMaxPx() / Math.max(meta.width, meta.height);
+  return {
+    format: 'svg',
+    width: Math.max(1, Math.round(meta.width * scale)),
+    height: Math.max(1, Math.round(meta.height * scale)),
+  };
 }
 
-/** Upload the SVG and its rendered PNG to Spaces. */
-async function storeDesignTemplateSvg(svgBuffer, originalName) {
-  const png = await renderSvgToPng(svgBuffer);
-  const svg = await uploadObjectFromBuffer(svgBuffer, STORAGE_PREFIX, {
-    contentType: 'image/svg+xml',
-    originalName,
+/**
+ * Upload the template exactly as the admin provided it (SVG stays SVG, PNG stays PNG).
+ * One file is stored, so the svg_* and image_* fields of the result point to the same object;
+ * the editor loads `image_*`.
+ */
+async function storeDesignTemplateFile(buffer) {
+  const size = await readTemplateSize(buffer);
+  const stored = await uploadObjectFromBuffer(buffer, STORAGE_PREFIX, {
+    contentType: size.format === 'svg' ? 'image/svg+xml' : 'image/png',
+    // Name by the detected format so the stored extension always matches the content.
+    originalName: `template.${size.format}`,
   });
-  let image;
-  try {
-    image = await uploadObjectFromBuffer(png.buffer, STORAGE_PREFIX, {
-      contentType: 'image/png',
-      originalName: 'template.png',
-    });
-  } catch (err) {
-    await deleteByKey(svg.key).catch(() => {});
-    throw err;
-  }
   return {
-    svg_url: svg.url,
-    svg_storage_key: svg.key,
-    image_url: image.url,
-    image_storage_key: image.key,
-    image_width_px: png.width,
-    image_height_px: png.height,
+    svg_url: stored.url,
+    svg_storage_key: stored.key,
+    image_url: stored.url,
+    image_storage_key: stored.key,
+    image_width_px: size.width,
+    image_height_px: size.height,
   };
 }
 
@@ -91,7 +84,7 @@ function validateDesignTemplates(templates) {
     const label = t.name || 'Design template';
     if (!t.name) return 'Each design template needs a name.';
     if (!t.svg_url || !t.image_url || !(t.image_width_px > 0) || !(t.image_height_px > 0)) {
-      return `${label}: upload the SVG file.`;
+      return `${label}: upload the SVG or PNG file.`;
     }
     if (
       !t.svg_storage_key.startsWith(`${STORAGE_PREFIX}/`) ||
@@ -104,7 +97,7 @@ function validateDesignTemplates(templates) {
 }
 
 function templateStorageKeys(t) {
-  return [t.svg_storage_key, t.image_storage_key].filter(Boolean);
+  return [...new Set([t.svg_storage_key, t.image_storage_key].filter(Boolean))];
 }
 
 async function deleteStorageKeys(keys) {
@@ -194,7 +187,7 @@ async function listProductDesignTemplateKeys(productId) {
  * @returns {Promise<boolean>} false when the files are attached to a product and were left alone
  */
 async function deleteUnsavedDesignTemplateUpload(svgStorageKey, imageStorageKey) {
-  const keys = [svgStorageKey, imageStorageKey].map((k) => String(k || '').trim()).filter(Boolean);
+  const keys = [...new Set([svgStorageKey, imageStorageKey].map((k) => String(k || '').trim()).filter(Boolean))];
   if (keys.length === 0 || keys.some((k) => !k.startsWith(`${STORAGE_PREFIX}/`))) {
     throw new Error('A valid design template storage key is required.');
   }
@@ -212,7 +205,7 @@ async function deleteUnsavedDesignTemplateUpload(svgStorageKey, imageStorageKey)
 module.exports = {
   STORAGE_PREFIX,
   deleteUnsavedDesignTemplateUpload,
-  storeDesignTemplateSvg,
+  storeDesignTemplateFile,
   getProductDesignTemplates,
   parseDesignTemplatesInput,
   validateDesignTemplates,
