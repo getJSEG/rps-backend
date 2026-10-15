@@ -88,7 +88,7 @@ const uploadDesignTemplateFile = multer({
 const uploadDesignFile = multer({
   storage: memoryStorage,
   fileFilter: guestArtworkFileFilter,
-  limits: { fileSize: 25 * 1024 * 1024, fieldSize: 15 * 1024 * 1024 },
+  limits: { fileSize: 50 * 1024 * 1024, fieldSize: 15 * 1024 * 1024 },
 });
 
 // Employee profile: memory when using Spaces
