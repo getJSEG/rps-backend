@@ -41,6 +41,7 @@ function normalizeMime(file) {
   const name = String(file?.originalname || '').toLowerCase();
   if (mime === 'application/pdf' || mime === 'application/x-pdf' || name.endsWith('.pdf')) return 'application/pdf';
   if (mime === 'image/jpg') return 'image/jpeg';
+  if (mime === 'image/svg+xml' || name.endsWith('.svg')) return 'image/svg+xml';
   return mime;
 }
 
