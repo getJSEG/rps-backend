@@ -16,6 +16,9 @@ const {
   uploadProductImage,
   uploadCategoryImage,
   uploadProductTemplateFile,
+  uploadDesignTemplateFile,
+  deleteUploadedDesignTemplateFile,
+  getDesignTemplateImage,
   deleteUploadedProductTemplateFile,
   getProductModifierConfigAdmin,
   updateProductModifierConfigAdmin,
@@ -47,12 +50,14 @@ const {
   uploadProductImage: uploadProductImageMw,
   uploadCategoryImage: uploadCategoryImageMw,
   uploadProductTemplateFile: uploadProductTemplateFileMw,
+  uploadDesignTemplateFile: uploadDesignTemplateFileMw,
 } = require('../middleware/upload');
 
 router.get('/', optionalAuth, getAllProducts);
 router.get('/categories', getCategories);
 router.get('/related', optionalAuth, getRelatedProducts);
 router.post('/:id/price-preview', optionalAuth, previewProductPrice);
+router.get('/design-templates/:templateId/image', getDesignTemplateImage);
 
 // Admin: products and categories (must be before /:id)
 router.get('/admin/products', authenticateToken, requireAdmin, getAllProductsAdmin);
@@ -75,6 +80,13 @@ router.post('/admin/upload-template-file', authenticateToken, requireAdmin, (req
     next();
   });
 }, uploadProductTemplateFile);
+router.post('/admin/upload-design-template', authenticateToken, requireAdmin, (req, res, next) => {
+  uploadDesignTemplateFileMw.single('file')(req, res, (err) => {
+    if (err) return res.status(400).json({ message: err.message || 'File upload failed' });
+    next();
+  });
+}, uploadDesignTemplateFile);
+router.delete('/admin/upload-design-template', authenticateToken, requireAdmin, deleteUploadedDesignTemplateFile);
 router.delete('/admin/upload-template-file', authenticateToken, requireAdmin, deleteUploadedProductTemplateFile);
 router.put('/admin/products/:id', authenticateToken, requireAdmin, updateProduct);
 router.get('/admin/products/:id/modifiers', authenticateToken, requireAdmin, getProductModifierConfigAdmin);

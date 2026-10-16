@@ -3,6 +3,7 @@ const { calculateCartItemFromInput } = require('../services/pricingService');
 const { computeShippingFromCartItems, computeTaxAndTotal, roundMoney2 } = require('../services/orderTotalsService');
 const { isPersistedFedexQuotedServiceType } = require('../utils/fedexQuoteServiceType');
 const pool = require('../config/database');
+const { attachVerifiedDesignsToCartJobs } = require('../services/designService');
 
 function cartContext(req) {
   const userId = req.user?.id ?? null;
@@ -98,6 +99,7 @@ const addToCart = async (req, res) => {
     // FedEx fields from logged-in PDP (FedEx REST serviceType + shippingRateAmount) flow through
     // calculateCartItemFromInput → item_data; GET /cart merges id + item_data for the storefront.
     const itemData = await calculateCartItemFromInput(rawItemData);
+    await attachVerifiedDesignsToCartJobs(req, itemData);
     if (
       process.env.NODE_ENV === 'development' &&
       userId &&
@@ -113,6 +115,7 @@ const addToCart = async (req, res) => {
   } catch (error) {
     console.error('Add to cart error:', error);
     const code = /required|invalid|must|missing|not found|supported/i.test(String(error.message || '')) ? 400 : 500;
+    if (error.statusCode === 400) return res.status(400).json({ message: error.message });
     res.status(code).json({ message: 'Failed to add to cart' });
   }
 };
@@ -175,6 +178,7 @@ const updateCartItem = async (req, res) => {
 
     const merged = mergeCartUpdatePreservingFedexQuote(existingRow.item_data, incoming);
     const itemData = await calculateCartItemFromInput(merged);
+    await attachVerifiedDesignsToCartJobs(req, itemData);
 
     const result = userId
       ? await cartRepository.updateCartItemDataByUser(id, userId, itemData)
@@ -184,6 +188,7 @@ const updateCartItem = async (req, res) => {
   } catch (error) {
     console.error('Update cart error:', error);
     const code = /required|invalid|must|missing|not found|supported/i.test(String(error.message || '')) ? 400 : 500;
+    if (error.statusCode === 400) return res.status(400).json({ message: error.message });
     res.status(code).json({ message: 'Failed to update cart' });
   }
 };

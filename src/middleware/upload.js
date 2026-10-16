@@ -13,11 +13,13 @@ const fileFilter = (req, file, cb) => {
 
 const artworkFileFilter = (req, file, cb) => {
   const mime = String(file.mimetype || "").toLowerCase();
-  const allowed = new Set(["image/png", "image/jpeg", "application/pdf"]);
-  if (allowed.has(mime)) {
+  const name = String(file.originalname || "").toLowerCase().trim();
+  const allowed = new Set(["image/png", "image/jpeg", "application/pdf", "image/svg+xml"]);
+  
+  if (allowed.has(mime) || name.endsWith('.svg')) {
     cb(null, true);
   } else {
-    cb(new Error("Only PNG, JPG and single-page PDF files are allowed"), false);
+    cb(new Error("Only PNG, JPG, SVG and single-page PDF files are allowed"), false);
   }
 };
 
@@ -28,13 +30,15 @@ const artworkFileFilter = (req, file, cb) => {
 const guestArtworkFileFilter = (req, file, cb) => {
   const mime = String(file.mimetype || "").toLowerCase().trim();
   const name = String(file.originalname || "").toLowerCase().trim();
-  const allowedImageMimes = new Set(["image/png", "image/jpeg"]);
+  const allowedImageMimes = new Set(["image/png", "image/jpeg", "image/svg+xml"]);
   const allowedPdfMimes = new Set(["application/pdf", "application/x-pdf", "application/acrobat"]);
   const isPdfByName = name.endsWith(".pdf");
-  if (allowedImageMimes.has(mime) || allowedPdfMimes.has(mime) || isPdfByName) {
+  const isSvgByName = name.endsWith(".svg");
+  
+  if (allowedImageMimes.has(mime) || allowedPdfMimes.has(mime) || isPdfByName || isSvgByName) {
     cb(null, true);
   } else {
-    cb(new Error("Only PNG, JPG and single-page PDF files are allowed"), false);
+    cb(new Error("Only PNG, JPG, SVG and single-page PDF files are allowed"), false);
   }
 };
 
@@ -64,6 +68,29 @@ const uploadProductTemplateFile = multer({
   limits: { fileSize: 50 * 1024 * 1024 },
 });
 
+const svgFileFilter = (req, file, cb) => {
+  const mime = String(file.mimetype || '').toLowerCase();
+  const name = String(file.originalname || '').toLowerCase();
+  if (mime === 'image/svg+xml' || mime === 'image/png' || name.endsWith('.svg') || name.endsWith('.png')) {
+    cb(null, true);
+  } else {
+    cb(new Error('Design templates must be SVG or PNG files'), false);
+  }
+};
+const uploadDesignTemplateFile = multer({
+  storage: memoryStorage,
+  fileFilter: svgFileFilter,
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
+
+// Customer designs: editor exports (SVG/PNG/JPG) or uploaded artwork (SVG/PNG/JPG/PDF). design_state can carry
+// embedded images, so the text field limit is raised above multer's 1MB default.
+const uploadDesignFile = multer({
+  storage: memoryStorage,
+  fileFilter: guestArtworkFileFilter,
+  limits: { fileSize: 50 * 1024 * 1024, fieldSize: 15 * 1024 * 1024 },
+});
+
 // Employee profile: memory when using Spaces
 const uploadEmployeeMemory = multer({ storage: memoryStorage, fileFilter, limits: limit });
 const uploadArtworkFile = multer({ storage: memoryStorage, fileFilter: artworkFileFilter, limits: limit });
@@ -74,6 +101,8 @@ module.exports = {
   uploadProductImage,
   uploadCategoryImage,
   uploadProductTemplateFile,
+  uploadDesignTemplateFile,
+  uploadDesignFile,
   uploadEmployeeMemory,
   uploadArtworkFile,
   uploadGuestArtworkFile,

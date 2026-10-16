@@ -867,12 +867,15 @@ function buildCartSnapshot(pricing, input, productRow) {
     jobs = jobsInput.map((job, idx) => {
       const q = Math.max(1, parseInt(String(job.quantity ?? 1), 10) || 1);
       quantity += q;
+      // designUrl is filled in by attachVerifiedDesignsToCartJobs from the stored design, never from input.
+      const designId = parseInt(String(job.designId ?? job.design_id ?? ''), 10);
       return {
         id: String(job.id || `job-${idx + 1}`),
         jobName: String(job.jobName || job.job_name || `Job ${idx + 1}`),
         quantity: q,
         unitPrice: pricing.unitPrice,
         lineSubtotal: pricing.unitPrice * q,
+        ...(Number.isFinite(designId) && designId > 0 ? { designId } : {}),
       };
     });
   } else {

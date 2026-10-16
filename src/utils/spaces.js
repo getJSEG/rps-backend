@@ -58,6 +58,7 @@ function extFromMime(mime) {
   if (m === 'image/png') return '.png';
   if (m === 'image/webp') return '.webp';
   if (m === 'image/gif') return '.gif';
+  if (m === 'image/svg+xml') return '.svg';
   if (m === 'image/jpeg' || m === 'image/jpg') return '.jpg';
   return '.jpg';
 }

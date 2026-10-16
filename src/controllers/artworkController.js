@@ -92,7 +92,39 @@ async function validateArtworkBufferAgainstOrderDimensions(fileBuffer, mimeType,
   return dimensions;
 }
 
+/** Parse an SVG length ("4608", "4608px", "4608.5") to pixels; null for relative units like "100%". */
+function svgLengthToPx(value) {
+  const match = String(value || "").trim().match(/^([0-9]*\.?[0-9]+)(px)?$/i);
+  return match ? Number(match[1]) : null;
+}
+
+/**
+ * Size of an SVG from its root <svg> tag. Read directly instead of through sharp: editor exports embed photos as
+ * base64, and libxml refuses SVGs over ~10MB, which would reject large designs.
+ */
+function readSvgDimensions(fileBuffer) {
+  // The root tag sits near the top; embedded images come later, so the first 64KB is enough.
+  const head = fileBuffer.subarray(0, 64 * 1024).toString("utf8");
+  const rootTag = head.match(/<svg\b[^>]*>/i)?.[0];
+  if (!rootTag) throw new Error("Could not read SVG dimensions.");
+  const attr = (name) => rootTag.match(new RegExp(`\\s${name}\\s*=\\s*["']([^"']*)["']`, "i"))?.[1];
+  let width = svgLengthToPx(attr("width"));
+  let height = svgLengthToPx(attr("height"));
+  if (!width || !height) {
+    const viewBox = String(attr("viewBox") || "").trim().split(/[\s,]+/).map(Number);
+    if (viewBox.length === 4 && viewBox[2] > 0 && viewBox[3] > 0) {
+      width = viewBox[2];
+      height = viewBox[3];
+    }
+  }
+  if (!width || !height) throw new Error("Could not read SVG dimensions.");
+  return { widthPx: Math.round(width), heightPx: Math.round(height), pdfPageCount: null, extension: ".svg" };
+}
+
 async function readArtworkDimensions(fileBuffer, mimeType) {
+  if (mimeType === "image/svg+xml") {
+    return readSvgDimensions(fileBuffer);
+  }
   if (mimeType === "application/pdf") {
     const pdfDoc = await PDFDocument.load(fileBuffer);
     const pageCount = pdfDoc.getPageCount();
