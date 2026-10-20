@@ -1033,7 +1033,7 @@ async function productExists(productId) {
 }
 
 function generateOrderNumber() {
-  return `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+  return `ORD-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
 }
 
 /**

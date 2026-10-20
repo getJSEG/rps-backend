@@ -82,7 +82,7 @@ function isOrderStatusLocked(currentStatus) {
 }
 
 function generateOrderNumber() {
-  return `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+  return `ORD-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
 }
 
 /** Money for DECIMAL(14,2): finite, 2 decimal places (avoids float dust and overflow). */
