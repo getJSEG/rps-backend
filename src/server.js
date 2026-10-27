@@ -266,6 +266,7 @@ const shippingBoxesRoutes = require('./routes/shippingBoxes');
 const appSettingsRoutes = require('./routes/appSettings');
 const couponRoutes = require('./routes/coupons');
 const designRoutes = require('./routes/designs');
+const nexusRoutes = require('./routes/nexus');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -352,6 +353,7 @@ app.use('/api/shipping-boxes', shippingBoxesRoutes);
 app.use('/api/settings', appSettingsRoutes);
 app.use('/api/coupons', couponRoutes);
 app.use('/api/designs', designRoutes);
+app.use('/api/nexus', nexusRoutes);
 
 // 404 handler
 app.use((req, res) => {

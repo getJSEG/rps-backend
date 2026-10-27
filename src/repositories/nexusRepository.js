@@ -16,7 +16,8 @@ const SQL = {
   NEEDS_RECALCULATION: `SELECT EXISTS (
        SELECT 1 FROM nexus_states WHERE period_end IS DISTINCT FROM $1::date
      ) AS needed`,
-  SELECT_STATES: `SELECT * FROM nexus_states ORDER BY name`,
+  SELECT_STATES: `SELECT *, period_start::text AS period_start_text, period_end::text AS period_end_text
+     FROM nexus_states ORDER BY name`,
   /** Completed, not fully refunded orders per ship-to state between two dates (inclusive). */
   SELECT_TOTALS_BY_STATE: `SELECT ship_to_state AS code,
        ROUND(SUM(net), 2)::numeric AS sales,
@@ -46,6 +47,23 @@ const SQL = {
            updated_at = CURRENT_TIMESTAMP
      WHERE code = $1
      RETURNING *`,
+  SELECT_STATE: `SELECT * FROM nexus_states WHERE code = $1`,
+  UPDATE_THRESHOLD: `UPDATE nexus_states
+       SET sales_threshold = $2,
+           transaction_threshold = $3,
+           threshold_rule = $4,
+           updated_at = CURRENT_TIMESTAMP
+     WHERE code = $1
+     RETURNING *`,
+  /** With onlyFromAuto, manual and reached statuses are left alone (used after threshold edits). */
+  UPDATE_STATUS: `UPDATE nexus_states
+       SET status_changed_at = CASE WHEN status <> $2 THEN CURRENT_TIMESTAMP ELSE status_changed_at END,
+           status = $2,
+           updated_at = CURRENT_TIMESTAMP
+     WHERE code = $1
+       AND (NOT $3::boolean OR status IN ('not_collecting', 'close_warning'))
+     RETURNING *`,
+  COUNT_ATTENTION: `SELECT COUNT(*)::int AS count FROM nexus_states WHERE status IN ('close_warning', 'reached')`,
 };
 
 async function getRollingPeriod() {
@@ -99,10 +117,35 @@ async function saveRollups(rollups, period) {
   }
 }
 
+async function getState(code) {
+  const r = await pool.query(SQL.SELECT_STATE, [code]);
+  return r.rows[0] || null;
+}
+
+async function updateThreshold(code, { salesThreshold, transactionThreshold, rule }) {
+  const r = await pool.query(SQL.UPDATE_THRESHOLD, [code, salesThreshold, transactionThreshold, rule]);
+  return r.rows[0] || null;
+}
+
+/** @returns {Promise<object|null>} updated row, or null when nothing changed (unknown code or guarded) */
+async function updateStatus(code, status, { onlyFromAuto = false } = {}) {
+  const r = await pool.query(SQL.UPDATE_STATUS, [code, status, onlyFromAuto]);
+  return r.rows[0] || null;
+}
+
+async function countAttention() {
+  const r = await pool.query(SQL.COUNT_ATTENTION);
+  return r.rows[0].count;
+}
+
 module.exports = {
   getRollingPeriod,
   needsRecalculation,
   listStates,
   getTotalsByState,
   saveRollups,
+  getState,
+  updateThreshold,
+  updateStatus,
+  countAttention,
 };
