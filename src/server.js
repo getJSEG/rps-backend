@@ -9,6 +9,7 @@ const pool = require('./config/database');
 const { startCartCleanupJob } = require('./jobs/cartCleanupJob');
 const { startAccountDeletionJob } = require('./jobs/accountDeletionJob');
 const { startDesignCleanupJob } = require('./jobs/designCleanupJob');
+const { startNexusJob } = require('./jobs/nexusJob');
 
 /**
  * Warn about production settings that silently break customer email instead of erroring:
@@ -381,6 +382,7 @@ ensureBaseTables()
     startCartCleanupJob();
     startAccountDeletionJob();
     startDesignCleanupJob();
+    startNexusJob();
   });
 
   server.on('error', (err) => {

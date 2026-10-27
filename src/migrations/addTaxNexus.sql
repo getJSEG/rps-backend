@@ -118,8 +118,4 @@ LEFT JOIN nexus_states ns
 WHERE o.id = src.id
   AND src.addr IS NOT NULL;
 
--- Completion time was never recorded; last update is the closest we have for old completed orders.
-UPDATE orders
-SET completed_at = COALESCE(updated_at, created_at)
-WHERE completed_at IS NULL
-  AND lower(trim(COALESCE(status, ''))) IN ('completed', 'complete', 'delivered');
+-- completed_at is not backfilled: nexus only counts orders placed after this feature went live.
