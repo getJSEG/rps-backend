@@ -11,6 +11,8 @@ const couponRepository = require('../repositories/couponRepository');
 const {
   normalizeCouponCode,
   computeDiscountAmount,
+  isShippingCoupon,
+  computeShippingDiscountAmount,
   allocateDiscountToLines,
   couponMinimumNotMetMessage,
 } = require('../services/couponService');
@@ -1103,6 +1105,9 @@ const createOrderWithPaymentIntent = async (req, res) => {
     let couponDiscountAmount = 0;
     let couponDiscountType = null;
     let couponDiscountValue = null;
+    /** Free-shipping or %-off-shipping coupon; applied once the shipping charge is known below. */
+    let shippingCoupon = null;
+    let couponShippingDiscountAmount = 0;
     if (requestedCouponCode) {
       const coupon = await couponRepository.findActiveByCode(requestedCouponCode);
       if (!coupon) {
@@ -1112,20 +1117,28 @@ const createOrderWithPaymentIntent = async (req, res) => {
       if (minMsg) {
         return res.status(400).json({ message: minMsg });
       }
-      const discount = computeDiscountAmount(coupon, subtotalSum);
-      if (discount <= 0) {
-        return res.status(400).json({ message: 'This coupon does not apply to the current order.' });
-      }
-      const allocated = allocateDiscountToLines(orderItems, discount);
-      orderItems = allocated.lines;
-      couponDiscountAmount = allocated.allocated;
       couponId = coupon.id;
       couponCode = coupon.code;
-      const typeRaw = String(coupon.discountType || coupon.discount_type || '').toLowerCase();
-      couponDiscountType = typeRaw === 'percent' || typeRaw === 'fixed' ? typeRaw : null;
-      const valueRaw = Number(coupon.discountValue ?? coupon.discount_value);
-      couponDiscountValue = Number.isFinite(valueRaw) && valueRaw > 0 ? valueRaw : null;
-      subtotalSum = roundMoney2(orderItems.reduce((s, o) => s + o.total_price, 0));
+      if (isShippingCoupon(coupon)) {
+        // Products keep full price; the shipping discount is applied once shipping is known below.
+        shippingCoupon = coupon;
+        couponDiscountType = String(coupon.discountType || '').toLowerCase();
+        const valueRaw = Number(coupon.discountValue ?? coupon.discount_value);
+        couponDiscountValue = Number.isFinite(valueRaw) && valueRaw > 0 ? valueRaw : null;
+      } else {
+        const discount = computeDiscountAmount(coupon, subtotalSum);
+        if (discount <= 0) {
+          return res.status(400).json({ message: 'This coupon does not apply to the current order.' });
+        }
+        const allocated = allocateDiscountToLines(orderItems, discount);
+        orderItems = allocated.lines;
+        couponDiscountAmount = allocated.allocated;
+        const typeRaw = String(coupon.discountType || coupon.discount_type || '').toLowerCase();
+        couponDiscountType = typeRaw === 'percent' || typeRaw === 'fixed' ? typeRaw : null;
+        const valueRaw = Number(coupon.discountValue ?? coupon.discount_value);
+        couponDiscountValue = Number.isFinite(valueRaw) && valueRaw > 0 ? valueRaw : null;
+        subtotalSum = roundMoney2(orderItems.reduce((s, o) => s + o.total_price, 0));
+      }
     }
     let shippingSum = shippingComputed.shippingSum;
     let shippingMethod = shippingComputed.shippingMethod;
@@ -1160,6 +1173,13 @@ const createOrderWithPaymentIntent = async (req, res) => {
         carrierServiceType = freeShippingResult.carrierServiceType;
       if (freeShippingResult.shippingEstimatedDelivery != null || freeShippingResult.shippingEstimatedDelivery === null)
         shippingEstimatedDelivery = freeShippingResult.shippingEstimatedDelivery;
+      if (shippingCoupon && shippingSum > 0) {
+        // Discount whatever service the buyer picked. Unlike the site-wide rule above, the method and
+        // FedEx service stay on the order so admin can still create the label the shop pays for.
+        couponShippingDiscountAmount = computeShippingDiscountAmount(shippingCoupon, shippingSum);
+        shippingSum = roundMoney2(shippingSum - couponShippingDiscountAmount);
+        shippingCharge = roundMoney2(shippingCharge - couponShippingDiscountAmount);
+      }
     }
     let taxPostalCode = '';
     if (userId && shippingAddressId != null) {
@@ -1231,6 +1251,7 @@ const createOrderWithPaymentIntent = async (req, res) => {
       couponDiscountAmount,
       couponDiscountType,
       couponDiscountValue,
+      couponShippingDiscountAmount,
     });
 
     if (!shouldUseStripePaymentIntent()) {
@@ -1261,6 +1282,7 @@ const createOrderWithPaymentIntent = async (req, res) => {
         total: totals.total,
         couponCode,
         couponDiscountAmount,
+        couponShippingDiscountAmount,
       });
     }
 
@@ -1297,6 +1319,7 @@ const createOrderWithPaymentIntent = async (req, res) => {
       total: totals.total,
       couponCode,
       couponDiscountAmount,
+      couponShippingDiscountAmount,
     });
   } catch (error) {
     console.error('Create order with payment intent error:', error);

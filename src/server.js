@@ -230,6 +230,14 @@ async function ensureEmployeeColumns() {
   } catch (err) {
     console.warn('addCouponsMinimumPurchase:', err.message);
   }
+  try {
+    const freeShipPath = path.join(__dirname, 'migrations', 'addCouponsFreeShipping.sql');
+    if (fs.existsSync(freeShipPath)) {
+      await pool.query(fs.readFileSync(freeShipPath, 'utf8'));
+    }
+  } catch (err) {
+    console.warn('addCouponsFreeShipping:', err.message);
+  }
 }
 
 // Import routes
