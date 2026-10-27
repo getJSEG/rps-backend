@@ -230,6 +230,14 @@ async function ensureEmployeeColumns() {
   } catch (err) {
     console.warn('addCouponsMinimumPurchase:', err.message);
   }
+  try {
+    const nexusPath = path.join(__dirname, 'migrations', 'addTaxNexus.sql');
+    if (fs.existsSync(nexusPath)) {
+      await pool.query(fs.readFileSync(nexusPath, 'utf8'));
+    }
+  } catch (err) {
+    console.warn('addTaxNexus:', err.message);
+  }
 }
 
 // Import routes

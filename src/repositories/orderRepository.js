@@ -426,9 +426,12 @@ const SQL = {
        LEFT JOIN addresses ba ON o.billing_address_id = ba.id
        WHERE o.id = $1
        GROUP BY o.id, u.email, u.full_name`,
-  UPDATE_ORDER_STATUS: `UPDATE orders 
-       SET status = $1, updated_at = CURRENT_TIMESTAMP 
-       WHERE id = $2 
+  UPDATE_ORDER_STATUS: `UPDATE orders
+       SET status = $1::text,
+           completed_at = CASE WHEN lower(trim($1::text)) IN ('completed', 'complete', 'delivered')
+             THEN COALESCE(completed_at, CURRENT_TIMESTAMP) ELSE completed_at END,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2
        RETURNING *`,
   UPDATE_ORDER_ITEM_STATUS: `UPDATE order_items
        SET status = $1
@@ -452,9 +455,38 @@ const SQL = {
        RETURNING *`,
   DELETE_ORDER: 'DELETE FROM orders WHERE id = $1 RETURNING id',
   PRODUCT_EXISTS: 'SELECT id FROM products WHERE id = $1',
-  INSERT_ORDER_ADMIN_CART: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, notes)
-         VALUES ($1, $2, $3, $4, $5, $6)
+  INSERT_ORDER_ADMIN_CART: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, notes, completed_at)
+         VALUES ($1, $2, $3, $4::text, $5, $6,
+           CASE WHEN lower(trim($4::text)) IN ('completed', 'complete', 'delivered') THEN CURRENT_TIMESTAMP END)
          RETURNING *`,
+  /** Freeze where the order ships (pickup store, guest snapshot, or address book row) for sales tax nexus. */
+  SNAPSHOT_ORDER_SHIP_TO: `UPDATE orders o
+       SET shipping_address_snapshot = src.addr,
+           ship_to_state = ns.code
+       FROM (
+         SELECT o2.id,
+           COALESCE(
+             CASE WHEN o2.shipping_mode = 'store_pickup' AND sp.id IS NOT NULL THEN jsonb_build_object(
+               'street_address', sp.street_address, 'address_line2', sp.address_line2, 'city', sp.city,
+               'state', sp.state, 'postcode', sp.postcode, 'country', sp.country, 'label', sp.label
+             ) END,
+             CASE WHEN jsonb_typeof(o2.guest_checkout -> 'shippingAddress') = 'object'
+               THEN o2.guest_checkout -> 'shippingAddress' END,
+             CASE WHEN sa.id IS NOT NULL THEN jsonb_build_object(
+               'street_address', sa.street_address, 'address_line2', sa.address_line2, 'city', sa.city,
+               'state', sa.state, 'postcode', sa.postcode, 'country', sa.country
+             ) END
+           ) AS addr
+         FROM orders o2
+         LEFT JOIN store_pickup_addresses sp ON sp.id = o2.store_pickup_address_id
+         LEFT JOIN addresses sa ON sa.id = o2.shipping_address_id
+         WHERE o2.id = $1
+       ) src
+       LEFT JOIN nexus_states ns
+         ON ns.code = upper(trim(src.addr ->> 'state'))
+         OR lower(ns.name) = lower(trim(src.addr ->> 'state'))
+       WHERE o.id = src.id
+         AND src.addr IS NOT NULL`,
   INSERT_ORDER_ITEM_ADMIN_WITH_JOB: `INSERT INTO order_items (order_id, product_id, product_name, job_name, quantity, unit_price, total_price, image_url, width_inches, height_inches, selected_modifiers, selection_mode, graphic_scenario_enabled, modifier_total, base_unit_price, purchase_option_key, purchase_option_label)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15, $16, $17)`,
   INSERT_ORDER_ITEM_ADMIN_NO_JOB: `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price, image_url, width_inches, height_inches, selected_modifiers, selection_mode, graphic_scenario_enabled, modifier_total, base_unit_price, purchase_option_key, purchase_option_label)
@@ -676,6 +708,7 @@ async function createOrderWithItems({
         item.discount_amount ?? item.discountAmount ?? 0,
       ]);
     }
+    await client.query(SQL.SNAPSHOT_ORDER_SHIP_TO, [order.id]);
     await client.query('COMMIT');
     const completeOrder = await pool.query(SQL.SELECT_ORDER_WITH_ITEMS_AGG, [order.id]);
     return completeOrder.rows[0];
@@ -1331,6 +1364,7 @@ async function createPendingStripeOrderWithItems({
         ]);
       }
     }
+    await client.query(SQL.SNAPSHOT_ORDER_SHIP_TO, [orderId]);
     await client.query('COMMIT');
     return { orderId, orderNumber: order.order_number };
   } catch (e) {
