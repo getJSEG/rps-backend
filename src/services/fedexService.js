@@ -567,6 +567,46 @@ function mergeFedexRates(rateGroups) {
   return Array.from(byService.values()).sort((a, b) => Number(a.totalCharge) - Number(b.totalCharge));
 }
 
+/**
+ * Customers pick from three simple shipping tiers instead of every FedEx service. Each tier is backed by the
+ * cheapest FedEx service in its group; `serviceType` stays the real FedEx code so checkout re-quotes and
+ * admin label creation keep working. First matching tier wins (GROUND_ECONOMY is Economy, not Express).
+ */
+const SHIPPING_TIERS = [
+  { key: 'economy', label: 'Economy', match: /GROUND|SMART_POST|ECONOMY/ },
+  { key: 'standard', label: 'Standard', match: /2_DAY|EXPRESS_SAVER/ },
+  { key: 'express', label: 'Express', match: /OVERNIGHT|PRIORITY|FIRST/ },
+];
+
+function shippingTierForServiceType(serviceType) {
+  const code = String(serviceType || '').trim().toUpperCase();
+  if (!code) return null;
+  return SHIPPING_TIERS.find((tier) => tier.match.test(code)) || null;
+}
+
+function withShippingTier(rate) {
+  if (!rate) return rate;
+  const tier = shippingTierForServiceType(rate.serviceType);
+  if (!tier) return rate;
+  return { ...rate, tier: tier.key, serviceName: tier.label, carrierServiceName: rate.serviceName };
+}
+
+/** At most one rate per tier (the cheapest), in Economy → Standard → Express order. Services outside every tier are dropped. */
+function toShippingTiers(rates) {
+  const cheapestByTier = new Map();
+  for (const rate of Array.isArray(rates) ? rates : []) {
+    const tier = shippingTierForServiceType(rate?.serviceType);
+    if (!tier) continue;
+    const existing = cheapestByTier.get(tier.key);
+    if (!existing || Number(rate.totalCharge) < Number(existing.totalCharge)) {
+      cheapestByTier.set(tier.key, rate);
+    }
+  }
+  return SHIPPING_TIERS.filter((tier) => cheapestByTier.has(tier.key)).map((tier) =>
+    withShippingTier(cheapestByTier.get(tier.key))
+  );
+}
+
 async function getRateQuotes(destinationInput, packagesInput) {
   const rawRecipientAddr = buildRecipientAddressForRating(destinationInput);
   const postalCode = rawRecipientAddr.postalCode;
@@ -585,7 +625,7 @@ async function getRateQuotes(destinationInput, packagesInput) {
   const shipDatestamp = new Date().toISOString().slice(0, 10);
   const cacheKey = rateQuoteCacheKey({ shipperAddr, recipientAddr, packages });
   const cachedRates = getCachedRates(cacheKey);
-  if (cachedRates) return cachedRates;
+  if (cachedRates) return toShippingTiers(cachedRates);
 
   /** Sequential probes + spacing: parallel bursts often lose most services on sandbox (429/throttle). */
   const probes = rateServiceProbes();
@@ -641,7 +681,7 @@ async function getRateQuotes(destinationInput, packagesInput) {
       setCachedRates(rateQuoteCacheKey({ shipperAddr, recipientAddr, packages, serviceType }), [rate]);
     }
   }
-  return mergedRates;
+  return toShippingTiers(mergedRates);
 }
 
 async function getRateQuoteForService(destinationInput, packagesInput, serviceTypeInput) {
@@ -656,7 +696,7 @@ async function getRateQuoteForService(destinationInput, packagesInput, serviceTy
   const shipperAddr = await buildShipperAddressForRating();
   const serviceCacheKey = rateQuoteCacheKey({ shipperAddr, recipientAddr, packages, serviceType });
   const cachedServiceRates = getCachedRates(serviceCacheKey);
-  if (cachedServiceRates?.length) return cachedServiceRates[0];
+  if (cachedServiceRates?.length) return withShippingTier(cachedServiceRates[0]);
 
   const allRatesCacheKey = rateQuoteCacheKey({ shipperAddr, recipientAddr, packages });
   const cachedAllRates = getCachedRates(allRatesCacheKey);
@@ -665,7 +705,7 @@ async function getRateQuoteForService(destinationInput, packagesInput, serviceTy
   );
   if (cachedRate) {
     setCachedRates(serviceCacheKey, [cachedRate]);
-    return cachedRate;
+    return withShippingTier(cachedRate);
   }
 
   const totalPackageCount = packages.reduce(
@@ -686,7 +726,7 @@ async function getRateQuoteForService(destinationInput, packagesInput, serviceTy
   );
   if (rate) {
     setCachedRates(serviceCacheKey, [rate]);
-    return rate;
+    return withShippingTier(rate);
   }
   return null;
 }
