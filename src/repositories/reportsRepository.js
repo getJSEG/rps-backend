@@ -127,7 +127,7 @@ const COUPON_USAGE_QUERY = `
   SELECT
     UPPER(TRIM(o.coupon_code)) AS coupon_code,
     COUNT(*)::int AS times_used,
-    COALESCE(SUM(COALESCE(o.coupon_discount_amount, 0)), 0)::numeric AS discount_given
+    COALESCE(SUM(COALESCE(o.coupon_discount_amount, 0) + COALESCE(o.coupon_shipping_discount_amount, 0)), 0)::numeric AS discount_given
   FROM orders o
   WHERE o.created_at >= $1
     AND o.created_at <= $2

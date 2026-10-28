@@ -231,6 +231,14 @@ async function ensureEmployeeColumns() {
     console.warn('addCouponsMinimumPurchase:', err.message);
   }
   try {
+    const freeShipPath = path.join(__dirname, 'migrations', 'addCouponsFreeShipping.sql');
+    if (fs.existsSync(freeShipPath)) {
+      await pool.query(fs.readFileSync(freeShipPath, 'utf8'));
+    }
+  } catch (err) {
+    console.warn('addCouponsFreeShipping:', err.message);
+  }
+  try {
     const addressSoftDeletePath = path.join(__dirname, 'migrations', 'addAddressSoftDelete.sql');
     if (fs.existsSync(addressSoftDeletePath)) {
       await pool.query(fs.readFileSync(addressSoftDeletePath, 'utf8'));
