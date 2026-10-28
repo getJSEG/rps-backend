@@ -32,7 +32,7 @@ async function findDefaultTaxPostalCode(userId) {
   const result = await pool.query(
     `SELECT postcode
      FROM addresses
-     WHERE user_id = $1
+     WHERE user_id = $1 AND deleted_at IS NULL
      ORDER BY is_default DESC,
        CASE WHEN address_type = 'shipping' THEN 0 ELSE 1 END,
        updated_at DESC NULLS LAST,

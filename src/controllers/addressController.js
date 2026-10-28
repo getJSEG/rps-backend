@@ -23,7 +23,7 @@ const getAddresses = async (req, res) => {
   try {
     const userId = req.user.id;
     const orderSql =
-      'SELECT * FROM addresses WHERE user_id = $1 ORDER BY is_default DESC, updated_at DESC NULLS LAST, created_at DESC';
+      'SELECT * FROM addresses WHERE user_id = $1 AND deleted_at IS NULL ORDER BY is_default DESC, updated_at DESC NULLS LAST, created_at DESC';
     let result = await pool.query(orderSql, [userId]);
     let rows = result.rows;
     const winner = pickCanonicalDefaultRow(rows);
@@ -75,7 +75,10 @@ const setAddressDefault = async (req, res) => {
     }
     const userId = req.user.id;
 
-    const checkResult = await pool.query('SELECT id FROM addresses WHERE id = $1 AND user_id = $2', [addressId, userId]);
+    const checkResult = await pool.query(
+      'SELECT id FROM addresses WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL',
+      [addressId, userId]
+    );
     if (checkResult.rows.length === 0) {
       return res.status(404).json({ message: 'Address not found' });
     }
@@ -105,7 +108,10 @@ const updateAddress = async (req, res) => {
     const { streetAddress, addressLine2, city, state, postcode, country, addressType } = req.body;
     const wantsDefault = coerceBooleanDefault(req.body.isDefault ?? req.body.is_default);
 
-    const checkResult = await pool.query('SELECT id FROM addresses WHERE id = $1 AND user_id = $2', [addressId, userId]);
+    const checkResult = await pool.query(
+      'SELECT id FROM addresses WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL',
+      [addressId, userId]
+    );
 
     if (checkResult.rows.length === 0) {
       return res.status(404).json({ message: 'Address not found' });
@@ -150,7 +156,10 @@ const deleteAddress = async (req, res) => {
     }
     const userId = req.user.id;
 
-    const own = await pool.query('SELECT id FROM addresses WHERE id = $1 AND user_id = $2', [addressId, userId]);
+    const own = await pool.query(
+      'SELECT id, is_default FROM addresses WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL',
+      [addressId, userId]
+    );
     if (own.rows.length === 0) {
       return res.status(404).json({ message: 'Address not found' });
     }
@@ -160,22 +169,33 @@ const deleteAddress = async (req, res) => {
       [addressId]
     );
     if (used.rows.length > 0) {
-      return res.status(409).json({
-        message:
-          'This address is linked to one or more orders and cannot be removed. Edit it to change the details, or add a new address.',
-      });
+      // Orders still read this row for the delivery address and FedEx labels, so keep it but hide it.
+      await pool.query(
+        `UPDATE addresses SET deleted_at = CURRENT_TIMESTAMP, is_default = false, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND user_id = $2`,
+        [addressId, userId]
+      );
+    } else {
+      await pool.query('DELETE FROM addresses WHERE id = $1 AND user_id = $2', [addressId, userId]);
     }
 
-    await pool.query('DELETE FROM addresses WHERE id = $1 AND user_id = $2', [addressId, userId]);
+    if (own.rows[0].is_default) {
+      // Keep a default address: promote the most recently updated one that is left.
+      await pool.query(
+        `UPDATE addresses SET is_default = true
+         WHERE id = (
+           SELECT id FROM addresses
+           WHERE user_id = $1 AND deleted_at IS NULL
+           ORDER BY updated_at DESC NULLS LAST, created_at DESC
+           LIMIT 1
+         )`,
+        [userId]
+      );
+    }
+
     res.json({ message: 'Address deleted successfully' });
   } catch (error) {
     console.error('Delete address error:', error);
-    if (error.code === '23503') {
-      return res.status(409).json({
-        message:
-          'This address is still in use (for example on an order) and cannot be removed. Edit it instead, or add a new address.',
-      });
-    }
     res.status(500).json({ message: 'Failed to delete address' });
   }
 };
