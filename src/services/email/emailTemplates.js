@@ -117,9 +117,27 @@ function shippingTotalsRow(order = {}) {
   }
   const service = String(order.shipping_method || '').trim();
   const label = service || 'Shipping';
+  // A shipping coupon shows the original price here and takes its discount off on its own row.
+  const waived = couponShippingDiscountAmount(order);
+  if (waived > 0) {
+    const charged = Number(order.shipping_charge);
+    const original = Math.round(((Number.isFinite(charged) ? charged : 0) + waived) * 100) / 100;
+    return { label, value: money(original) };
+  }
   const charge = Number(order.shipping_charge);
   const isFree = !Number.isFinite(charge) || charge <= 0;
   return { label, value: isFree ? 'Free' : money(order.shipping_charge) };
+}
+
+function couponShippingDiscountAmount(order = {}) {
+  const waived = Number(order.coupon_shipping_discount_amount);
+  return Number.isFinite(waived) && waived > 0 ? waived : 0;
+}
+
+function couponShippingTotalsRow(order = {}) {
+  const amount = money(couponShippingDiscountAmount(order));
+  if (!couponShippingDiscountAmount(order) || !amount) return null;
+  return { label: couponLineLabel(order), value: `-${amount}` };
 }
 
 function couponTotalsRow(order = {}) {
@@ -143,6 +161,7 @@ function buildOrderTotals(order = {}) {
     couponTotalsRow(order),
     { label: taxLabel(), value: moneyIfCharged(order.tax_amount) },
     shippingTotalsRow(order),
+    couponShippingTotalsRow(order),
     {
       label: 'Total',
       value: money(order.total_amount) || formatCurrency(0),
