@@ -11,9 +11,43 @@ function normalizeCouponCode(value) {
     .replace(/\s+/g, '');
 }
 
+function couponDiscountType(coupon) {
+  return String(coupon?.discountType || coupon?.discount_type || coupon?.coupon_discount_type || '').toLowerCase();
+}
+
+/** Free-shipping coupons waive the shipping charge and never reduce the product subtotal. */
+function isFreeShippingCoupon(coupon) {
+  return couponDiscountType(coupon) === 'free_shipping';
+}
+
+/** Shipping coupons (free shipping, or a % off shipping) discount shipping, never the product subtotal. */
+function isShippingCoupon(coupon) {
+  const type = couponDiscountType(coupon);
+  return type === 'free_shipping' || type === 'shipping_percent';
+}
+
+/** Percent of the shipping charge a coupon takes off: 100 for free shipping, 0 for product coupons. */
+function shippingDiscountPercent(coupon) {
+  if (isFreeShippingCoupon(coupon)) return 100;
+  if (couponDiscountType(coupon) !== 'shipping_percent') return 0;
+  const value = Number(coupon?.discountValue ?? coupon?.discount_value ?? coupon?.coupon_discount_value);
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.min(100, value);
+}
+
+/** Shipping taken off by a shipping coupon, capped at the shipping charge. */
+function computeShippingDiscountAmount(coupon, shipping) {
+  const ship = roundMoney2(shipping);
+  const pct = shippingDiscountPercent(coupon);
+  if (ship <= 0 || pct <= 0) return 0;
+  return Math.min(ship, roundMoney2(ship * (pct / 100)));
+}
+
+/** Product-subtotal discount. Always 0 for shipping coupons (their benefit is on shipping). */
 function computeDiscountAmount(coupon, subtotal) {
   const sub = roundMoney2(subtotal);
   if (sub <= 0 || !coupon) return 0;
+  if (isShippingCoupon(coupon)) return 0;
   const type = String(coupon.discount_type || coupon.discountType || '').toLowerCase();
   const value = Number(coupon.discount_value ?? coupon.discountValue);
   if (!Number.isFinite(value) || value <= 0) return 0;
@@ -29,6 +63,8 @@ function computeDiscountAmount(coupon, subtotal) {
 }
 
 function getCouponMinimumPurchase(coupon) {
+  // Free shipping applies to every order, even coupons saved with a minimum before that rule.
+  if (isFreeShippingCoupon(coupon)) return 0;
   const min = Number(coupon?.minimumPurchaseAmount ?? coupon?.minimum_purchase_amount ?? 0);
   if (!Number.isFinite(min) || min <= 0) return 0;
   return roundMoney2(min);
@@ -96,16 +132,20 @@ function allocateDiscountToLines(lines, discountAmount) {
   return { lines: out, allocated };
 }
 
-/** Inner offer text: `AZADI - 25%` or `AZADI - $40`. Falls back to the code alone. */
+/**
+ * Inner offer text: `AZADI - 25%`, `AZADI - $40`, `SHIPFREE - Free shipping` or `SHIP20 - 20% off shipping`.
+ * Falls back to the code alone.
+ */
 function couponOfferLabel(coupon) {
   const code = String(coupon?.code || coupon?.coupon_code || '').trim();
   if (!code) return '';
+  if (isFreeShippingCoupon(coupon)) return `${code} - Free shipping`;
   const type = String(coupon?.discountType || coupon?.discount_type || coupon?.coupon_discount_type || '').toLowerCase();
   const value = Number(coupon?.discountValue ?? coupon?.discount_value ?? coupon?.coupon_discount_value);
   if (!Number.isFinite(value) || value <= 0) return code;
-  if (type === 'percent') {
+  if (type === 'percent' || type === 'shipping_percent') {
     const pct = Number.isInteger(value) ? String(value) : String(roundMoney2(value));
-    return `${code} - ${pct}%`;
+    return type === 'shipping_percent' ? `${code} - ${pct}% off shipping` : `${code} - ${pct}%`;
   }
   const amount = Number.isInteger(value) ? String(value) : value.toFixed(2);
   return `${code} - $${amount}`;
@@ -119,6 +159,10 @@ function couponLineLabel(coupon) {
 module.exports = {
   roundMoney2,
   normalizeCouponCode,
+  isFreeShippingCoupon,
+  isShippingCoupon,
+  shippingDiscountPercent,
+  computeShippingDiscountAmount,
   computeDiscountAmount,
   getCouponMinimumPurchase,
   formatMinimumPurchaseLabel,
