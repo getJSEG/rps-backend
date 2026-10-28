@@ -1,6 +1,10 @@
 const couponRepository = require('../repositories/couponRepository');
+const shippingRatesRepository = require('../repositories/shippingRatesRepository');
 const {
   normalizeCouponCode,
+  isFreeShippingCoupon,
+  isShippingCoupon,
+  shippingDiscountPercent,
   computeDiscountAmount,
   couponMinimumNotMetMessage,
   roundMoney2,
@@ -14,6 +18,8 @@ function parseDiscountType(raw) {
   const type = String(raw || '').trim().toLowerCase();
   if (type === 'percent' || type === 'percentage' || type === '%') return 'percent';
   if (type === 'fixed' || type === 'amount' || type === 'flat') return 'fixed';
+  if (type === 'free_shipping' || type === 'free-shipping' || type === 'freeshipping') return 'free_shipping';
+  if (type === 'shipping_percent' || type === 'shipping-percent') return 'shipping_percent';
   return null;
 }
 
@@ -30,10 +36,15 @@ function validateCouponPayload(body, { partial = false } = {}) {
   }
   if (!partial || body.discountType !== undefined || body.discount_type !== undefined) {
     const discountType = parseDiscountType(body.discountType ?? body.discount_type);
-    if (!discountType) return { error: 'Discount type must be percent or fixed.' };
+    if (!discountType) {
+      return { error: 'Discount type must be percent, fixed, free shipping, or shipping percent.' };
+    }
     out.discountType = discountType;
   }
-  if (!partial || body.discountValue !== undefined || body.discount_value !== undefined) {
+  if (out.discountType === 'free_shipping') {
+    // Free shipping has no amount; any value sent by the form is ignored.
+    out.discountValue = 0;
+  } else if (!partial || body.discountValue !== undefined || body.discount_value !== undefined) {
     const discountValue = Number(body.discountValue ?? body.discount_value);
     if (!Number.isFinite(discountValue) || discountValue <= 0) {
       return { error: 'Discount value must be greater than 0.' };
@@ -69,9 +80,13 @@ function validateCouponPayload(body, { partial = false } = {}) {
       out.minimumPurchaseAmount = roundMoney2(min);
     }
   }
+  if (out.discountType === 'free_shipping') {
+    // Free shipping applies to every order, so it never has a minimum purchase.
+    out.minimumPurchaseAmount = 0;
+  }
   const type = out.discountType;
   const value = out.discountValue;
-  if (type === 'percent' && value != null && value > 100) {
+  if ((type === 'percent' || type === 'shipping_percent') && value != null && value > 100) {
     return { error: 'Percent discount cannot be greater than 100.' };
   }
   return { value: out };
@@ -115,7 +130,8 @@ const updateCouponAdmin = async (req, res) => {
     if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ message: 'Invalid id' });
     const parsed = validateCouponPayload(req.body, { partial: true });
     if (parsed.error) return res.status(400).json({ message: parsed.error });
-    if (parsed.value.discountType === 'percent' && parsed.value.discountValue == null) {
+    const isPercentType = (t) => t === 'percent' || t === 'shipping_percent';
+    if (isPercentType(parsed.value.discountType) && parsed.value.discountValue == null) {
       const current = await couponRepository.findById(id);
       if (current && Number(current.discountValue) > 100) {
         return res.status(400).json({ message: 'Percent discount cannot be greater than 100.' });
@@ -123,8 +139,19 @@ const updateCouponAdmin = async (req, res) => {
     }
     if (parsed.value.discountType == null && parsed.value.discountValue != null) {
       const current = await couponRepository.findById(id);
-      if (current?.discountType === 'percent' && parsed.value.discountValue > 100) {
+      if (isPercentType(current?.discountType) && parsed.value.discountValue > 100) {
         return res.status(400).json({ message: 'Percent discount cannot be greater than 100.' });
+      }
+    }
+    if (parsed.value.discountType !== 'free_shipping') {
+      const current = await couponRepository.findById(id);
+      const finalType = parsed.value.discountType ?? current?.discountType;
+      const finalValue = parsed.value.discountValue ?? current?.discountValue;
+      if (finalType === 'free_shipping') {
+        parsed.value.discountValue = 0;
+      } else if (!(Number(finalValue) > 0)) {
+        // e.g. switching a free-shipping coupon to percent/fixed without giving an amount
+        return res.status(400).json({ message: 'Discount value must be greater than 0.' });
       }
     }
     if (parsed.value.isActive === true) {
@@ -162,6 +189,27 @@ const previewCoupon = async (req, res) => {
     const minMsg = couponMinimumNotMetMessage(coupon, subtotal);
     if (minMsg) {
       return res.status(400).json({ message: minMsg });
+    }
+    if (isShippingCoupon(coupon)) {
+      const shippingMode = String(req.body?.shippingMode ?? req.body?.shipping_mode ?? '').trim().toLowerCase();
+      if (shippingMode === 'store_pickup') {
+        return res.status(400).json({ message: 'This coupon applies to shipped orders only.' });
+      }
+      const policy = await shippingRatesRepository.getRates();
+      if (policy.freeShippingEnabled && subtotal >= roundMoney2(policy.freeShippingThreshold)) {
+        return res.status(400).json({ message: 'Shipping is already free for this order.' });
+      }
+      const shippingPercent = shippingDiscountPercent(coupon);
+      return res.json({
+        code: coupon.code,
+        discountType: coupon.discountType,
+        discountValue: isFreeShippingCoupon(coupon) ? 0 : coupon.discountValue,
+        minimumPurchaseAmount: isFreeShippingCoupon(coupon) ? 0 : coupon.minimumPurchaseAmount || 0,
+        freeShipping: shippingPercent >= 100,
+        shippingDiscountPercent: shippingPercent,
+        discountAmount: 0,
+        discountedSubtotal: subtotal,
+      });
     }
     const discountAmount = computeDiscountAmount(coupon, subtotal);
     if (discountAmount <= 0) {

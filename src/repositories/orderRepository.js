@@ -460,8 +460,8 @@ const SQL = {
   INSERT_ORDER_ITEM_ADMIN_NO_JOB: `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price, image_url, width_inches, height_inches, selected_modifiers, selection_mode, graphic_scenario_enabled, modifier_total, base_unit_price, purchase_option_key, purchase_option_label)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16)`,
   SELECT_ORDER_BY_ID: `SELECT o.* FROM orders o WHERE o.id = $1`,
-  INSERT_ORDER_STRIPE_PENDING: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, payment_status, notes, guest_checkout, guest_tracking_token_hash, guest_tracking_token_cipher, guest_tracking_token_created_at, shipping_address_id, billing_address_id, shipping_method, shipping_charge, shipping_mode, store_pickup_address_id, subtotal_amount, tax_id, tax_name, tax_percentage, tax_amount, carrier, carrier_service_type, shipping_estimated_delivery, coupon_id, coupon_code, coupon_discount_amount, coupon_discount_type, coupon_discount_value)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)
+  INSERT_ORDER_STRIPE_PENDING: `INSERT INTO orders (user_id, order_number, total_amount, status, payment_method, payment_status, notes, guest_checkout, guest_tracking_token_hash, guest_tracking_token_cipher, guest_tracking_token_created_at, shipping_address_id, billing_address_id, shipping_method, shipping_charge, shipping_mode, store_pickup_address_id, subtotal_amount, tax_id, tax_name, tax_percentage, tax_amount, carrier, carrier_service_type, shipping_estimated_delivery, coupon_id, coupon_code, coupon_discount_amount, coupon_discount_type, coupon_discount_value, coupon_shipping_discount_amount)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31)
          RETURNING id, order_number`,
   UPDATE_ORDER_FEDEX_SHIPMENT_CREATED: `UPDATE orders
        SET fedex_shipment_id = $2,
@@ -1209,7 +1209,7 @@ async function createOrderFromCartItemAdminMultiJob(params) {
 
 async function verifyAddressBelongsToUser(userId, addressId) {
   if (userId == null || addressId == null) return false;
-  const r = await pool.query('SELECT id FROM addresses WHERE id = $1 AND user_id = $2', [
+  const r = await pool.query('SELECT id FROM addresses WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL', [
     addressId,
     userId,
   ]);
@@ -1263,6 +1263,7 @@ async function createPendingStripeOrderWithItems({
   couponDiscountAmount = 0,
   couponDiscountType = null,
   couponDiscountValue = null,
+  couponShippingDiscountAmount = 0,
 }) {
   const client = await pool.connect();
   try {
@@ -1298,6 +1299,7 @@ async function createPendingStripeOrderWithItems({
       couponDiscountAmount,
       couponDiscountType,
       couponDiscountValue,
+      couponShippingDiscountAmount,
     ]);
     const order = orderResult.rows[0];
     const orderId = order.id;
