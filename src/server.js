@@ -230,6 +230,14 @@ async function ensureEmployeeColumns() {
   } catch (err) {
     console.warn('addCouponsMinimumPurchase:', err.message);
   }
+  try {
+    const siteContentPath = path.join(__dirname, 'migrations', 'addSiteContentAndHelpCenter.sql');
+    if (fs.existsSync(siteContentPath)) {
+      await pool.query(fs.readFileSync(siteContentPath, 'utf8'));
+    }
+  } catch (err) {
+    console.warn('addSiteContentAndHelpCenter:', err.message);
+  }
 }
 
 // Import routes
@@ -257,6 +265,7 @@ const shippingBoxesRoutes = require('./routes/shippingBoxes');
 const appSettingsRoutes = require('./routes/appSettings');
 const couponRoutes = require('./routes/coupons');
 const designRoutes = require('./routes/designs');
+const helpCenterRoutes = require('./routes/helpCenter');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -343,6 +352,7 @@ app.use('/api/shipping-boxes', shippingBoxesRoutes);
 app.use('/api/settings', appSettingsRoutes);
 app.use('/api/coupons', couponRoutes);
 app.use('/api/designs', designRoutes);
+app.use('/api/help-center', helpCenterRoutes);
 
 // 404 handler
 app.use((req, res) => {
