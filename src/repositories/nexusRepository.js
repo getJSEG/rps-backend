@@ -64,6 +64,7 @@ const SQL = {
        AND (NOT $3::boolean OR status IN ('not_collecting', 'close_warning'))
      RETURNING *`,
   COUNT_ATTENTION: `SELECT COUNT(*)::int AS count FROM nexus_states WHERE status IN ('close_warning', 'reached')`,
+  IS_COLLECTING: `SELECT EXISTS (SELECT 1 FROM nexus_states WHERE code = $1 AND status = 'collecting') AS collecting`,
 };
 
 async function getRollingPeriod() {
@@ -138,6 +139,13 @@ async function countAttention() {
   return r.rows[0].count;
 }
 
+/** True only when the admin set the state to Collecting. */
+async function isCollecting(code) {
+  if (!code) return false;
+  const r = await pool.query(SQL.IS_COLLECTING, [code]);
+  return r.rows[0].collecting;
+}
+
 module.exports = {
   getRollingPeriod,
   needsRecalculation,
@@ -148,4 +156,5 @@ module.exports = {
   updateThreshold,
   updateStatus,
   countAttention,
+  isCollecting,
 };

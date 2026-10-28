@@ -1,3 +1,6 @@
+const nexusRepository = require('../repositories/nexusRepository');
+const { stateCodeFromZip } = require('../utils/usState');
+
 const DEFAULT_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 const OPEN_SALES_TAX_URL = 'https://api.opensalestax.org/v1/rates';
 
@@ -105,6 +108,19 @@ function calculateTaxTotals({ subtotal, shipping, taxRate, taxPercentage, name =
 }
 
 async function computeDynamicTaxAndTotal(subtotal, shipping, postalCode) {
+  // Sales tax is only charged where the admin set the ship-to state to Collecting (economic nexus).
+  if (!normalizeZip5(postalCode)) {
+    throw postalCode ? invalidPostalCodeError() : missingPostalCodeError();
+  }
+  const stateCode = stateCodeFromZip(postalCode);
+  if (!(await nexusRepository.isCollecting(stateCode))) {
+    return {
+      ...calculateTaxTotals({ subtotal, shipping, taxRate: 0, taxPercentage: 0 }),
+      taxRate: null,
+      stateCode: stateCode || null,
+      success: true,
+    };
+  }
   try {
     const rate = await getRateByPostalCode(postalCode);
     return {
