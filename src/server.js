@@ -238,6 +238,14 @@ async function ensureEmployeeColumns() {
   } catch (err) {
     console.warn('addCouponsFreeShipping:', err.message);
   }
+  try {
+    const addressSoftDeletePath = path.join(__dirname, 'migrations', 'addAddressSoftDelete.sql');
+    if (fs.existsSync(addressSoftDeletePath)) {
+      await pool.query(fs.readFileSync(addressSoftDeletePath, 'utf8'));
+    }
+  } catch (err) {
+    console.warn('addAddressSoftDelete:', err.message);
+  }
 }
 
 // Import routes
