@@ -2,7 +2,7 @@ const { recalculateNexus } = require('../services/nexusService');
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Runs daily but only recalculates once a month, after the month closes (rolling 12 full months). */
+/** Runs daily but only recalculates once a week, after the week closes (rolling 12 months to last Sunday). */
 async function runNexusRecalculation() {
   try {
     const result = await recalculateNexus();

@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS nexus_states (
   status VARCHAR(30) NOT NULL DEFAULT 'not_collecting' CHECK (
     status IN ('not_collecting', 'close_warning', 'reached', 'pending_registration', 'filing', 'collecting')
   ),
-  -- Last monthly run: completed orders in the rolling 12 months.
+  -- Last weekly run: completed orders in the rolling 12 months.
   rolling_sales DECIMAL(14, 2) NOT NULL DEFAULT 0,
   rolling_orders INTEGER NOT NULL DEFAULT 0,
   period_start DATE,

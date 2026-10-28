@@ -9,10 +9,10 @@ const ORDER_NET_SALES = `o.total_amount - COALESCE(o.refund_amount, 0)`;
 const PLACED_AFTER_LAUNCH = `o.created_at >= (SELECT MIN(created_at) FROM nexus_states)`;
 
 const SQL = {
-  /** Rolling window = the 12 full months before the current month. */
+  /** Rolling window = 12 months ending last Sunday (weeks run Monday–Sunday), so it moves weekly. */
   SELECT_ROLLING_PERIOD: `SELECT
-       (date_trunc('month', CURRENT_DATE) - interval '12 months')::date::text AS period_start,
-       (date_trunc('month', CURRENT_DATE) - interval '1 day')::date::text AS period_end`,
+       (date_trunc('week', CURRENT_DATE) - interval '12 months')::date::text AS period_start,
+       (date_trunc('week', CURRENT_DATE) - interval '1 day')::date::text AS period_end`,
   NEEDS_RECALCULATION: `SELECT EXISTS (
        SELECT 1 FROM nexus_states WHERE period_end IS DISTINCT FROM $1::date
      ) AS needed`,
