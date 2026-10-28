@@ -1209,7 +1209,7 @@ async function createOrderFromCartItemAdminMultiJob(params) {
 
 async function verifyAddressBelongsToUser(userId, addressId) {
   if (userId == null || addressId == null) return false;
-  const r = await pool.query('SELECT id FROM addresses WHERE id = $1 AND user_id = $2', [
+  const r = await pool.query('SELECT id FROM addresses WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL', [
     addressId,
     userId,
   ]);
