@@ -177,8 +177,8 @@ const updateNexusStatusAdmin = async (req, res) => {
 
 const getNexusAttentionCountAdmin = async (req, res) => {
   try {
-    const count = await nexusRepository.countAttention();
-    res.json({ count });
+    const { reached, warning } = await nexusRepository.countAttention();
+    res.json({ count: reached + warning, reached, warning });
   } catch (error) {
     console.error('getNexusAttentionCountAdmin:', error);
     res.status(500).json({ message: 'Failed to load nexus alerts' });

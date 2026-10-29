@@ -63,7 +63,10 @@ const SQL = {
      WHERE code = $1
        AND (NOT $3::boolean OR status IN ('not_collecting', 'close_warning'))
      RETURNING *`,
-  COUNT_ATTENTION: `SELECT COUNT(*)::int AS count FROM nexus_states WHERE status IN ('close_warning', 'reached')`,
+  COUNT_ATTENTION: `SELECT
+       COUNT(*) FILTER (WHERE status = 'reached')::int AS reached,
+       COUNT(*) FILTER (WHERE status = 'close_warning')::int AS warning
+     FROM nexus_states`,
   IS_COLLECTING: `SELECT EXISTS (SELECT 1 FROM nexus_states WHERE code = $1 AND status = 'collecting') AS collecting`,
 };
 
@@ -134,9 +137,10 @@ async function updateStatus(code, status, { onlyFromAuto = false } = {}) {
   return r.rows[0] || null;
 }
 
+/** @returns {Promise<{ reached: number, warning: number }>} */
 async function countAttention() {
   const r = await pool.query(SQL.COUNT_ATTENTION);
-  return r.rows[0].count;
+  return r.rows[0];
 }
 
 /** True only when the admin set the state to Collecting. */
