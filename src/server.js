@@ -9,6 +9,7 @@ const pool = require('./config/database');
 const { startCartCleanupJob } = require('./jobs/cartCleanupJob');
 const { startAccountDeletionJob } = require('./jobs/accountDeletionJob');
 const { startDesignCleanupJob } = require('./jobs/designCleanupJob');
+const { startNexusJob } = require('./jobs/nexusJob');
 
 /**
  * Warn about production settings that silently break customer email instead of erroring:
@@ -254,6 +255,14 @@ async function ensureEmployeeColumns() {
   } catch (err) {
     console.warn('addSiteContentAndHelpCenter:', err.message);
   }
+  try {
+    const nexusPath = path.join(__dirname, 'migrations', 'addTaxNexus.sql');
+    if (fs.existsSync(nexusPath)) {
+      await pool.query(fs.readFileSync(nexusPath, 'utf8'));
+    }
+  } catch (err) {
+    console.warn('addTaxNexus:', err.message);
+  }
 }
 
 // Import routes
@@ -282,6 +291,7 @@ const appSettingsRoutes = require('./routes/appSettings');
 const couponRoutes = require('./routes/coupons');
 const designRoutes = require('./routes/designs');
 const helpCenterRoutes = require('./routes/helpCenter');
+const nexusRoutes = require('./routes/nexus');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -369,6 +379,7 @@ app.use('/api/settings', appSettingsRoutes);
 app.use('/api/coupons', couponRoutes);
 app.use('/api/designs', designRoutes);
 app.use('/api/help-center', helpCenterRoutes);
+app.use('/api/nexus', nexusRoutes);
 
 // 404 handler
 app.use((req, res) => {
@@ -399,6 +410,7 @@ ensureBaseTables()
     startCartCleanupJob();
     startAccountDeletionJob();
     startDesignCleanupJob();
+    startNexusJob();
   });
 
   server.on('error', (err) => {
