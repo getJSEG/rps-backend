@@ -232,6 +232,30 @@ async function ensureEmployeeColumns() {
     console.warn('addCouponsMinimumPurchase:', err.message);
   }
   try {
+    const freeShipPath = path.join(__dirname, 'migrations', 'addCouponsFreeShipping.sql');
+    if (fs.existsSync(freeShipPath)) {
+      await pool.query(fs.readFileSync(freeShipPath, 'utf8'));
+    }
+  } catch (err) {
+    console.warn('addCouponsFreeShipping:', err.message);
+  }
+  try {
+    const addressSoftDeletePath = path.join(__dirname, 'migrations', 'addAddressSoftDelete.sql');
+    if (fs.existsSync(addressSoftDeletePath)) {
+      await pool.query(fs.readFileSync(addressSoftDeletePath, 'utf8'));
+    }
+  } catch (err) {
+    console.warn('addAddressSoftDelete:', err.message);
+  }
+  try {
+    const siteContentPath = path.join(__dirname, 'migrations', 'addSiteContentAndHelpCenter.sql');
+    if (fs.existsSync(siteContentPath)) {
+      await pool.query(fs.readFileSync(siteContentPath, 'utf8'));
+    }
+  } catch (err) {
+    console.warn('addSiteContentAndHelpCenter:', err.message);
+  }
+  try {
     const nexusPath = path.join(__dirname, 'migrations', 'addTaxNexus.sql');
     if (fs.existsSync(nexusPath)) {
       await pool.query(fs.readFileSync(nexusPath, 'utf8'));
@@ -266,6 +290,7 @@ const shippingBoxesRoutes = require('./routes/shippingBoxes');
 const appSettingsRoutes = require('./routes/appSettings');
 const couponRoutes = require('./routes/coupons');
 const designRoutes = require('./routes/designs');
+const helpCenterRoutes = require('./routes/helpCenter');
 const nexusRoutes = require('./routes/nexus');
 
 const app = express();
@@ -353,6 +378,7 @@ app.use('/api/shipping-boxes', shippingBoxesRoutes);
 app.use('/api/settings', appSettingsRoutes);
 app.use('/api/coupons', couponRoutes);
 app.use('/api/designs', designRoutes);
+app.use('/api/help-center', helpCenterRoutes);
 app.use('/api/nexus', nexusRoutes);
 
 // 404 handler
