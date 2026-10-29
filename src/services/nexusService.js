@@ -24,8 +24,8 @@ function autoStatus(state, sales, orders) {
 }
 
 /**
- * Recount completed orders for the rolling 12 months (to last Sunday) and update every state's totals
- * and auto status. Skips when this week's period was already calculated, unless force is set.
+ * Recount completed orders for the rolling 12 months (to yesterday) and update every state's totals
+ * and auto status. Skips when today's period was already calculated, unless force is set.
  */
 async function recalculateNexus({ force = false } = {}) {
   const period = await nexusRepository.getRollingPeriod();
