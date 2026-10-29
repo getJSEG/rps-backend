@@ -2139,7 +2139,9 @@ const previewProductPrice = async (req, res) => {
     const code = /required|invalid|must|missing|supported|at least|at most|configured/i.test(String(error.message || ''))
       ? 400
       : 500;
-    return res.status(code).json({ message: 'Failed to preview price' });
+    // Validation problems ("Width must be at least 8 inches.") are shown to the customer; anything else stays generic.
+    if (code === 500) console.error('previewProductPrice:', error);
+    return res.status(code).json({ message: code === 400 ? error.message : 'Failed to preview price' });
   }
 };
 
