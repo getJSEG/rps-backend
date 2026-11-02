@@ -13,6 +13,7 @@ const DEFAULT_RATE_SERVICE_PROBES = [
   'FEDEX_GROUND',
   'GROUND_HOME_DELIVERY',
 ];
+const PARTIAL_RATES_CACHE_TTL_MS = 30 * 1000;
 
 const STORE_ADDRESS_REQUIRED_MESSAGE = 'Shipping will be available once admin add store address.';
 
@@ -57,8 +58,8 @@ function getCachedRates(key) {
   return hit.rates;
 }
 
-function setCachedRates(key, rates) {
-  const ttl = fedexRateCacheTtlMs();
+function setCachedRates(key, rates, maxTtlMs = Infinity) {
+  const ttl = Math.min(fedexRateCacheTtlMs(), maxTtlMs);
   if (ttl <= 0) return;
   rateQuoteCache.set(key, {
     expiresAt: Date.now() + ttl,
@@ -573,9 +574,9 @@ function mergeFedexRates(rateGroups) {
  * admin label creation keep working. First matching tier wins (GROUND_ECONOMY is Economy, not Express).
  */
 const SHIPPING_TIERS = [
-  { key: 'economy', label: 'Economy', match: /GROUND|SMART_POST|ECONOMY/ },
-  { key: 'standard', label: 'Standard', match: /2_DAY|EXPRESS_SAVER/ },
-  { key: 'express', label: 'Express', match: /OVERNIGHT|PRIORITY|FIRST/ },
+  { key: 'economy', label: 'Economy', match: /GROUND|SMART_POST|ECONOMY/, probes: ['GROUND_HOME_DELIVERY', 'FEDEX_GROUND'] },
+  { key: 'standard', label: 'Standard', match: /2_DAY|EXPRESS_SAVER/, probes: ['FEDEX_EXPRESS_SAVER', 'FEDEX_2_DAY'] },
+  { key: 'express', label: 'Express', match: /OVERNIGHT|PRIORITY|FIRST/, probes: ['STANDARD_OVERNIGHT', 'PRIORITY_OVERNIGHT'] },
 ];
 
 function shippingTierForServiceType(serviceType) {
@@ -589,6 +590,11 @@ function withShippingTier(rate) {
   const tier = shippingTierForServiceType(rate.serviceType);
   if (!tier) return rate;
   return { ...rate, tier: tier.key, serviceName: tier.label, carrierServiceName: rate.serviceName };
+}
+
+function missingShippingTiers(rates) {
+  const found = new Set((Array.isArray(rates) ? rates : []).map((rate) => shippingTierForServiceType(rate?.serviceType)?.key));
+  return SHIPPING_TIERS.filter((tier) => !found.has(tier.key));
 }
 
 /** At most one rate per tier (the cheapest), in Economy → Standard → Express order. Services outside every tier are dropped. */
@@ -648,12 +654,8 @@ async function getRateQuotes(destinationInput, packagesInput) {
       console.warn('[FedEx rates] base quote failed, continuing service probes:', msg);
     }
   }
-  const probeRateArrays = [];
-  for (let i = 0; i < probes.length; i += 1) {
-    const serviceType = probes[i];
-    if (probeDelayMs > 0 && i > 0) {
-      await new Promise((r) => setTimeout(r, probeDelayMs));
-    }
+  const pause = () => (probeDelayMs > 0 ? new Promise((r) => setTimeout(r, probeDelayMs)) : null);
+  const quoteService = async (serviceType) => {
     try {
       const payload = buildRatePayload({
         shipperAddr,
@@ -664,17 +666,35 @@ async function getRateQuotes(destinationInput, packagesInput) {
         serviceType,
       });
       const data = await fedexRequest('/rate/v1/rates/quotes', payload, { retryOnceOn5xx: true });
-      probeRateArrays.push(ratesFromFedexResponse(data));
+      return ratesFromFedexResponse(data);
     } catch (e) {
       if (debugRates) {
         const msg = e instanceof Error ? e.message : String(e);
         console.warn(`[FedEx rates] probe ${serviceType} failed:`, msg);
       }
+      return [];
+    }
+  };
+  const rateArrays = [baseRates];
+  for (const serviceType of probes) {
+    await pause();
+    rateArrays.push(await quoteService(serviceType));
+  }
+
+  // A failed or throttled call must not hide a whole tier: ask for each missing tier's own services.
+  const tried = new Set(probes);
+  for (const tier of missingShippingTiers(mergeFedexRates(rateArrays))) {
+    for (const serviceType of tier.probes.filter((code) => !tried.has(code))) {
+      await pause();
+      const rates = await quoteService(serviceType);
+      rateArrays.push(rates);
+      if (rates.some((rate) => shippingTierForServiceType(rate?.serviceType)?.key === tier.key)) break;
     }
   }
 
-  const mergedRates = mergeFedexRates([baseRates, ...probeRateArrays]);
-  setCachedRates(cacheKey, mergedRates);
+  const mergedRates = mergeFedexRates(rateArrays);
+  const complete = missingShippingTiers(mergedRates).length === 0;
+  setCachedRates(cacheKey, mergedRates, complete ? Infinity : PARTIAL_RATES_CACHE_TTL_MS);
   for (const rate of mergedRates) {
     const serviceType = String(rate?.serviceType || '').trim().toUpperCase();
     if (serviceType) {
