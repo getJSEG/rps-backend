@@ -54,7 +54,7 @@ async function storeDesignTemplateFile(buffer) {
 async function getProductDesignTemplates(productId) {
   const result = await pool.query(
     `SELECT id, product_id, name, svg_url, svg_storage_key,
-            image_url, image_storage_key, image_width_px, image_height_px, sort_order
+            image_url, image_storage_key, image_width_px, image_height_px, sort_order, modifier_option_ids
      FROM product_design_templates
      WHERE product_id = $1
      ORDER BY sort_order ASC, id ASC`,
@@ -75,7 +75,14 @@ function parseDesignTemplatesInput(value) {
     image_width_px: parseInt(item?.image_width_px, 10),
     image_height_px: parseInt(item?.image_height_px, 10),
     sort_order: Number.isFinite(Number(item?.sort_order)) ? Number(item.sort_order) : index,
+    modifier_option_ids: parseModifierOptionIds(item?.modifier_option_ids),
   }));
+}
+
+/** Modifier options the template is for (automatic selection); none = the product's default template. */
+function parseModifierOptionIds(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((id) => parseInt(id, 10)).filter((id) => Number.isFinite(id) && id > 0))];
 }
 
 /** @returns {string|null} error message */
@@ -133,14 +140,15 @@ async function replaceProductDesignTemplates(productId, templates) {
         t.image_width_px,
         t.image_height_px,
         t.sort_order,
+        t.modifier_option_ids,
       ];
       if (t.id != null && Number.isFinite(t.id)) {
         const updated = await client.query(
           `UPDATE product_design_templates
            SET name = $1, svg_url = $2, svg_storage_key = $3,
                image_url = $4, image_storage_key = $5, image_width_px = $6, image_height_px = $7,
-               sort_order = $8, updated_at = CURRENT_TIMESTAMP
-           WHERE id = $9 AND product_id = $10
+               sort_order = $8, modifier_option_ids = $9::int[], updated_at = CURRENT_TIMESTAMP
+           WHERE id = $10 AND product_id = $11
            RETURNING id`,
           [...values, t.id, productId]
         );
@@ -152,8 +160,8 @@ async function replaceProductDesignTemplates(productId, templates) {
       const inserted = await client.query(
         `INSERT INTO product_design_templates
           (name, svg_url, svg_storage_key, image_url, image_storage_key,
-           image_width_px, image_height_px, sort_order, product_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           image_width_px, image_height_px, sort_order, modifier_option_ids, product_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::int[], $10)
          RETURNING id`,
         [...values, productId]
       );
