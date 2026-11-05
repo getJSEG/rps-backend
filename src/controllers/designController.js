@@ -109,9 +109,9 @@ async function readAndStoreDesignFile(req) {
   let originalUrl = null;
   if (original?.buffer) {
     const originalMime = normalizeMime(original);
-    if (originalMime !== 'image/png' && originalMime !== 'image/jpeg') {
+    if (originalMime !== 'image/png' && originalMime !== 'image/jpeg' && originalMime !== 'image/svg+xml') {
       await deleteManyByUrl([url]).catch(() => {});
-      throw Object.assign(new Error('The original upload must be a PNG or JPG image.'), { statusCode: 400 });
+      throw Object.assign(new Error('The original upload must be a PNG, JPG or SVG image.'), { statusCode: 400 });
     }
     ({ url: originalUrl } = await saveArtworkBufferToStorage(original.buffer, originalMime));
   }
