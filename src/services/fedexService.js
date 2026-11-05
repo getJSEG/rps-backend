@@ -1,6 +1,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 const storeAddressRepository = require('../repositories/storeAddressRepository');
+const shippingRatesRepository = require('../repositories/shippingRatesRepository');
 const { toUsStateCode } = require('../utils/usState');
 
 const FEDEX_API_URL = () =>
@@ -607,6 +608,41 @@ function toShippingTiers(rates) {
   );
 }
 
+function roundMoney(n) {
+  return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+}
+
+/**
+ * Takes the admin's site-wide shipping discount for each tier (Admin → Shipping Rates) off the FedEx price.
+ * `totalCharge` becomes what the customer pays; `originalCharge` keeps FedEx's price for display.
+ */
+async function applyTierDiscounts(rates) {
+  const list = Array.isArray(rates) ? rates : [];
+  if (list.length === 0) return list;
+  const { tierDiscounts } = await shippingRatesRepository.getRates();
+  return list.map((rate) => {
+    const tier = rate?.tier || shippingTierForServiceType(rate?.serviceType)?.key;
+    const percent = Number(tierDiscounts?.[tier]) || 0;
+    const charge = Number(rate?.totalCharge);
+    if (!(percent > 0) || !Number.isFinite(charge)) return rate;
+    return {
+      ...rate,
+      totalCharge: roundMoney(charge * (1 - percent / 100)),
+      originalCharge: charge,
+      discountPercent: percent,
+    };
+  });
+}
+
+async function getDiscountedRateQuotes(destinationInput, packagesInput) {
+  return applyTierDiscounts(await getRateQuotes(destinationInput, packagesInput));
+}
+
+async function getDiscountedRateQuoteForService(destinationInput, packagesInput, serviceTypeInput) {
+  const rate = await getRateQuoteForService(destinationInput, packagesInput, serviceTypeInput);
+  return rate ? (await applyTierDiscounts([rate]))[0] : rate;
+}
+
 async function getRateQuotes(destinationInput, packagesInput) {
   const rawRecipientAddr = buildRecipientAddressForRating(destinationInput);
   const postalCode = rawRecipientAddr.postalCode;
@@ -921,8 +957,9 @@ async function trackShipment(trackingNumber) {
 }
 
 module.exports = {
-  getRateQuotes,
-  getRateQuoteForService,
+  // Customer-facing prices include the admin's per-tier shipping discount.
+  getRateQuotes: getDiscountedRateQuotes,
+  getRateQuoteForService: getDiscountedRateQuoteForService,
   ensureDefaultShipperStoreAddress,
   createShipment,
   trackShipment,

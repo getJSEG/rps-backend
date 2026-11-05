@@ -46,7 +46,8 @@ async function aggregateShippingFromCartItems(cartItems) {
     } else if (Number.isFinite(explicitAmount)) {
       price = explicitAmount;
     } else {
-      price = await shippingRatesRepository.findPriceByServiceName(svcRaw);
+      // No FedEx quote yet (guest cart before checkout); checkout always prices the shipment with FedEx.
+      price = 0;
     }
     mergedSum += roundMoney2(price);
     const label = String(
@@ -87,6 +88,9 @@ async function computeShippingFromCartItems(cartItems) {
       carrierServiceType: null,
       shippingEstimatedDelivery: null,
       storePickupAddressId: Number.isNaN(parsedPickup) ? null : parsedPickup,
+      qualifiesForFreeShipping() {
+        return false;
+      },
       applyFreeShipping() {
         return { shippingSum: 0, shippingCharge: 0 };
       },
@@ -110,15 +114,16 @@ async function computeShippingFromCartItems(cartItems) {
     shippingEstimatedDelivery,
     freeShippingEnabled: !!policy.freeShippingEnabled,
     freeShippingThreshold: roundMoney2(policy.freeShippingThreshold),
+    qualifiesForFreeShipping(subtotal) {
+      return !!policy.freeShippingEnabled && roundMoney2(subtotal) >= roundMoney2(policy.freeShippingThreshold);
+    },
     applyFreeShipping(subtotal) {
-      if (policy.freeShippingEnabled && roundMoney2(subtotal) >= roundMoney2(policy.freeShippingThreshold)) {
+      if (this.qualifiesForFreeShipping(subtotal)) {
+        // The customer pays nothing; the FedEx service and delivery estimate stay on the order so admin
+        // can still create the label the shop pays for.
         shippingSum = 0;
         shippingCharge = 0;
-        // When free shipping applies we should show a clear method and clear carrier info
         shippingMethod = 'Free Shipping';
-        carrier = null;
-        carrierServiceType = null;
-        shippingEstimatedDelivery = null;
       }
       return {
         shippingSum,

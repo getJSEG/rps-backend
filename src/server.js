@@ -263,6 +263,14 @@ async function ensureEmployeeColumns() {
   } catch (err) {
     console.warn('addTaxNexus:', err.message);
   }
+  try {
+    const tierDiscountPath = path.join(__dirname, 'migrations', 'addShippingTierDiscounts.sql');
+    if (fs.existsSync(tierDiscountPath)) {
+      await pool.query(fs.readFileSync(tierDiscountPath, 'utf8'));
+    }
+  } catch (err) {
+    console.warn('addShippingTierDiscounts:', err.message);
+  }
 }
 
 // Import routes
