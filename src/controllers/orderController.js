@@ -471,6 +471,30 @@ async function refreshCartItemsWithAuthoritativeFedexQuote(cartItems, destinatio
   if (!selectedRate) {
     throw checkoutValidationError('Selected FedEx service is no longer available for this shipment.');
   }
+  return cartItemsWithFedexRate(cartItems, selectedRate, selectedServiceType);
+}
+
+/**
+ * Free-shipping orders ship with the FedEx service that costs the shop least, whatever the customer picked.
+ * If FedEx cannot be reached the customer's service is kept (shipping is still free).
+ */
+async function cartItemsWithCheapestFedexService(cartItems, destination) {
+  if (!checkoutSelectedFedexServiceType(cartItems) || !destination?.postalCode) return cartItems;
+  let rates = [];
+  try {
+    rates = await fedexService.getRateQuotes(destination, buildFedexPackagesFromCheckoutCart(cartItems));
+  } catch (error) {
+    console.warn('Free shipping: could not load FedEx rates, keeping the selected service:', error.message);
+    return cartItems;
+  }
+  const shopCost = (rate) => Number(rate?.originalCharge ?? rate?.totalCharge);
+  const cheapest = rates
+    .filter((rate) => Number.isFinite(shopCost(rate)))
+    .sort((a, b) => shopCost(a) - shopCost(b))[0];
+  return cheapest ? cartItemsWithFedexRate(cartItems, cheapest, cheapest.serviceType) : cartItems;
+}
+
+function cartItemsWithFedexRate(cartItems, selectedRate, selectedServiceType) {
   const amount = Number(selectedRate.totalCharge);
   if (!Number.isFinite(amount) || amount < 0) {
     throw checkoutValidationError('FedEx returned an invalid rate for the selected service.');
@@ -1139,6 +1163,16 @@ const createOrderWithPaymentIntent = async (req, res) => {
         couponDiscountValue = Number.isFinite(valueRaw) && valueRaw > 0 ? valueRaw : null;
         subtotalSum = roundMoney2(orderItems.reduce((s, o) => s + o.total_price, 0));
       }
+    }
+    if (shippingMode !== 'store_pickup' && shippingComputed.qualifiesForFreeShipping(subtotalSum)) {
+      const destination = userId
+        ? fedexDestinationFromAddress(
+            (await pool.query('SELECT * FROM addresses WHERE id = $1 AND user_id = $2', [shippingAddressId, userId]))
+              .rows[0]
+          )
+        : fedexDestinationFromAddress(guestShippingSnapshotForFedex);
+      cartItems = await cartItemsWithCheapestFedexService(cartItems, destination);
+      shippingComputed = await computeShippingFromCartItems(cartItems);
     }
     let shippingSum = shippingComputed.shippingSum;
     let shippingMethod = shippingComputed.shippingMethod;
