@@ -10,22 +10,73 @@ function templateMaxPx() {
   return Number.isFinite(n) && n >= 500 ? Math.floor(n) : 4000;
 }
 
+/** Inches per unit for SVG lengths. Unitless lengths are CSS px (96 per inch), except in Illustrator files (points). */
+const SVG_UNIT_INCHES = { in: 1, cm: 1 / 2.54, mm: 1 / 25.4, pt: 1 / 72, pc: 1 / 6, px: 1 / 96 };
+
+/**
+ * Illustrator writes sizes in points. Its generator comment can be missing (some export settings drop it), so its
+ * usual style class names (.cls-1, .st0) and default layer id (Layer_1) also count.
+ */
+function isIllustratorSvg(head) {
+  return (
+    /Adobe Illustrator/i.test(head) ||
+    /\.(cls-|st)\d+\s*\{/.test(head) ||
+    /\bclass=["'](cls-|st)\d+["']/.test(head) ||
+    /\bid=["']Layer_\d+["']/.test(head)
+  );
+}
+
+/**
+ * Real print size of an SVG template in inches, from its root width/height (with units) or its viewBox.
+ * @returns {{ widthIn: number, heightIn: number } | null} null when the file has no usable size
+ */
+function readSvgRealSizeInches(buffer) {
+  // The root tag and the generator comment sit near the top; embedded images come later.
+  const head = buffer.subarray(0, 64 * 1024).toString('utf8');
+  const rootTag = head.match(/<svg\b[^>]*>/i)?.[0];
+  if (!rootTag) return null;
+  const attr = (name) => rootTag.match(new RegExp(`\\s${name}\\s*=\\s*["']([^"']*)["']`, 'i'))?.[1];
+  const userUnitInches = isIllustratorSvg(head) ? 1 / 72 : 1 / 96;
+  const toInches = (value) => {
+    const m = String(value || '').trim().match(/^([0-9]*\.?[0-9]+)\s*(in|cm|mm|pt|pc|px)?$/i);
+    if (!m) return null;
+    const unit = (m[2] || '').toLowerCase();
+    return Number(m[1]) * (SVG_UNIT_INCHES[unit] ?? userUnitInches);
+  };
+  let widthIn = toInches(attr('width'));
+  let heightIn = toInches(attr('height'));
+  if (!(widthIn > 0) || !(heightIn > 0)) {
+    const viewBox = String(attr('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+    if (viewBox.length !== 4 || !(viewBox[2] > 0) || !(viewBox[3] > 0)) return null;
+    widthIn = viewBox[2] * userUnitInches;
+    heightIn = viewBox[3] * userUnitInches;
+  }
+  const round = (n) => Math.round(n * 100) / 100;
+  return { widthIn: round(widthIn), heightIn: round(heightIn) };
+}
+
 /**
  * Read the template's pixel size. PNGs keep their own size; an SVG has no pixels, so it is sized so its
- * longest side is `templateMaxPx()` (the editor canvas size; the SVG itself stays vector).
- * @returns {Promise<{ format: 'svg' | 'png', width: number, height: number }>}
+ * longest side is `templateMaxPx()` (the editor canvas size; the SVG itself stays vector). SVGs also report
+ * their real print size, so the editor can show true inches.
+ * @returns {Promise<{ format: 'svg' | 'png', width: number, height: number, widthIn: number|null, heightIn: number|null }>}
  */
 async function readTemplateSize(buffer) {
   const meta = await sharp(buffer).metadata();
   if ((meta.format !== 'svg' && meta.format !== 'png') || !meta.width || !meta.height) {
     throw new Error('The file is not a valid SVG (with a width and height or viewBox) or PNG.');
   }
-  if (meta.format === 'png') return { format: 'png', width: meta.width, height: meta.height };
+  if (meta.format === 'png') {
+    return { format: 'png', width: meta.width, height: meta.height, widthIn: null, heightIn: null };
+  }
   const scale = templateMaxPx() / Math.max(meta.width, meta.height);
+  const realSize = readSvgRealSizeInches(buffer);
   return {
     format: 'svg',
     width: Math.max(1, Math.round(meta.width * scale)),
     height: Math.max(1, Math.round(meta.height * scale)),
+    widthIn: realSize?.widthIn ?? null,
+    heightIn: realSize?.heightIn ?? null,
   };
 }
 
@@ -48,13 +99,16 @@ async function storeDesignTemplateFile(buffer) {
     image_storage_key: stored.key,
     image_width_px: size.width,
     image_height_px: size.height,
+    width_in: size.widthIn,
+    height_in: size.heightIn,
   };
 }
 
 async function getProductDesignTemplates(productId) {
   const result = await pool.query(
     `SELECT id, product_id, name, svg_url, svg_storage_key,
-            image_url, image_storage_key, image_width_px, image_height_px, sort_order, modifier_option_ids
+            image_url, image_storage_key, image_width_px, image_height_px, sort_order, modifier_option_ids,
+            width_in, height_in
      FROM product_design_templates
      WHERE product_id = $1
      ORDER BY sort_order ASC, id ASC`,
@@ -76,7 +130,15 @@ function parseDesignTemplatesInput(value) {
     image_height_px: parseInt(item?.image_height_px, 10),
     sort_order: Number.isFinite(Number(item?.sort_order)) ? Number(item.sort_order) : index,
     modifier_option_ids: parseModifierOptionIds(item?.modifier_option_ids),
+    width_in: parsePositiveNumber(item?.width_in),
+    height_in: parsePositiveNumber(item?.height_in),
   }));
+}
+
+/** Real template size from the uploader (inches); null when unknown. */
+function parsePositiveNumber(value) {
+  const n = Number(value);
+  return value != null && value !== '' && Number.isFinite(n) && n > 0 ? n : null;
 }
 
 /** Modifier options the template is for (automatic selection); none = the product's default template. */
@@ -141,14 +203,17 @@ async function replaceProductDesignTemplates(productId, templates) {
         t.image_height_px,
         t.sort_order,
         t.modifier_option_ids,
+        t.width_in,
+        t.height_in,
       ];
       if (t.id != null && Number.isFinite(t.id)) {
         const updated = await client.query(
           `UPDATE product_design_templates
            SET name = $1, svg_url = $2, svg_storage_key = $3,
                image_url = $4, image_storage_key = $5, image_width_px = $6, image_height_px = $7,
-               sort_order = $8, modifier_option_ids = $9::int[], updated_at = CURRENT_TIMESTAMP
-           WHERE id = $10 AND product_id = $11
+               sort_order = $8, modifier_option_ids = $9::int[], width_in = $10, height_in = $11,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $12 AND product_id = $13
            RETURNING id`,
           [...values, t.id, productId]
         );
@@ -160,8 +225,8 @@ async function replaceProductDesignTemplates(productId, templates) {
       const inserted = await client.query(
         `INSERT INTO product_design_templates
           (name, svg_url, svg_storage_key, image_url, image_storage_key,
-           image_width_px, image_height_px, sort_order, modifier_option_ids, product_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::int[], $10)
+           image_width_px, image_height_px, sort_order, modifier_option_ids, width_in, height_in, product_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::int[], $10, $11, $12)
          RETURNING id`,
         [...values, productId]
       );
